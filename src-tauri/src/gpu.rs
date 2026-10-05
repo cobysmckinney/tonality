@@ -1,0 +1,554 @@
+//! The GPU side of the editor. A photo is uploaded once at full resolution
+//! (`Session`); after that every slider change is one draw of the develop
+//! shader, at whatever size and crop the screen needs.
+
+use anyhow::{anyhow, Context, Result};
+use bytemuck::{Pod, Zeroable};
+use half::f16;
+use rayon::prelude::*;
+
+use crate::develop::LinearImage;
+use crate::edit::{curve_table, Adjustments};
+use crate::geometry;
+
+const WORKING_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
+const OUTPUT_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
+/// What 16-bit exports are drawn into: the same picture before it is rounded
+/// to 256 levels.
+const DEEP_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba32Float;
+
+/// Long edge and blur width (in their own pixels) of the two blurred copies.
+/// Fixed sizes make the blurs cover the same share of any photo.
+const MEDIUM_BLUR: (u32, f32) = (768, 4.0);
+const LARGE_BLUR: (u32, f32) = (192, 5.0);
+
+/// The most pixels read back from the GPU in one go. A full-size export is
+/// drawn in bands of this many, so no photo is too big for one buffer.
+const BAND_PIXELS: u32 = 16 << 20;
+/// Deep pixels are four times the size, so their bands are a quarter as tall.
+const DEEP_BAND_PIXELS: u32 = BAND_PIXELS / 4;
+
+/// A whole picture with 16 bits for each of red, green and blue.
+pub type DeepImage = image::ImageBuffer<image::Rgb<u16>, Vec<u16>>;
+
+/// The part of the frame to draw, in 0..1 coordinates. The frame is the
+/// cropped picture (or the whole tilted photo while cropping).
+#[derive(Debug, Clone, Copy)]
+pub struct Region {
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+}
+
+impl Region {
+    pub const FULL: Region = Region { x: 0.0, y: 0.0, width: 1.0, height: 1.0 };
+}
+
+/// Mirrors `Params` in develop.wgsl.
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct Params {
+    view: [f32; 4],
+    to_source: [[f32; 4]; 2],
+    image: [f32; 4],
+    light: [f32; 4],
+    tone: [f32; 4],
+    color: [f32; 4],
+    detail: [f32; 4],
+    flags: [f32; 4],
+    mixer: [[f32; 4]; 8],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct BlurParams {
+    step: [f32; 2],
+    sigma: f32,
+    radius: f32,
+}
+
+pub struct Gpu {
+    device: wgpu::Device,
+    queue: wgpu::Queue,
+    develop: wgpu::RenderPipeline,
+    /// The develop shader again, drawing into `DEEP_FORMAT`.
+    develop_deep: wgpu::RenderPipeline,
+    copy: wgpu::RenderPipeline,
+    gaussian: wgpu::RenderPipeline,
+    sampler: wgpu::Sampler,
+    max_texture_size: u32,
+}
+
+/// A photo loaded for editing.
+pub struct Session {
+    pub width: u32,
+    pub height: u32,
+    scene_referred: bool,
+    params: wgpu::Buffer,
+    curves: wgpu::Texture,
+    bind_group: wgpu::BindGroup,
+    /// The same bindings for the deep pipeline; a bind group belongs to one pipeline's layout.
+    deep_bind_group: wgpu::BindGroup,
+}
+
+/// The app's one GPU connection, opened on first use.
+pub fn shared() -> Result<&'static Gpu> {
+    static GPU: std::sync::OnceLock<std::result::Result<Gpu, String>> = std::sync::OnceLock::new();
+    GPU.get_or_init(|| Gpu::new().map_err(|error| format!("{error:#}")))
+        .as_ref()
+        .map_err(|error| anyhow!("The editor needs a working graphics driver: {error}"))
+}
+
+/// The size in pixels of the picture `adjustments` make of a `width` x
+/// `height` photo, scaled down to fit within `long_edge` if it is larger.
+pub fn picture_size(width: u32, height: u32, adjustments: &Adjustments, long_edge: u32) -> (u32, u32) {
+    let [w, h] = geometry::frame(width, height, adjustments, false).size;
+    let (w, h) = ((w.round() as u32).max(1), (h.round() as u32).max(1));
+    fit_within(w, h, long_edge.min(w.max(h)))
+}
+
+fn fit_within(width: u32, height: u32, long_edge: u32) -> (u32, u32) {
+    let scale = long_edge as f32 / width.max(height) as f32;
+    (((width as f32 * scale).round() as u32).max(1), ((height as f32 * scale).round() as u32).max(1))
+}
+
+impl Gpu {
+    pub fn new() -> Result<Self> {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::HighPerformance,
+            ..Default::default()
+        }))
+        .map_err(|e| anyhow!("no usable graphics adapter: {e}"))?;
+        let limits = adapter.limits();
+        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            label: Some("tonality"),
+            // Ask for the adapter's real limits: photos are far larger than the default texture size.
+            required_limits: limits.clone(),
+            ..Default::default()
+        }))
+        .context("opening the graphics device")?;
+
+        let develop_shader = device.create_shader_module(wgpu::include_wgsl!("shaders/develop.wgsl"));
+        let prepare_shader = device.create_shader_module(wgpu::include_wgsl!("shaders/prepare.wgsl"));
+        let pipeline = |label, shader: &wgpu::ShaderModule, fragment, format| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some(label),
+                layout: None,
+                vertex: wgpu::VertexState {
+                    module: shader,
+                    entry_point: Some("vertex"),
+                    compilation_options: Default::default(),
+                    buffers: &[],
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: shader,
+                    entry_point: Some(fragment),
+                    compilation_options: Default::default(),
+                    targets: &[Some(wgpu::ColorTargetState { format, blend: None, write_mask: wgpu::ColorWrites::ALL })],
+                }),
+                primitive: Default::default(),
+                depth_stencil: None,
+                multisample: Default::default(),
+                multiview_mask: None,
+                cache: None,
+            })
+        };
+        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("linear"),
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::MipmapFilterMode::Linear,
+            ..Default::default()
+        });
+
+        Ok(Self {
+            develop: pipeline("develop", &develop_shader, "fragment", OUTPUT_FORMAT),
+            develop_deep: pipeline("develop deep", &develop_shader, "fragment", DEEP_FORMAT),
+            copy: pipeline("copy", &prepare_shader, "copy", WORKING_FORMAT),
+            gaussian: pipeline("gaussian", &prepare_shader, "gaussian", WORKING_FORMAT),
+            sampler,
+            max_texture_size: limits.max_texture_dimension_2d,
+            device,
+            queue,
+        })
+    }
+
+    fn texture(&self, label: &str, width: u32, height: u32, mips: u32, format: wgpu::TextureFormat) -> wgpu::Texture {
+        self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some(label),
+            size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+            mip_level_count: mips,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::COPY_DST
+                | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        })
+    }
+
+    /// Draws one full-target pass of `pipeline` into `target`.
+    fn draw(&self, encoder: &mut wgpu::CommandEncoder, pipeline: &wgpu::RenderPipeline, bindings: &wgpu::BindGroup, target: &wgpu::TextureView) {
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: None,
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: target,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::BLACK), store: wgpu::StoreOp::Store },
+            })],
+            ..Default::default()
+        });
+        pass.set_pipeline(pipeline);
+        pass.set_bind_group(0, bindings, &[]);
+        pass.draw(0..3, 0..1);
+    }
+
+    fn copy_bindings(&self, input: &wgpu::TextureView) -> wgpu::BindGroup {
+        self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: None,
+            layout: &self.copy.get_bind_group_layout(0),
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(input) },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.sampler) },
+            ],
+        })
+    }
+
+    /// A blurred, shrunken copy of `source`, `long_edge` pixels along its longer side.
+    fn blurred_copy(&self, source: &wgpu::TextureView, width: u32, height: u32, (long_edge, sigma): (u32, f32)) -> wgpu::TextureView {
+        use wgpu::util::DeviceExt;
+        let (w, h) = fit_within(width, height, long_edge.min(width.max(height)));
+        let make = |label| self.texture(label, w, h, 1, WORKING_FORMAT).create_view(&Default::default());
+        let (first, second) = (make("blur"), make("blur scratch"));
+        let mut encoder = self.device.create_command_encoder(&Default::default());
+        self.draw(&mut encoder, &self.copy, &self.copy_bindings(source), &first);
+
+        // Horizontal into the scratch texture, then vertical back.
+        for (input, target, step) in [(&first, &second, [1.0 / w as f32, 0.0]), (&second, &first, [0.0, 1.0 / h as f32])] {
+            let params = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: None,
+                contents: bytemuck::bytes_of(&BlurParams { step, sigma, radius: (sigma * 2.5).ceil() }),
+                usage: wgpu::BufferUsages::UNIFORM,
+            });
+            let bindings = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: None,
+                layout: &self.gaussian.get_bind_group_layout(0),
+                entries: &[
+                    wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(input) },
+                    wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.sampler) },
+                    wgpu::BindGroupEntry { binding: 2, resource: params.as_entire_binding() },
+                ],
+            });
+            self.draw(&mut encoder, &self.gaussian, &bindings, target);
+        }
+        self.queue.submit([encoder.finish()]);
+        first
+    }
+
+    /// Uploads a photo and prepares everything the develop shader reads.
+    pub fn open(&self, image: LinearImage) -> Result<Session> {
+        let image = shrink_to_fit(image, self.max_texture_size);
+        let (width, height) = (image.width, image.height);
+
+        // Half-float is plenty for photographic range at half the memory of f32.
+        let mut texels = vec![f16::ONE; image.pixels.len() * 4];
+        texels.par_chunks_mut(4).zip(image.pixels.par_iter()).for_each(|(texel, pixel)| {
+            for (out, value) in texel.iter_mut().zip(pixel) {
+                *out = f16::from_f32(*value);
+            }
+        });
+        let mips = width.max(height).ilog2() + 1;
+        let source = self.texture("source", width, height, mips, WORKING_FORMAT);
+        self.queue.write_texture(
+            source.as_image_copy(),
+            bytemuck::cast_slice(&texels),
+            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(width * 8), rows_per_image: Some(height) },
+            wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+        );
+        drop(texels);
+
+        // Mipmaps, each level averaged down from the one above, so a
+        // zoomed-out view is a properly filtered one.
+        let level_view = |level| {
+            source.create_view(&wgpu::TextureViewDescriptor {
+                base_mip_level: level,
+                mip_level_count: Some(1),
+                ..Default::default()
+            })
+        };
+        let mut encoder = self.device.create_command_encoder(&Default::default());
+        for level in 1..mips {
+            self.draw(&mut encoder, &self.copy, &self.copy_bindings(&level_view(level - 1)), &level_view(level));
+        }
+        self.queue.submit([encoder.finish()]);
+
+        let source_view = source.create_view(&Default::default());
+        let blur_medium = self.blurred_copy(&source_view, width, height, MEDIUM_BLUR);
+        let blur_large = self.blurred_copy(&source_view, width, height, LARGE_BLUR);
+
+        let curves = self.texture("curves", 256, 1, 1, WORKING_FORMAT);
+        let params = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("params"),
+            size: size_of::<Params>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let curves_view = curves.create_view(&Default::default());
+        let bindings = |pipeline: &wgpu::RenderPipeline| {
+            self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("develop"),
+                layout: &pipeline.get_bind_group_layout(0),
+                entries: &[
+                    wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&source_view) },
+                    wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&blur_medium) },
+                    wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&blur_large) },
+                    wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&curves_view) },
+                    wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::Sampler(&self.sampler) },
+                    wgpu::BindGroupEntry { binding: 5, resource: params.as_entire_binding() },
+                ],
+            })
+        };
+        let (bind_group, deep_bind_group) = (bindings(&self.develop), bindings(&self.develop_deep));
+        Ok(Session { width, height, scene_referred: image.scene_referred, params, curves, bind_group, deep_bind_group })
+    }
+
+    /// The size in photo pixels of the picture `adjustments` produce: the
+    /// crop, or with `uncropped` the box that holds the whole tilted photo.
+    pub fn frame_size(&self, session: &Session, adjustments: &Adjustments, uncropped: bool) -> (u32, u32) {
+        let [w, h] = geometry::frame(session.width, session.height, adjustments, uncropped).size;
+        ((w.round() as u32).max(1), (h.round() as u32).max(1))
+    }
+
+    /// Renders `region` of the picture with `adjustments` applied, as
+    /// `width` x `height` RGBA bytes. With `uncropped` the crop is ignored
+    /// and the whole photo is drawn, tilted by the straighten angle, with
+    /// transparent corners: the view the crop tool works on.
+    #[allow(clippy::too_many_arguments)]
+    pub fn render(
+        &self,
+        session: &Session,
+        adjustments: &Adjustments,
+        region: Region,
+        width: u32,
+        height: u32,
+        show_clipping: bool,
+        uncropped: bool,
+    ) -> Result<Vec<u8>> {
+        self.draw_frame(session, adjustments, region, width, height, show_clipping, uncropped, false)
+    }
+
+    /// `render`, or with `deep` the same frame as four little-endian f32s a
+    /// pixel, each 0..1.
+    #[allow(clippy::too_many_arguments)]
+    fn draw_frame(
+        &self,
+        session: &Session,
+        adjustments: &Adjustments,
+        region: Region,
+        width: u32,
+        height: u32,
+        show_clipping: bool,
+        uncropped: bool,
+        deep: bool,
+    ) -> Result<Vec<u8>> {
+        let (width, height) = (width.clamp(1, self.max_texture_size), height.clamp(1, self.max_texture_size));
+        let a = adjustments;
+        let unit = |value: f32| (value / 100.0).clamp(-1.0, 1.0);
+        let frame = geometry::frame(session.width, session.height, adjustments, uncropped);
+        let to_source = geometry::frame_to_source(session.width, session.height, adjustments, &frame).0;
+        let source_pixels_per_output_pixel = (region.width * frame.size[0] as f32 / width as f32)
+            .max(region.height * frame.size[1] as f32 / height as f32);
+        let params = Params {
+            view: [region.x, region.y, region.width, region.height],
+            to_source: to_source.map(|row| [row[0] as f32, row[1] as f32, row[2] as f32, 0.0]),
+            image: [
+                session.width as f32,
+                session.height as f32,
+                source_pixels_per_output_pixel,
+                session.scene_referred as u8 as f32,
+            ],
+            light: [a.exposure.clamp(-5.0, 5.0), unit(a.contrast), unit(a.highlights), unit(a.shadows)],
+            tone: [unit(a.whites), unit(a.blacks), unit(a.temperature), unit(a.tint)],
+            color: [unit(a.vibrance), unit(a.saturation), unit(a.clarity), unit(a.dehaze)],
+            detail: [unit(a.sharpening).max(0.0), unit(a.noise_reduction).max(0.0), unit(a.vignette), unit(a.grain).max(0.0)],
+            flags: [show_clipping as u8 as f32, uncropped as u8 as f32, 0.0, 0.0],
+            mixer: a.mixer.map(|band| [unit(band.hue), unit(band.saturation), unit(band.luminance), 0.0]),
+        };
+        self.queue.write_buffer(&session.params, 0, bytemuck::bytes_of(&params));
+
+        let master: [f32; 256] = curve_table(&a.curves.master);
+        let (red, green, blue): ([f32; 256], [f32; 256], [f32; 256]) =
+            (curve_table(&a.curves.red), curve_table(&a.curves.green), curve_table(&a.curves.blue));
+        let table: Vec<f16> =
+            (0..256).flat_map(|i| [red[i], green[i], blue[i], master[i]]).map(f16::from_f32).collect();
+        self.queue.write_texture(
+            session.curves.as_image_copy(),
+            bytemuck::cast_slice(&table),
+            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(256 * 8), rows_per_image: Some(1) },
+            wgpu::Extent3d { width: 256, height: 1, depth_or_array_layers: 1 },
+        );
+
+        let (format, pipeline, bindings, pixel_bytes) = match deep {
+            false => (OUTPUT_FORMAT, &self.develop, &session.bind_group, 4),
+            true => (DEEP_FORMAT, &self.develop_deep, &session.deep_bind_group, 16),
+        };
+        let target = self.texture("frame", width, height, 1, format);
+        // Rows in a readback buffer must be padded to a multiple of 256 bytes.
+        let row = width * pixel_bytes;
+        let padded_row = row.next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
+        let readback = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("readback"),
+            size: padded_row as u64 * height as u64,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let mut encoder = self.device.create_command_encoder(&Default::default());
+        self.draw(&mut encoder, pipeline, bindings, &target.create_view(&Default::default()));
+        encoder.copy_texture_to_buffer(
+            target.as_image_copy(),
+            wgpu::TexelCopyBufferInfo {
+                buffer: &readback,
+                layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(padded_row), rows_per_image: Some(height) },
+            },
+            wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+        );
+        self.queue.submit([encoder.finish()]);
+
+        let (sender, receiver) = std::sync::mpsc::channel();
+        readback.slice(..).map_async(wgpu::MapMode::Read, move |result| {
+            let _ = sender.send(result);
+        });
+        self.device.poll(wgpu::PollType::wait_indefinitely()).context("waiting for the graphics device")?;
+        receiver.recv().context("the graphics device dropped the frame")??;
+
+        let mapped = readback.slice(..).get_mapped_range().context("reading the frame back")?;
+        let mut pixels = Vec::with_capacity((row * height) as usize);
+        for line in mapped.chunks_exact(padded_row as usize) {
+            pixels.extend_from_slice(&line[..row as usize]);
+        }
+        Ok(pixels)
+    }
+
+    /// Renders the whole photo to fit within `long_edge`, as an RGB image.
+    /// A `long_edge` larger than the picture gives it at full size.
+    pub fn render_image(&self, session: &Session, adjustments: &Adjustments, long_edge: u32) -> Result<image::RgbImage> {
+        let mut rgb = Vec::new();
+        let (width, height) = self.render_in_bands(session, adjustments, long_edge, BAND_PIXELS, false, |rgba| {
+            rgb.extend(rgba.as_chunks::<4>().0.iter().flat_map(|p| [p[0], p[1], p[2]]));
+        })?;
+        image::RgbImage::from_raw(width, height, rgb).context("frame has the wrong size")
+    }
+
+    /// `render_image` with 16 bits a channel: the picture before it is
+    /// rounded to 256 levels, so smooth tones stay smooth through more editing.
+    pub fn render_deep_image(&self, session: &Session, adjustments: &Adjustments, long_edge: u32) -> Result<DeepImage> {
+        let mut rgb = Vec::new();
+        let (width, height) = self.render_in_bands(session, adjustments, long_edge, DEEP_BAND_PIXELS, true, |rgba| {
+            let level = |bytes: &[u8]| {
+                let value = f32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+                (value.clamp(0.0, 1.0) * 65535.0).round() as u16
+            };
+            rgb.extend(rgba.as_chunks::<16>().0.iter().flat_map(|p| [level(&p[0..4]), level(&p[4..8]), level(&p[8..12])]));
+        })?;
+        DeepImage::from_raw(width, height, rgb).context("frame has the wrong size")
+    }
+
+    /// Draws the whole picture as horizontal bands of about `band_pixels`
+    /// pixels each, handing each band's pixels to `take` from the top down.
+    /// Returns the picture's size.
+    fn render_in_bands(
+        &self,
+        session: &Session,
+        adjustments: &Adjustments,
+        long_edge: u32,
+        band_pixels: u32,
+        deep: bool,
+        mut take: impl FnMut(Vec<u8>),
+    ) -> Result<(u32, u32)> {
+        let (width, height) = picture_size(session.width, session.height, adjustments, long_edge);
+        let band = (band_pixels / width).max(1);
+        for top in (0..height).step_by(band as usize) {
+            let rows = band.min(height - top);
+            let region = Region { x: 0.0, y: top as f32 / height as f32, width: 1.0, height: rows as f32 / height as f32 };
+            take(self.draw_frame(session, adjustments, region, width, rows, false, false, deep)?);
+        }
+        Ok((width, height))
+    }
+}
+
+/// Halves an image until it fits the largest texture the device supports.
+fn shrink_to_fit(mut image: LinearImage, max_size: u32) -> LinearImage {
+    while image.width.max(image.height) > max_size {
+        let (width, height) = ((image.width / 2) as usize, (image.height / 2) as usize);
+        let stride = image.width as usize;
+        let mut pixels = Vec::with_capacity(width * height);
+        for y in 0..height {
+            for x in 0..width {
+                let at = |dx: usize, dy: usize| image.pixels[(y * 2 + dy) * stride + x * 2 + dx];
+                let (a, b, c, d) = (at(0, 0), at(1, 0), at(0, 1), at(1, 1));
+                pixels.push(std::array::from_fn(|i| (a[i] + b[i] + c[i] + d[i]) * 0.25));
+            }
+        }
+        image = LinearImage { width: width as u32, height: height as u32, pixels, ..image };
+    }
+    image
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A small picture that changes smoothly both ways.
+    fn gradient(gpu: &Gpu) -> Session {
+        let (width, height) = (96u32, 80u32);
+        let pixels = (0..width * height)
+            .map(|i| [(i % width) as f32 / width as f32, (i / width) as f32 / height as f32, 0.5])
+            .collect();
+        gpu.open(LinearImage { width, height, pixels, scene_referred: false }).unwrap()
+    }
+
+    fn gpu() -> Option<&'static Gpu> {
+        shared().inspect_err(|error| eprintln!("skipping: {error:#}")).ok()
+    }
+
+    #[test]
+    fn a_picture_drawn_in_bands_has_no_seams() {
+        let Some(gpu) = gpu() else { return };
+        let session = gradient(gpu);
+        // Grain and a vignette would both show a seam if bands were drawn from the wrong place.
+        let edit = Adjustments { grain: 60.0, vignette: -50.0, sharpening: 40.0, ..Default::default() };
+        let draw = |band_pixels| {
+            let mut pixels = Vec::new();
+            let size = gpu.render_in_bands(&session, &edit, u32::MAX, band_pixels, false, |band| pixels.extend(band)).unwrap();
+            (size, pixels)
+        };
+
+        let whole = draw(u32::MAX);
+        assert_eq!(whole.0, (96, 80));
+        // Seven rows at a time, leaving a short band at the bottom.
+        assert!(whole == draw(96 * 7), "bands differ from the picture drawn in one go");
+    }
+
+    #[test]
+    fn a_deep_picture_is_the_same_picture_with_finer_steps() {
+        let Some(gpu) = gpu() else { return };
+        let session = gradient(gpu);
+        let edit = Adjustments { contrast: 20.0, ..Default::default() };
+        let plain = gpu.render_image(&session, &edit, u32::MAX).unwrap();
+        let deep = gpu.render_deep_image(&session, &edit, u32::MAX).unwrap();
+        assert_eq!(plain.dimensions(), deep.dimensions());
+
+        for (plain, deep) in plain.as_raw().iter().zip(deep.as_raw()) {
+            // Rounded to 8 bits, the deep picture is the plain one.
+            assert!((*deep as f32 / 257.0 - *plain as f32).abs() <= 0.75, "{deep} is not {plain}");
+        }
+        let reds: std::collections::HashSet<u16> = deep.pixels().map(|pixel| pixel.0[0]).collect();
+        let coarse: std::collections::HashSet<u8> = plain.pixels().map(|pixel| pixel.0[0]).collect();
+        assert!(reds.len() > coarse.len(), "{} levels where 8 bits gave {}", reds.len(), coarse.len());
+    }
+}

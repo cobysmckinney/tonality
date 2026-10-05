@@ -1,0 +1,301 @@
+//! End-to-end checks of the library: scan, import, mark, delete.
+
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::AtomicBool;
+use std::time::{Duration, SystemTime};
+
+use image::{Rgb, RgbImage};
+use tempfile::TempDir;
+use tonality_lib::import::{self, ScanSession};
+use tonality_lib::library::{Library, View};
+use tonality_lib::thumbs;
+
+/// 2026-03-14 around midday UTC; far enough from midnight to be the same day in any timezone that matters here.
+const SHOT_AT: u64 = 1_773_489_600;
+
+fn write_image(path: &Path, shade: u8) {
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    RgbImage::from_fn(96, 64, |x, y| Rgb([shade, (x * 2) as u8, (y * 3) as u8])).save(path).unwrap();
+    set_modified(path);
+}
+
+fn write_bytes(path: &Path, bytes: &[u8]) {
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(path, bytes).unwrap();
+    set_modified(path);
+}
+
+fn set_modified(path: &Path) {
+    let file = fs::File::options().write(true).open(path).unwrap();
+    file.set_modified(SystemTime::UNIX_EPOCH + Duration::from_secs(SHOT_AT)).unwrap();
+}
+
+fn scan(library: &Library, paths: &[PathBuf]) -> ScanSession {
+    import::scan(library, 1, paths, None, &|_, _| {}).unwrap()
+}
+
+fn import_all(library: &Library, session: &ScanSession) -> import::ImportSummary {
+    let all: Vec<usize> = (0..session.items.len()).collect();
+    import::run(library, session, &all, &AtomicBool::new(false), &|_, _| {}).unwrap()
+}
+
+struct Fixture {
+    _dir: TempDir,
+    library: Library,
+    card: PathBuf,
+}
+
+/// A library plus a "card" holding a JPEG, a PNG and a RAW+JPEG pair.
+fn fixture() -> Fixture {
+    let dir = TempDir::new().unwrap();
+    let library = Library::open(&dir.path().join("Tonality")).unwrap();
+    let card = dir.path().join("card");
+    write_image(&card.join("DCIM/100CANON/IMG_0001.JPG"), 10);
+    write_image(&card.join("DCIM/100CANON/screenshot.png"), 20);
+    // Not a decodable RAW, which is the point: the pair must still import,
+    // dated and thumbnailed from its JPEG.
+    write_bytes(&card.join("DCIM/100CANON/IMG_0002.CR2"), b"not really a raw file");
+    write_image(&card.join("DCIM/100CANON/IMG_0002.JPG"), 30);
+    write_bytes(&card.join("DCIM/100CANON/notes.txt"), b"ignored");
+    write_image(&card.join("DCIM/.hidden/IMG_0009.JPG"), 40);
+    Fixture { _dir: dir, library, card }
+}
+
+#[test]
+fn scan_pairs_raw_with_jpeg_and_ignores_other_files() {
+    let f = fixture();
+    let session = scan(&f.library, std::slice::from_ref(&f.card));
+    let view = session.view();
+
+    let mut names: Vec<_> = view.items.iter().map(|i| (i.file_name.as_str(), i.kind, i.has_jpeg)).collect();
+    names.sort();
+    assert_eq!(
+        names,
+        [("IMG_0001.JPG", "image", false), ("IMG_0002.CR2", "raw", true), ("screenshot.png", "image", false)]
+    );
+    assert!(view.items.iter().all(|i| i.status == "new"));
+    assert_eq!(view.source, "card");
+}
+
+#[test]
+fn import_files_photos_by_capture_date_and_then_sees_them_as_duplicates() {
+    let f = fixture();
+    let session = scan(&f.library, std::slice::from_ref(&f.card));
+    let summary = import_all(&f.library, &session);
+    assert_eq!((summary.imported, summary.restored, summary.failed.len()), (3, 0, 0));
+
+    let day = f.library.originals_dir().join("2026/2026-03-14");
+    for name in ["IMG_0001.JPG", "IMG_0002.CR2", "IMG_0002.JPG", "screenshot.png"] {
+        assert!(day.join(name).is_file(), "{name} should be in {}", day.display());
+    }
+    // The card is left alone.
+    assert!(f.card.join("DCIM/100CANON/IMG_0002.CR2").is_file());
+
+    let photos = f.library.list_photos(View::Library).unwrap();
+    assert_eq!(photos.len(), 3);
+    let pair = photos.iter().find(|p| p.file_name == "IMG_0002.CR2").unwrap();
+    assert!(pair.has_jpeg);
+    assert!(pair.taken_at.starts_with("2026-03-14T"), "dated from its JPEG: {}", pair.taken_at);
+    for photo in &photos {
+        assert!(f.library.thumb_path(photo.id).is_file(), "{} should have a thumbnail", photo.file_name);
+    }
+    let plain = photos.iter().find(|p| p.file_name == "IMG_0001.JPG").unwrap();
+    assert_eq!((plain.width, plain.height), (Some(96), Some(64)));
+    assert!(thumbs::ensure_preview(&f.library, plain.id).unwrap().is_file());
+
+    let overview = f.library.overview().unwrap();
+    assert_eq!((overview.photo_count, overview.imports.len()), (3, 1));
+
+    let again = scan(&f.library, std::slice::from_ref(&f.card));
+    assert!(again.view().items.iter().all(|i| i.status == "duplicate"));
+    let summary = import_all(&f.library, &again);
+    assert_eq!((summary.imported, summary.failed.len()), (0, 3));
+    assert_eq!(f.library.overview().unwrap().imports.len(), 1, "an import that adds nothing leaves no trace");
+}
+
+#[test]
+fn different_photos_with_the_same_name_both_survive() {
+    let f = fixture();
+    let other = f.card.join("DCIM/101CANON/IMG_0001.JPG");
+    write_image(&other, 200);
+    let summary = import_all(&f.library, &scan(&f.library, std::slice::from_ref(&f.card)));
+    assert_eq!(summary.imported, 4);
+
+    let day = f.library.originals_dir().join("2026/2026-03-14");
+    assert!(day.join("IMG_0001.JPG").is_file());
+    assert!(day.join("IMG_0001-1.JPG").is_file());
+}
+
+#[test]
+fn deleted_photos_can_be_recovered_reimported_or_purged() {
+    let f = fixture();
+    import_all(&f.library, &scan(&f.library, std::slice::from_ref(&f.card)));
+    let ids: Vec<i64> = f.library.list_photos(View::Library).unwrap().iter().map(|p| p.id).collect();
+
+    // Purging only ever touches photos that are in Recently Deleted.
+    assert_eq!(f.library.purge(&ids).unwrap(), 0);
+    assert_eq!(f.library.list_photos(View::Library).unwrap().len(), 3);
+
+    f.library.trash(&ids).unwrap();
+    assert_eq!(f.library.list_photos(View::Library).unwrap().len(), 0);
+    assert_eq!(f.library.list_photos(View::Deleted).unwrap().len(), 3);
+    assert_eq!(f.library.purge_expired().unwrap(), 0, "fresh deletions are inside the retention period");
+
+    // Importing a deleted photo again brings the existing one back.
+    let session = scan(&f.library, std::slice::from_ref(&f.card));
+    assert!(session.view().items.iter().all(|i| i.status == "deleted"));
+    let summary = import_all(&f.library, &session);
+    assert_eq!((summary.imported, summary.restored), (0, 3));
+    assert_eq!(f.library.list_photos(View::Library).unwrap().len(), 3);
+
+    f.library.trash(&ids).unwrap();
+    f.library.restore(&ids[..1]).unwrap();
+    assert_eq!(f.library.purge(&ids).unwrap(), 2);
+    let left = f.library.list_photos(View::Library).unwrap();
+    assert_eq!(left.len(), 1);
+    assert_eq!(f.library.list_photos(View::Deleted).unwrap().len(), 0);
+
+    let day = f.library.originals_dir().join("2026/2026-03-14");
+    let remaining: Vec<_> = fs::read_dir(&day).unwrap().flatten().map(|e| e.file_name()).collect();
+    let expected = if left[0].has_jpeg { 2 } else { 1 };
+    assert_eq!(remaining.len(), expected, "only the kept photo's files remain: {remaining:?}");
+    for id in &ids {
+        assert_eq!(f.library.thumb_path(*id).exists(), *id == left[0].id);
+    }
+}
+
+#[test]
+fn favorites_flags_and_albums() {
+    let f = fixture();
+    import_all(&f.library, &scan(&f.library, std::slice::from_ref(&f.card)));
+    let ids: Vec<i64> = f.library.list_photos(View::Library).unwrap().iter().map(|p| p.id).collect();
+
+    f.library.set_favorite(&ids[..2], true).unwrap();
+    f.library.set_flag(&ids[..1], 1).unwrap();
+    f.library.set_flag(&ids[2..], -1).unwrap();
+    assert_eq!(f.library.list_photos(View::Favorites).unwrap().len(), 2);
+    let flags: Vec<i8> = f.library.list_photos(View::Library).unwrap().iter().map(|p| p.flag).collect();
+    assert_eq!(flags, [1, 0, -1]);
+
+    let album = f.library.create_album("  Portfolio ").unwrap();
+    f.library.add_to_album(album, &ids).unwrap();
+    f.library.add_to_album(album, &ids[..1]).unwrap();
+    assert_eq!(f.library.list_photos(View::Album { id: album }).unwrap().len(), 3);
+    assert_eq!(f.library.photo_info(ids[0]).unwrap().albums, ["Portfolio"]);
+
+    f.library.remove_from_album(album, &ids[..1]).unwrap();
+    f.library.trash(&ids[1..2]).unwrap();
+    let overview = f.library.overview().unwrap();
+    assert_eq!((overview.albums[0].name.as_str(), overview.albums[0].count), ("Portfolio", 1));
+    assert_eq!((overview.photo_count, overview.favorite_count, overview.deleted_count), (2, 1, 1));
+
+    f.library.delete_album(album).unwrap();
+    assert_eq!(f.library.list_photos(View::Library).unwrap().len(), 2, "deleting an album keeps its photos");
+}
+
+/// Runs the real decoders over a folder of camera files:
+/// `TONALITY_SAMPLES=/path/to/raws cargo test real_samples -- --ignored --nocapture`
+#[test]
+#[ignore = "needs TONALITY_SAMPLES pointing at a folder of real photos"]
+fn real_samples() {
+    let samples = PathBuf::from(std::env::var_os("TONALITY_SAMPLES").expect("set TONALITY_SAMPLES"));
+    let dir = TempDir::new().unwrap();
+    let library = Library::open(&dir.path().join("Tonality")).unwrap();
+    tonality_lib::media::init();
+
+    let session = scan(&library, &[samples]);
+    let started = std::time::Instant::now();
+    let summary = import_all(&library, &session);
+    println!("imported {} in {:?}, failed: {:?}", summary.imported, started.elapsed(), summary.failed);
+
+    for photo in library.list_photos(View::Library).unwrap() {
+        let info = library.photo_info(photo.id).unwrap();
+        let started = std::time::Instant::now();
+        let preview = thumbs::ensure_preview(&library, photo.id);
+        println!(
+            "{:<22} {} {:?}x{:?} {:?} {:?} | {:?} iso {:?} f/{:?} {:?}s {:?}mm | thumb {} preview {:?} in {:?}",
+            photo.file_name,
+            photo.taken_at,
+            photo.width,
+            photo.height,
+            info.make,
+            info.model,
+            info.lens,
+            info.iso,
+            info.aperture,
+            info.shutter,
+            info.focal_length,
+            library.thumb_path(photo.id).is_file(),
+            preview.as_ref().map(|p| image::image_dimensions(p).unwrap()).map_err(|e| format!("{e:#}")),
+            started.elapsed(),
+        );
+        assert!(library.thumb_path(photo.id).is_file(), "{} has no thumbnail", photo.file_name);
+        assert!(preview.is_ok(), "{} has no preview", photo.file_name);
+    }
+    if let Some(keep) = std::env::var_os("TONALITY_KEEP") {
+        let keep = PathBuf::from(keep);
+        let _ = fs::remove_dir_all(&keep);
+        fs::rename(dir.path().join("Tonality"), keep).unwrap();
+    }
+}
+
+/// Times the editor's full-resolution load: `TONALITY_SAMPLES=… cargo test develop_timing -- --ignored --nocapture`
+#[test]
+#[ignore = "needs TONALITY_SAMPLES pointing at a folder of real photos"]
+fn develop_timing() {
+    let samples = PathBuf::from(std::env::var_os("TONALITY_SAMPLES").expect("set TONALITY_SAMPLES"));
+    for entry in walkdir::WalkDir::new(samples).into_iter().flatten().filter(|e| e.file_type().is_file()) {
+        let Some(kind) = tonality_lib::media::kind_of(entry.path()) else { continue };
+        let started = std::time::Instant::now();
+        let image = tonality_lib::develop::load(entry.path(), kind == tonality_lib::media::Kind::Raw).unwrap();
+        let mean = image.pixels.iter().map(|p| (p[0] + p[1] + p[2]) as f64 / 3.0).sum::<f64>() / image.pixels.len() as f64;
+        println!("{:<20} {}x{} in {:?}, mean {:.4}", entry.file_name().to_string_lossy(), image.width, image.height, started.elapsed(), mean);
+    }
+}
+
+/// Renders real photos through the GPU pipeline and saves the results, next
+/// to the camera's own JPEG, for a look:
+/// `TONALITY_SAMPLES=… TONALITY_OUT=… cargo test gpu_render -- --ignored --nocapture`
+#[test]
+#[ignore = "needs TONALITY_SAMPLES and a GPU"]
+fn gpu_render() {
+    use tonality_lib::edit::Adjustments;
+    let samples = PathBuf::from(std::env::var_os("TONALITY_SAMPLES").expect("set TONALITY_SAMPLES"));
+    let out = PathBuf::from(std::env::var_os("TONALITY_OUT").expect("set TONALITY_OUT"));
+    fs::create_dir_all(&out).unwrap();
+    let recipe: Adjustments =
+        std::env::var("TONALITY_RECIPE").map(|json| serde_json::from_str(&json).unwrap()).unwrap_or_default();
+
+    let started = std::time::Instant::now();
+    let gpu = tonality_lib::gpu::Gpu::new().unwrap();
+    println!("gpu ready in {:?}", started.elapsed());
+
+    for entry in walkdir::WalkDir::new(samples).into_iter().flatten().filter(|e| e.file_type().is_file()) {
+        let Some(kind) = tonality_lib::media::kind_of(entry.path()) else { continue };
+        let is_raw = kind == tonality_lib::media::Kind::Raw;
+        let name = entry.path().file_stem().unwrap().to_string_lossy().into_owned();
+
+        let started = std::time::Instant::now();
+        let image = tonality_lib::develop::load(entry.path(), is_raw).unwrap();
+        let loaded = started.elapsed();
+        let session = gpu.open(image).unwrap();
+        let opened = started.elapsed();
+        let frame = gpu.render_image(&session, &recipe, 1600).unwrap();
+        let first = started.elapsed();
+        let again = std::time::Instant::now();
+        for _ in 0..5 {
+            gpu.render_image(&session, &recipe, 1600).unwrap();
+        }
+        println!(
+            "{name:<16} load {loaded:?}, upload {:?}, first frame {:?}, then {:?} per frame",
+            opened - loaded,
+            first - opened,
+            again.elapsed() / 5
+        );
+        frame.save(out.join(format!("{name}-ours.jpg"))).unwrap();
+        let camera = tonality_lib::media::render(entry.path(), is_raw, None, 1600).unwrap();
+        camera.save(out.join(format!("{name}-camera.jpg"))).unwrap();
+    }
+}
+

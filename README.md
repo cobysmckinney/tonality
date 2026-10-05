@@ -1,0 +1,82 @@
+# Tonality
+
+A raw photo editor: a library to keep photos in and an editor to develop them.
+
+## The library
+
+Tonality keeps one managed library, like Apple Photos. Importing copies photos into it and files them by the day they were taken; nothing depends on the card or folder they came from.
+
+```
+~/Pictures/Tonality/
+  Originals/2026/2026-09-19/IMG_0462.CR2   your files, original names, browsable without the app
+  Exports/IMG_0462.jpg                     exported pictures, unless you choose another folder
+  .tonality/library.db                     the index: favorites, flags, albums, imports
+  .tonality/thumbs, previews               generated images, safe to delete
+```
+
+- **Library, Favorites, Imports, Recently Deleted, Albums** in the sidebar. Deleted photos are kept for 30 days.
+- **Import** from files, folders, drag and drop, or a camera card (any mounted volume with a `DCIM` folder). You review what was found before anything is copied; photos already in the library are marked and skipped.
+- **RAW + JPEG pairs** shot together are one photo.
+- **Culling**: `F` favorite, `P` pick, `X` reject, `U` unflag, `Delete` to delete. Arrows move, Shift extends, Enter opens, Escape goes back, `I` toggles info.
+
+## The editor
+
+Opening a photo (double-click or Enter) loads it at full resolution onto the GPU. Every slider change is one pass of a single shader, `src-tauri/src/shaders/develop.wgsl`, drawn at exactly the size and crop on screen. Editing never touches the original: the recipe is stored in the library database, and the same shader redraws the photo's thumbnail so the grid matches.
+
+- **Tools**: light (exposure, contrast, highlights, shadows, whites, blacks), color (temperature, tint, vibrance, saturation), tone curve with per-channel curves, an eight-band color mixer, detail (sharpening, noise reduction, clarity, dehaze), effects (vignette, grain).
+- **Crop** (`C`): the photo is shown whole with an upright crop frame over it. Shapes (free, original, 1:1, 5:4, 4:3, 3:2, 16:9), a straighten slider that turns the photo under the frame and keeps the frame on the photo, quarter-turns and flips. Pasting edits onto another photo leaves that photo's own crop alone.
+- **Starting look**: RAW files open with a built-in tone curve fitted to match camera JPEGs. The constants at the top of the shader hold it.
+- **Histogram** with clipping markers; `J` shows clipped areas on the photo.
+- **Keys**: `Ctrl+Z` / `Ctrl+Shift+Z` undo and redo, hold `\` for the original, `Z` or double-click for 100%, scroll to zoom, `Ctrl+C` / `Ctrl+V` copy and paste edits (in the grid too, onto a whole selection), double-click a slider to reset it.
+
+### History and branches
+
+Every change is a step in the photo's history, kept in the library, so undo and redo still work after a restart. The History tab (`H`) lists the steps of the current branch, newest first; click one to go back to it.
+
+History works like a small git repository per photo, and takes the place of "virtual copies":
+
+- **Branch** from any step to take the edit in another direction. The branch you were on keeps everything it had.
+- **Switch** between branches from the picker. The library grid shows whichever branch is current, with a marker when a photo has more than one.
+- **Undo then edit** replaces the undone steps on that branch, as usual. Branch first if you want to keep both. Steps another branch still stands on are never removed.
+- Pasting edits, resetting, and "Revert to original" are ordinary steps, so they can be undone too.
+
+`src-tauri/src/history.rs` holds the model (steps, branches, tip and head) and `tests/history.rs` its rules.
+
+### Exporting
+
+**Export** (`Ctrl+E`, the button in the editor, or the selection bar and right-click menu in the grid) writes pictures out as files. The sheet shows what is about to be written before anything is, and what was written afterwards. Enter exports.
+
+- **The name** sits at the top, with its extension, and can be typed over. Left alone it is the photo's name, plus the branch when the photo has more than one: `IMG_0462 (Warm).jpg`. A name you type is used as it is. When an export writes several files they share one name built from placeholders (`{name}`, `{branch}`, `{date}`, `{n}`), and the list under the field shows what each file comes out as.
+- **Where**: the folder is shown in full. It starts as `Exports` inside the library; **Change…** picks another, and the choice is remembered along with the format, quality and size.
+- **Which edits**: what you see, unless you say otherwise. A photo is exported from the branch it is on, at the step that branch is on. For one photo, tick any of its branches to get a file for each; for several photos, choose between the branch each is on and all branches.
+- **Format**: JPEG with a quality from 1 to 100, PNG, or TIFF. TIFF is 16 bits a channel, drawn at that depth rather than widened from 8, and uncompressed.
+- **Size**: full size, or a longest side in pixels (a few presets, or any number). The sheet shows the pixel size each file will have.
+- **Nothing is replaced**: a name that is taken, in the folder or by another file in the same export, gets a number (`IMG_0462-2.jpg`), and the sheet shows the exact name beforehand.
+- **Afterwards**: the step that was exported is marked in the History tab with the file it became; click the mark to show the file.
+
+Exports are sRGB and carry the capture date, camera, lens and exposure. `src-tauri/src/export.rs` holds the rules and `tests/export.rs` checks them.
+
+Not there yet: presets.
+
+## Development
+
+```sh
+bun install
+bun run tauri dev
+```
+
+Needs Rust, Bun, the [Tauri prerequisites](https://tauri.app/start/prerequisites/), and `libheif` for HEIC support (build with `--no-default-features` to leave HEIC out).
+
+```sh
+bun test                                  # crop arithmetic (src/crop.ts)
+cd src-tauri && cargo test                # library, history, export and GPU pipeline tests, synthetic files
+TONALITY_SAMPLES=/path/to/raws cargo test real_samples -- --ignored --nocapture
+# Render real photos through the editor (optionally with a recipe) next to the camera's JPEG:
+TONALITY_SAMPLES=/path/to/raws TONALITY_OUT=/tmp/out TONALITY_RECIPE='{"shadows":60}' \
+  cargo test gpu_render -- --ignored --nocapture
+```
+
+- `TONALITY_LIBRARY=/some/folder` runs against another library instead of `~/Pictures/Tonality`.
+- `TONALITY_FAKE_VOLUMES=/some/folder` (debug builds) treats a folder containing `DCIM` as a camera card.
+
+Layout: `src-tauri/src` is the backend (`library.rs` database, `import.rs` scan and copy, `media.rs` decoding and metadata, `thumbs.rs` generated images, `volumes.rs` card detection, `develop.rs` RAW to linear light, `geometry.rs` crop and rotation arithmetic, `gpu.rs` the GPU pipeline, `edit.rs` the edit recipe, `history.rs` steps and branches, `export.rs` writing pictures out, `commands.rs` the interface's API). `src` is the React interface, with all state in `store.ts` and the editor under `components/editor`. The GPU tests skip themselves on a machine without a graphics adapter.
