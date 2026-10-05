@@ -1,10 +1,22 @@
 import { create } from "zustand";
 import { listen } from "@tauri-apps/api/event";
-import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
-import { Adjustments, DEFAULTS, describeChange, GEOMETRY, isAsShot, sameAdjustments } from "./adjustments";
+import {
+  Adjustments,
+  DEFAULTS,
+  describeChange,
+  GEOMETRY,
+  isAsShot,
+  Mask,
+  MaskMode,
+  MaskPart,
+  sameAdjustments,
+  Shape,
+} from "./adjustments";
 import {
   api,
+  AppliedEdits,
   ExportJob,
   ExportPlan,
   ExportSettings,
@@ -21,6 +33,8 @@ import {
   Volume,
 } from "./api";
 import { plural } from "./format";
+import { canAdd, MAX_MASKS, newMask, newShape, SHAPE_NAMES } from "./masks";
+import { blend, holds, Preset, settingsFrom } from "./presets";
 
 export type Filter = "all" | "picks" | "unrejected" | "rejects";
 
@@ -60,7 +74,42 @@ export type ExportState =
   /** Always shown, so there is no doubt about what was written. */
   | { phase: "done"; summary: ExportSummary };
 
-export type SidePanel = "adjust" | "crop" | "history" | "info";
+export type SidePanel = "adjust" | "crop" | "masks" | "presets" | "history" | "info";
+
+/** How the brush paints. Kept from photo to photo. */
+export interface BrushSettings {
+  /** 1..100; see `brushRadius`. */
+  size: number;
+  /** 0..100: how much of the brush's radius fades out. */
+  feather: number;
+  /** 1..100: how much a stroke covers. */
+  strength: number;
+  /** Erase rather than paint (Alt does the opposite while held). */
+  erase: boolean;
+}
+
+/** The extension of a preset written out as a file; `FILE_EXTENSION` in presets.rs. */
+const PRESET_EXTENSION = "tonality-preset";
+
+/** The preset applied last in this sitting, kept so its amount can still be changed. */
+export interface AppliedPreset {
+  preset: Preset;
+  /** The photo's edits before it was applied: what none of it looks like. */
+  base: Adjustments;
+  /** Percent: 100 is the preset as it is. */
+  amount: number;
+  /** What it set the settings it covers to, at that amount. */
+  values: Partial<Adjustments>;
+  /**
+   * The history steps recorded while its amount could still change, and the
+   * amount at each. Undo and redo keep it adjustable on these and nowhere else.
+   */
+  steps: Map<number, number>;
+}
+
+/** What the history calls applying a preset, or changing how much of it there is. */
+export const presetStepLabel = (preset: Preset, amount: number) =>
+  amount === 100 ? `Preset: ${preset.name}` : `Preset: ${preset.name} at ${amount}%`;
 
 /** Where undo and redo would land in a history, if anywhere. */
 export function neighbours(history: History | null): { undo: number | null; redo: number | null } {
@@ -82,8 +131,17 @@ export interface EditorState {
   committed: Adjustments;
   /** The photo's steps and branches, kept in the library. */
   history: History | null;
+  /** A preset being tried on the photo without being applied: the one under the pointer. */
+  preview: Preset | null;
+  applied: AppliedPreset | null;
   showOriginal: boolean;
   showClipping: boolean;
+  /** The mask being worked on in the Masks panel, by id. */
+  maskId: number | null;
+  /** Which of its parts the photo's overlay edits; a brush part takes the strokes. */
+  partIndex: number | null;
+  /** Whether the mask being worked on is tinted on the photo. */
+  showMask: boolean;
   histogram: Uint32Array | null;
   highlightsClipped: boolean;
   shadowsClipped: boolean;
@@ -96,8 +154,13 @@ const idleEditor: EditorState = {
   adjustments: DEFAULTS,
   committed: DEFAULTS,
   history: null,
+  preview: null,
+  applied: null,
   showOriginal: false,
   showClipping: false,
+  maskId: null,
+  partIndex: null,
+  showMask: true,
   histogram: null,
   highlightsClipped: false,
   shadowsClipped: false,
@@ -141,9 +204,12 @@ interface State {
   editor: EditorState;
   /** Edits copied from one photo, ready to paste onto others. */
   clipboard: Adjustments | null;
+  /** Every preset: the built-in ones, then your own. */
+  presets: Preset[];
   /** The crop tool's chosen shape: its name, and width over height (null leaves it free). */
   cropShape: string;
   cropAspect: number | null;
+  brush: BrushSettings;
   volumes: Volume[];
   importState: ImportState | null;
   exportState: ExportState | null;
@@ -162,6 +228,22 @@ interface State {
   toggleSquareThumbs: () => void;
   setSidePanel: (panel: SidePanel) => void;
   setCropShape: (shape: string, aspect: number | null) => void;
+  setBrush: (change: Partial<BrushSettings>) => void;
+
+  /** Replaces the open photo's masks, live; with a label the change is also a step in the history. */
+  setMasks: (masks: Mask[], label?: string) => void;
+  /** Starts a mask holding one part of this kind, and works on it. */
+  addMask: (kind: Shape["kind"]) => void;
+  /** Adds a part to the mask being worked on. */
+  addMaskPart: (kind: Shape["kind"], mode: MaskMode) => void;
+  /** Changes a mask; with a label the change is also a step in the history. */
+  updateMask: (id: number, change: Partial<Mask>, label?: string) => void;
+  /** Changes one part of the mask being worked on. */
+  updateMaskPart: (index: number, part: MaskPart, label?: string) => void;
+  removeMask: (id: number) => void;
+  removeMaskPart: (index: number) => void;
+  selectMask: (id: number | null, partIndex?: number | null) => void;
+  toggleMaskOverlay: () => void;
 
   loadEditor: (id: number) => Promise<void>;
   leaveEditor: () => Promise<void>;
@@ -188,6 +270,21 @@ interface State {
   copyEdits: (id: number) => Promise<void>;
   pasteEdits: (ids: number[]) => Promise<void>;
   revertEdits: (ids: number[]) => Promise<void>;
+
+  /** Shows a preset on the open photo without applying it; null puts the photo's own edits back. */
+  previewPreset: (preset: Preset | null) => void;
+  /** Lays a preset over these photos' edits: a step in each one's history. */
+  applyPreset: (ids: number[], preset: Preset) => Promise<void>;
+  /** Changes how much of the preset just applied the open photo takes, in percent. */
+  setPresetAmount: (amount: number) => void;
+  /** Saves the open photo's edits in these sections of the adjust panel as a preset of your own. */
+  savePreset: (name: string, sections: string[]) => Promise<void>;
+  renamePreset: (id: number, name: string) => Promise<void>;
+  /** Replaces what a preset holds with the open photo's edits, for the same settings. */
+  updatePreset: (preset: Preset) => Promise<void>;
+  deletePreset: (preset: Preset) => Promise<void>;
+  importPresets: () => Promise<void>;
+  exportPreset: (preset: Preset) => Promise<void>;
 
   click: (id: number, mods: { range: boolean; toggle: boolean }) => void;
   moveCursor: (id: number, extend: boolean) => void;
@@ -254,6 +351,12 @@ export function visiblePhotos(state: Pick<State, "photos" | "filter" | "view">):
   return cachedVisible.result;
 }
 
+/** The preset whose amount can still be changed: the one applied last, while what it set still stands. */
+export function adjustablePreset(state: Pick<State, "editor">): AppliedPreset | null {
+  const { applied, adjustments } = state.editor;
+  return applied && holds(adjustments, applied.values) ? applied : null;
+}
+
 /** The selection if `id` is part of it, otherwise just `id`. What a right-click or shortcut acts on. */
 export function targetOf(state: Pick<State, "selection">, id: number): number[] {
   return state.selection.has(id) ? [...state.selection] : [id];
@@ -304,16 +407,16 @@ export const useStore = create<State>((set, get) => {
   let editsActivity: number | null = null;
 
   /**
-   * Applies one recipe to many photos, with progress and a way to stop.
+   * Changes the edits of many photos, with progress and a way to stop.
    * Returns the photos that were done and their new versions.
    */
-  const applyToMany = async (activity: string, ids: number[], recipe: Adjustments, step: string, keepCrop: boolean) => {
+  const applyToMany = async (activity: string, ids: number[], run: () => Promise<AppliedEdits>) => {
     const id = beginActivity(activity, ids.length, () => void api.cancelEdits());
     try {
       // Waits its turn behind anything the editor is still saving.
       const result = await inTurn(() => {
         editsActivity = id;
-        return api.applyEdits(ids, recipe, step, keepCrop);
+        return run();
       });
       const done = ids.slice(0, result.versions.length);
       return { done, versionOf: new Map(done.map((photo, i) => [photo, result.versions[i]])), cancelled: result.cancelled };
@@ -359,7 +462,23 @@ export const useStore = create<State>((set, get) => {
     if (get().editor.photoId !== photoId) return;
     // After a jump or a branch switch the sliders follow; after recording a
     // step they are left alone, since another drag may already be under way.
-    setEditor(checkOut ? { history, adjustments: history.adjustments, committed: history.adjustments } : { history });
+    if (checkOut) {
+      // The preset applied last stays adjustable only on the steps it was
+      // adjustable on, at the amount it had there.
+      const { applied } = get().editor;
+      const amount = applied?.steps.get(history.headId);
+      setEditor({
+        history,
+        adjustments: history.adjustments,
+        committed: history.adjustments,
+        applied:
+          applied && amount !== undefined
+            ? { ...applied, amount, values: blend(applied.base, applied.preset.settings, amount / 100) }
+            : null,
+      });
+    } else {
+      setEditor({ history });
+    }
     patch([photoId], (p) => ({ ...p, edited: !isAsShot(history.adjustments), branches: history.branches.length }));
     redrawSoon(photoId);
   };
@@ -427,8 +546,10 @@ export const useStore = create<State>((set, get) => {
     sidePanel: "adjust",
     editor: idleEditor,
     clipboard: null,
+    presets: [],
     cropShape: "Free",
     cropAspect: null,
+    brush: { size: 30, feather: 50, strength: 100, erase: false },
     volumes: [],
     importState: null,
     exportState: null,
@@ -440,7 +561,8 @@ export const useStore = create<State>((set, get) => {
 
     async init() {
       await get().reload();
-      set({ volumes: await api.listVolumes() });
+      const [volumes, presets] = await Promise.all([api.listVolumes(), api.listPresets()]);
+      set({ volumes, presets });
 
       void listen<Volume[]>("volumes-changed", ({ payload }) => {
         const known = new Set(get().volumes.map((v) => v.path));
@@ -491,14 +613,80 @@ export const useStore = create<State>((set, get) => {
     toggleSquareThumbs: () => set((s) => ({ squareThumbs: !s.squareThumbs })),
     setSidePanel: (sidePanel) => set({ sidePanel }),
     setCropShape: (cropShape, cropAspect) => set({ cropShape, cropAspect }),
+    setBrush: (change) => set((s) => ({ brush: { ...s.brush, ...change } })),
+
+    setMasks(masks, label) {
+      if (!get().editor.ready) return;
+      get().adjust({ masks });
+      if (label) get().commitAdjust(label);
+    },
+
+    addMask(kind) {
+      const { ready, size, adjustments } = get().editor;
+      const { masks } = adjustments;
+      if (!ready || !size || masks.length >= MAX_MASKS || !canAdd(masks, kind)) return;
+      const mask = newMask(masks, kind, size, adjustments);
+      setEditor({ maskId: mask.id, partIndex: 0 });
+      get().setMasks([...masks, mask], `New mask: ${SHAPE_NAMES[kind].toLowerCase()}`);
+    },
+
+    addMaskPart(kind, mode) {
+      const { ready, size, adjustments, maskId } = get().editor;
+      const mask = adjustments.masks.find((m) => m.id === maskId);
+      if (!ready || !size || !mask || !canAdd(adjustments.masks, kind)) return;
+      const parts = [...mask.parts, { mode, shape: newShape(kind, size, adjustments) }];
+      setEditor({ partIndex: parts.length - 1 });
+      get().updateMask(mask.id, { parts }, `${mask.name}: ${mode} ${SHAPE_NAMES[kind].toLowerCase()}`);
+    },
+
+    updateMask(id, change, label) {
+      const { masks } = get().editor.adjustments;
+      get().setMasks(
+        masks.map((mask) => (mask.id === id ? { ...mask, ...change } : mask)),
+        label,
+      );
+    },
+
+    updateMaskPart(index, part, label) {
+      const { adjustments, maskId } = get().editor;
+      const mask = adjustments.masks.find((m) => m.id === maskId);
+      if (!mask || !mask.parts[index]) return;
+      get().updateMask(mask.id, { parts: mask.parts.map((p, i) => (i === index ? part : p)) }, label);
+    },
+
+    removeMask(id) {
+      const { masks } = get().editor.adjustments;
+      const mask = masks.find((m) => m.id === id);
+      if (!mask) return;
+      if (get().editor.maskId === id) setEditor({ maskId: null, partIndex: null });
+      get().setMasks(
+        masks.filter((m) => m.id !== id),
+        `Delete ${mask.name}`,
+      );
+    },
+
+    removeMaskPart(index) {
+      const { adjustments, maskId, partIndex } = get().editor;
+      const mask = adjustments.masks.find((m) => m.id === maskId);
+      const part = mask?.parts[index];
+      if (!mask || !part) return;
+      // A mask with nothing left in it goes too.
+      if (mask.parts.length === 1) return get().removeMask(mask.id);
+      const parts = mask.parts.filter((_, i) => i !== index);
+      setEditor({ partIndex: partIndex === null ? null : Math.min(parts.length - 1, partIndex > index ? partIndex - 1 : partIndex) });
+      get().updateMask(mask.id, { parts }, `${mask.name}: remove ${SHAPE_NAMES[part.shape.kind].toLowerCase()}`);
+    },
+
+    selectMask: (maskId, partIndex = 0) => setEditor({ maskId, partIndex: maskId === null ? null : partIndex }),
+    toggleMaskOverlay: () => setEditor({ showMask: !get().editor.showMask }),
 
     loadEditor(id) {
       settle();
       return inTurn(async () => {
         if (get().openId !== id) return;
-        const { showClipping } = get().editor;
+        const { showClipping, showMask } = get().editor;
         // A crop shape chosen for one photo doesn't carry over to the next.
-        set({ editor: { ...idleEditor, photoId: id, showClipping }, cropShape: "Free", cropAspect: null });
+        set({ editor: { ...idleEditor, photoId: id, showClipping, showMask }, cropShape: "Free", cropAspect: null });
         try {
           const photo = await api.openEditor(id);
           if (get().openId !== id) return;
@@ -534,10 +722,13 @@ export const useStore = create<State>((set, get) => {
       const { photoId, ready, adjustments, committed } = get().editor;
       if (photoId === null || !ready || sameAdjustments(adjustments, committed)) return;
       const name = label ?? describeChange(committed, adjustments);
+      const applied = adjustablePreset(get());
       setEditor({ committed: adjustments });
       void inTurn(async () => {
         try {
-          noteHistory(photoId, await api.historyCommit(photoId, adjustments, name), false);
+          const history = await api.historyCommit(photoId, adjustments, name);
+          applied?.steps.set(history.headId, applied.amount);
+          noteHistory(photoId, history, false);
         } catch (error) {
           get().toast({ text: `Couldn’t save your edit: ${error}`, tone: "error" });
         }
@@ -612,7 +803,9 @@ export const useStore = create<State>((set, get) => {
         return;
       }
       try {
-        const { done, versionOf, cancelled } = await applyToMany("Pasting edits", ids, clipboard, "Paste edits", true);
+        const { done, versionOf, cancelled } = await applyToMany("Pasting edits", ids, () =>
+          api.applyEdits(ids, clipboard, "Paste edits", true),
+        );
         patch(done, (p) => ({
           ...p,
           version: versionOf.get(p.id) ?? p.version,
@@ -636,7 +829,9 @@ export const useStore = create<State>((set, get) => {
       if (edited.length === 0) return;
       try {
         // A step like any other, so the edits can still be brought back from the history.
-        const { done, versionOf, cancelled } = await applyToMany("Reverting", edited, DEFAULTS, "Revert to original", false);
+        const { done, versionOf, cancelled } = await applyToMany("Reverting", edited, () =>
+          api.applyEdits(edited, DEFAULTS, "Revert to original", false),
+        );
         patch(done, (p) => ({ ...p, version: versionOf.get(p.id) ?? p.version, edited: false }));
         get().toast({
           text: cancelled
@@ -646,6 +841,120 @@ export const useStore = create<State>((set, get) => {
       } catch (error) {
         get().toast({ text: String(error), tone: "error" });
         await get().reload();
+      }
+    },
+
+    previewPreset(preset) {
+      if (get().editor.ready) setEditor({ preview: preset });
+    },
+
+    async applyPreset(ids, preset) {
+      const { editor } = get();
+      if (ids.length === 0) return;
+      if (ids.length === 1 && ids[0] === editor.photoId && editor.ready) {
+        // In the editor it is an ordinary step, and its amount stays adjustable.
+        get().commitAdjust();
+        const own = get().editor.adjustments;
+        const standing = adjustablePreset(get());
+        // A preset taking over from the one just applied (the same one again,
+        // or another look) runs from the photo as it was before that one, so
+        // its amount never builds on the look it replaces.
+        const base = standing ? { ...own, ...blend(standing.base, standing.preset.settings, 0) } : own;
+        const values = blend(base, preset.settings);
+        const steps = standing?.preset.id === preset.id ? standing.steps : new Map<number, number>();
+        // A photo that already looked like this has nothing to turn up or down from.
+        const applied = holds(base, preset.settings) ? null : { preset, base, amount: 100, values, steps };
+        setEditor({ applied, preview: null, adjustments: { ...own, ...values } });
+        get().commitAdjust(presetStepLabel(preset, 100));
+        return;
+      }
+      try {
+        const { done, versionOf, cancelled } = await applyToMany("Applying preset", ids, () => api.applyPreset(ids, preset.id));
+        patch(done, (p) => ({
+          ...p,
+          version: versionOf.get(p.id) ?? p.version,
+          // Close enough until the next reload.
+          edited: p.edited || !holds(DEFAULTS, preset.settings),
+          branches: Math.max(1, p.branches),
+        }));
+        get().toast({
+          text: cancelled
+            ? `Stopped: ${preset.name} applied to ${done.length} of ${plural(ids.length, "photo")}`
+            : `${preset.name} applied to ${plural(ids.length, "photo")}`,
+        });
+      } catch (error) {
+        get().toast({ text: String(error), tone: "error" });
+        await get().reload();
+      }
+    },
+
+    setPresetAmount(amount) {
+      const applied = adjustablePreset(get());
+      if (!applied || !get().editor.ready) return;
+      const values = blend(applied.base, applied.preset.settings, amount / 100);
+      setEditor({ applied: { ...applied, amount, values }, adjustments: { ...get().editor.adjustments, ...values } });
+    },
+
+    async savePreset(name, sections) {
+      const { editor } = get();
+      if (!editor.ready) return;
+      const settings = settingsFrom(editor.adjustments, sections);
+      if (await attempt(() => api.createPreset(name, settings))) set({ presets: await api.listPresets() });
+    },
+
+    async renamePreset(id, name) {
+      const current = get().presets.find((preset) => preset.id === id);
+      if (!name.trim() || name.trim() === current?.name) return;
+      if (await attempt(() => api.renamePreset(id, name))) set({ presets: await api.listPresets() });
+    },
+
+    async updatePreset(preset) {
+      const { editor } = get();
+      if (!editor.ready) return;
+      const settings = Object.fromEntries(Object.keys(preset.settings).map((key) => [key, editor.adjustments[key as keyof Adjustments]]));
+      if (!(await attempt(() => api.updatePreset(preset.id, settings)))) return;
+      set({ presets: await api.listPresets() });
+      get().toast({ text: `“${preset.name}” now holds this photo’s edits` });
+    },
+
+    async deletePreset(preset) {
+      const confirmed = await get().confirm({
+        title: `Delete the preset “${preset.name}”?`,
+        body: "Photos it was applied to keep their edits.",
+        confirmLabel: "Delete preset",
+      });
+      if (confirmed && (await attempt(() => api.deletePreset(preset.id)))) set({ presets: await api.listPresets() });
+    },
+
+    async importPresets() {
+      const picked = await openDialog({
+        multiple: true,
+        title: "Import presets",
+        filters: [{ name: "Tonality presets", extensions: [PRESET_EXTENSION, "json"] }],
+      });
+      if (!picked?.length) return;
+      try {
+        const { imported, failed } = await api.importPresets(picked);
+        set({ presets: await api.listPresets() });
+        if (imported.length > 0) get().toast({ text: `Imported ${plural(imported.length, "preset")}` });
+        for (const file of failed) get().toast({ text: `Couldn’t import ${file.fileName}: ${file.reason}`, tone: "error" });
+      } catch (error) {
+        get().toast({ text: String(error), tone: "error" });
+      }
+    },
+
+    async exportPreset(preset) {
+      const path = await saveDialog({
+        title: "Export preset",
+        defaultPath: `${preset.name.replace(/[/\\:*?"<>|]/g, "-")}.${PRESET_EXTENSION}`,
+        filters: [{ name: "Tonality presets", extensions: [PRESET_EXTENSION] }],
+      });
+      if (!path) return;
+      try {
+        await api.exportPreset(preset.id, path);
+        get().toast({ text: `Saved “${preset.name}” as a file`, action: { label: "Show", run: () => void get().reveal(path) } });
+      } catch (error) {
+        get().toast({ text: `Couldn’t export the preset: ${error}`, tone: "error" });
       }
     },
 

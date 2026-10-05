@@ -31,6 +31,35 @@ fn set_modified(path: &Path) {
     file.set_modified(SystemTime::UNIX_EPOCH + Duration::from_secs(SHOT_AT)).unwrap();
 }
 
+/// The EXIF of a photo taken at `taken` (`YYYY:MM:DD HH:MM:SS`), as a bare TIFF.
+fn exif_taken(taken: &str) -> Vec<u8> {
+    let field = exif::Field {
+        tag: exif::Tag::DateTimeOriginal,
+        ifd_num: exif::In::PRIMARY,
+        value: exif::Value::Ascii(vec![taken.as_bytes().to_vec()]),
+    };
+    let mut writer = exif::experimental::Writer::new();
+    writer.push_field(&field);
+    let mut tiff = std::io::Cursor::new(Vec::new());
+    writer.write(&mut tiff, false).unwrap();
+    tiff.into_inner()
+}
+
+/// A JPEG that says when it was taken, which is not when its file is dated.
+fn write_dated_image(path: &Path, shade: u8, taken: &str) {
+    write_image(path, shade);
+    let jpeg = fs::read(path).unwrap();
+    let exif = exif_taken(taken);
+    // An APP1 segment straight after the start-of-image marker.
+    let mut dated = jpeg[..2].to_vec();
+    dated.extend([0xFF, 0xE1]);
+    dated.extend(((exif.len() + 8) as u16).to_be_bytes());
+    dated.extend(b"Exif\0\0");
+    dated.extend(&exif);
+    dated.extend(&jpeg[2..]);
+    write_bytes(path, &dated);
+}
+
 fn scan(library: &Library, paths: &[PathBuf]) -> ScanSession {
     import::scan(library, 1, paths, None, &|_, _| {}).unwrap()
 }
@@ -76,6 +105,39 @@ fn scan_pairs_raw_with_jpeg_and_ignores_other_files() {
     );
     assert!(view.items.iter().all(|i| i.status == "new"));
     assert_eq!(view.source, "card");
+}
+
+#[test]
+fn scan_dates_photos_by_when_they_were_taken() {
+    let f = fixture();
+    // Two more shoots on the card, either side of midnight; every file is dated the same.
+    write_dated_image(&f.card.join("DCIM/101CANON/IMG_0100.JPG"), 50, "2026:02:01 23:30:00");
+    write_bytes(&f.card.join("DCIM/101CANON/IMG_0101.CR2"), &exif_taken("2026:02:02 00:10:00"));
+    // A RAW that says nothing itself goes by the JPEG shot with it.
+    write_bytes(&f.card.join("DCIM/101CANON/IMG_0102.CR2"), b"not really a raw file either");
+    write_dated_image(&f.card.join("DCIM/101CANON/IMG_0102.JPG"), 60, "2026:02:02 00:20:00");
+
+    let session = scan(&f.library, std::slice::from_ref(&f.card));
+    let view = session.view();
+    let (undated, dated) = view.items.split_at(3);
+    // Newest first, and photos that carry no date go by their file's.
+    assert!(undated.iter().all(|i| i.taken_at.starts_with("2026-03-14T")));
+    let dated: Vec<_> = dated.iter().map(|i| (i.file_name.as_str(), i.taken_at.as_str())).collect();
+    assert_eq!(
+        dated,
+        [
+            ("IMG_0102.CR2", "2026-02-02T00:20:00"),
+            ("IMG_0101.CR2", "2026-02-02T00:10:00"),
+            ("IMG_0100.JPG", "2026-02-01T23:30:00"),
+        ]
+    );
+
+    // Each lands in the day the review showed it under.
+    import_all(&f.library, &session);
+    let originals = f.library.originals_dir();
+    assert!(originals.join("2026/2026-02-01/IMG_0100.JPG").is_file());
+    assert!(originals.join("2026/2026-02-02/IMG_0101.CR2").is_file());
+    assert!(originals.join("2026/2026-02-02/IMG_0102.CR2").is_file());
 }
 
 #[test]

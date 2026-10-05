@@ -236,6 +236,10 @@ impl Library {
             db.execute_batch(&format!("BEGIN; {ADD_SETTINGS} {} PRAGMA user_version = 4; COMMIT;", crate::export::SCHEMA))
                 .context("upgrading library to record exports")?;
         }
+        if version < 5 {
+            db.execute_batch(&format!("BEGIN; {} PRAGMA user_version = 5; COMMIT;", crate::presets::SCHEMA))
+                .context("upgrading library to hold presets")?;
+        }
         let library = Self { root: root.to_path_buf(), db: Mutex::new(db) };
         // Leftovers from an import or review that was interrupted.
         let _ = fs::remove_dir_all(library.incoming_dir());

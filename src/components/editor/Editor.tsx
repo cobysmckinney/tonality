@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { Adjustments, DEFAULTS, isAsShot } from "../../adjustments";
+import { withPreset } from "../../presets";
 import { api, Photo, PhotoInfo, previewUrl, Region, thumbUrl } from "../../api";
 import * as format from "../../format";
 import { albumEntries } from "../../menus";
@@ -26,7 +27,10 @@ import { AdjustPanel } from "./AdjustPanel";
 import { CropOverlay } from "./CropOverlay";
 import { CropPanel } from "./CropPanel";
 import { Histogram } from "./Histogram";
+import { MaskOverlay } from "./MaskOverlay";
+import { MasksPanel } from "./MasksPanel";
 import { HistoryPanel } from "./HistoryPanel";
+import { PresetsPanel } from "./PresetsPanel";
 
 const STRIP_ITEM = 68;
 const STRIP_GAP = 4;
@@ -174,6 +178,7 @@ interface FrameRequest {
   height: number;
   showClipping: boolean;
   uncropped: boolean;
+  maskOverlay: number | null;
 }
 
 /**
@@ -192,10 +197,17 @@ function Stage({ photo, onZoomChange }: { photo: Photo; onZoomChange: (label: st
 
   const ready = useStore((s) => s.editor.ready && s.editor.photoId === photo.id);
   const photoSize = useStore((s) => s.editor.size);
-  const current = useStore((s) => s.editor.adjustments);
+  const own = useStore((s) => s.editor.adjustments);
+  const trying = useStore((s) => s.editor.preview);
+  // A preset being tried is laid over the edits as they are now, so undo or a paste shows through it.
+  const current = useMemo(() => (trying ? withPreset(own, trying.settings) : own), [own, trying]);
   const showOriginal = useStore((s) => s.editor.showOriginal);
   const showClipping = useStore((s) => s.editor.showClipping && !s.editor.showOriginal);
   const uncropped = useStore((s) => s.sidePanel === "crop" && !s.editor.showOriginal);
+  const masking = useStore((s) => s.sidePanel === "masks" && !s.editor.showOriginal);
+  const maskOverlay = useStore((s) =>
+    s.sidePanel === "masks" && s.editor.showMask && !s.editor.showOriginal ? s.editor.maskId : null,
+  );
 
   // A vignette follows the crop, so it has no meaning on the uncropped view.
   const adjustments = useMemo(
@@ -260,6 +272,7 @@ function Stage({ photo, onZoomChange }: { photo: Photo; onZoomChange: (label: st
           request.height,
           request.showClipping,
           request.uncropped,
+          request.maskOverlay,
         );
         const target = canvas.current;
         if (target && useStore.getState().editor.photoId === request.id) {
@@ -281,9 +294,9 @@ function Stage({ photo, onZoomChange }: { photo: Photo; onZoomChange: (label: st
   useEffect(() => {
     if (!geometry) return;
     const { region, width, height } = geometry;
-    wanted.current = { id: photo.id, adjustments, region, width, height, showClipping, uncropped };
+    wanted.current = { id: photo.id, adjustments, region, width, height, showClipping, uncropped, maskOverlay };
     void pump();
-  }, [geometry, adjustments, showClipping, uncropped, photo.id, pump]);
+  }, [geometry, adjustments, showClipping, uncropped, maskOverlay, photo.id, pump]);
 
   /** Zooms to `zoom`, keeping the point under the pointer where it is. */
   const zoomAt = useCallback(
@@ -381,6 +394,9 @@ function Stage({ photo, onZoomChange }: { photo: Photo; onZoomChange: (label: st
         {live && uncropped && painted?.uncropped && shown && frame && photoSize && (
           <CropOverlay photo={photoSize} scale={shown.width / frame.width} width={shown.width} height={shown.height} />
         )}
+        {live && masking && shown && photoSize && (
+          <MaskOverlay photo={photoSize} region={geometry.region} width={shown.width} height={shown.height} />
+        )}
       </div>
       {!ready && <span className="stage-note">Preparing photo…</span>}
     </div>
@@ -390,6 +406,8 @@ function Stage({ photo, onZoomChange }: { photo: Photo; onZoomChange: (label: st
 const SIDE_TABS: { panel: SidePanelName; label: string }[] = [
   { panel: "adjust", label: "Adjust" },
   { panel: "crop", label: "Crop" },
+  { panel: "masks", label: "Masks" },
+  { panel: "presets", label: "Presets" },
   { panel: "history", label: "History" },
   { panel: "info", label: "Info" },
 ];
@@ -414,6 +432,8 @@ function SidePanel({ photo }: { photo: Photo }) {
       </div>
       {panel === "adjust" && <AdjustPanel />}
       {panel === "crop" && <CropPanel />}
+      {panel === "masks" && <MasksPanel />}
+      {panel === "presets" && <PresetsPanel />}
       {panel === "history" && <HistoryPanel />}
       {panel === "info" && <Info photo={photo} />}
     </aside>
@@ -469,15 +489,21 @@ export function Editor({ photo, inert }: { photo: Photo; inert: boolean }) {
         const next = list[list.findIndex((p) => p.id === open) + (key === "ArrowLeft" ? -1 : 1)];
         if (next) state.openPhoto(next.id);
       } else if (key === "Escape" || (key === "Enter" && state.sidePanel === "crop" && !target.closest("button"))) {
-        // Escape backs out one level at a time: off a slider, out of the crop tool, out of the photo.
+        // Escape backs out one level at a time: off a slider, out of the crop or mask tools, out of the photo.
         if (onSlider) target.blur();
-        else if (state.sidePanel === "crop") state.setSidePanel("adjust");
+        else if (state.sidePanel === "crop" || state.sidePanel === "masks") state.setSidePanel("adjust");
         else state.closePhoto();
       } else if (key === "\\") state.setShowOriginal(true);
       else if (key === "j") state.toggleClipping();
       else if (key === "c") state.setSidePanel(state.sidePanel === "crop" ? "adjust" : "crop");
+      else if (key === "m") state.setSidePanel(state.sidePanel === "masks" ? "adjust" : "masks");
+      else if (key === "o" && state.sidePanel === "masks") state.toggleMaskOverlay();
+      else if ((key === "[" || key === "]") && state.sidePanel === "masks") {
+        state.setBrush({ size: Math.min(100, Math.max(1, state.brush.size + (key === "]" ? 4 : -4))) });
+      }
       else if (key === "i") state.setSidePanel(state.sidePanel === "info" ? "adjust" : "info");
       else if (key === "h") state.setSidePanel(state.sidePanel === "history" ? "adjust" : "history");
+      else if (key === "p" && event.shiftKey) state.setSidePanel(state.sidePanel === "presets" ? "adjust" : "presets");
       else if (key === "f") void state.toggleFavorite([open]);
       else if (key === "p") void state.toggleFlag([open], 1);
       else if (key === "x") void state.toggleFlag([open], -1);

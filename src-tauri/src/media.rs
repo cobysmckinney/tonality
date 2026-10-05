@@ -2,7 +2,7 @@
 //! them down to thumbnails and previews.
 
 use std::fs::{self, File};
-use std::io::{BufReader, BufWriter, Read, Seek, SeekFrom};
+use std::io::{BufReader, BufWriter, Cursor, Read, Seek, SeekFrom};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -67,11 +67,13 @@ pub fn init() {
     libheif_rs::integration::image::register_all_decoding_hooks();
 }
 
+/// How much of the start of a file is read to tell it apart and to date it.
+const HEAD: u64 = 256 * 1024;
+
 /// A cheap identity for a file: its size plus a hash of its head and tail.
 /// Camera files carry their capture metadata and embedded preview up front,
 /// so this tells photos apart without reading tens of megabytes off a card.
 pub fn fingerprint(path: &Path) -> Result<(String, u64)> {
-    const HEAD: u64 = 256 * 1024;
     const TAIL: u64 = 64 * 1024;
     let mut file = File::open(path).with_context(|| format!("opening {}", path.display()))?;
     let size = file.metadata()?.len();
@@ -112,6 +114,43 @@ fn parse_exif_date(text: &str) -> Option<NaiveDateTime> {
         .ok()
         // Cameras with an unset clock write zeroes or a date decades off.
         .filter(|date| date.and_utc().timestamp() > 0)
+}
+
+fn exif_text(parsed: &exif::Exif, tag: exif::Tag) -> Option<String> {
+    match &parsed.get_field(tag, exif::In::PRIMARY)?.value {
+        exif::Value::Ascii(parts) => clean(String::from_utf8_lossy(parts.first()?)),
+        _ => None,
+    }
+}
+
+fn exif_taken_at(parsed: &exif::Exif) -> Option<NaiveDateTime> {
+    use exif::Tag;
+    exif_text(parsed, Tag::DateTimeOriginal)
+        .or_else(|| exif_text(parsed, Tag::DateTimeDigitized))
+        .or_else(|| exif_text(parsed, Tag::DateTime))
+        .as_deref()
+        .and_then(parse_exif_date)
+}
+
+/// When a photo was taken, going by the start of the file alone. Reading a
+/// RAW's metadata properly maps the whole file, far too much to do for every
+/// photo on a card before any is chosen; most formats keep the date up front.
+pub fn quick_taken_at(path: &Path) -> Option<NaiveDateTime> {
+    let mut head = Vec::new();
+    File::open(path).ok()?.take(HEAD).read_to_end(&mut head).ok()?;
+    // A Fuji RAW opens with a header of its own, which says where its JPEG
+    // preview starts; the date is in there.
+    let start = match head.get(84..88) {
+        Some(offset) if head.starts_with(b"FUJIFILMCCD-RAW") => u32::from_be_bytes(offset.try_into().ok()?) as usize,
+        _ => 0,
+    };
+    // Whatever the cut-off start of a file still describes is enough here.
+    let parsed = exif::Reader::new()
+        .continue_on_error(true)
+        .read_from_container(&mut Cursor::new(head.get(start..)?))
+        .or_else(|error| error.distill_partial_result(|_| {}))
+        .ok()?;
+    exif_taken_at(&parsed)
 }
 
 fn clean(text: impl AsRef<str>) -> Option<String> {
@@ -198,20 +237,13 @@ fn image_meta(path: &Path) -> Meta {
         .ok()
         .and_then(|file| exif::Reader::new().read_from_container(&mut BufReader::new(file)).ok());
     if let Some(parsed) = parsed {
-        let text = |tag| match &parsed.get_field(tag, In::PRIMARY)?.value {
-            Value::Ascii(parts) => clean(String::from_utf8_lossy(parts.first()?)),
-            _ => None,
-        };
+        let text = |tag| exif_text(&parsed, tag);
         let number = |tag| match &parsed.get_field(tag, In::PRIMARY)?.value {
             Value::Rational(v) => positive(v.first()?.to_f64()),
             Value::SRational(v) => positive(v.first()?.to_f64()),
             other => other.get_uint(0).map(f64::from).and_then(positive),
         };
-        meta.taken_at = text(Tag::DateTimeOriginal)
-            .or_else(|| text(Tag::DateTimeDigitized))
-            .or_else(|| text(Tag::DateTime))
-            .as_deref()
-            .and_then(parse_exif_date);
+        meta.taken_at = exif_taken_at(&parsed);
         meta.make = text(Tag::Make);
         meta.model = text(Tag::Model);
         meta.lens = text(Tag::LensModel);

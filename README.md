@@ -15,7 +15,7 @@ Tonality keeps one managed library, like Apple Photos. Importing copies photos i
 ```
 
 - **Library, Favorites, Imports, Recently Deleted, Albums** in the sidebar. Deleted photos are kept for 30 days.
-- **Import** from files, folders, drag and drop, or a camera card (any mounted volume with a `DCIM` folder). You review what was found before anything is copied; photos already in the library are marked and skipped.
+- **Import** from files, folders, drag and drop, or a camera card (any mounted volume with a `DCIM` folder). You review what was found before anything is copied, grouped by the day it was taken: a day's heading selects or clears the whole day, so one shoot can be imported and the rest of the card left. Photos already in the library are marked and skipped.
 - **RAW + JPEG pairs** shot together are one photo.
 - **Culling**: `F` favorite, `P` pick, `X` reject, `U` unflag, `Delete` to delete. Arrows move, Shift extends, Enter opens, Escape goes back, `I` toggles info.
 
@@ -27,7 +27,33 @@ Opening a photo (double-click or Enter) loads it at full resolution onto the GPU
 - **Crop** (`C`): the photo is shown whole with an upright crop frame over it. Shapes (free, original, 1:1, 5:4, 4:3, 3:2, 16:9), a straighten slider that turns the photo under the frame and keeps the frame on the photo, quarter-turns and flips. Pasting edits onto another photo leaves that photo's own crop alone.
 - **Starting look**: RAW files open with a built-in tone curve fitted to match camera JPEGs. The constants at the top of the shader hold it.
 - **Histogram** with clipping markers; `J` shows clipped areas on the photo.
-- **Keys**: `Ctrl+Z` / `Ctrl+Shift+Z` undo and redo, hold `\` for the original, `Z` or double-click for 100%, scroll to zoom, `Ctrl+C` / `Ctrl+V` copy and paste edits (in the grid too, onto a whole selection), double-click a slider to reset it.
+- **Keys**: `C` crop, `M` masks, `Shift+P` presets, `H` history, `I` info; `Ctrl+Z` / `Ctrl+Shift+Z` undo and redo, hold `\` for the original, `Z` or double-click for 100%, scroll to zoom, `Ctrl+C` / `Ctrl+V` copy and paste edits (in the grid too, onto a whole selection), double-click a slider to reset it.
+
+### Presets
+
+A preset is a named look to lay over a photo's edits. Each one *covers* some settings and leaves the rest alone, so a look keeps the exposure you already corrected, and a grain preset goes on top of a look. No preset touches the crop.
+
+- **The Presets tab** (`Shift+P`) lists them by name. Point at one, or walk the list with the arrow keys, to see it on the photo; click or Enter applies it. A dot marks the presets the photo is wearing.
+- **Applying is a step** in the history ("Preset: Warm fade"), so it undoes and branches like any other edit.
+- **Amount**: once applied, a slider under the list fades the preset from none of it (0%) to double (200%). It stays for as long as the settings the preset covers are left as it set them, and comes back when undo or redo lands on a step it made. Applying the same preset again, or another look in its place, keeps the amount measured from the photo as it was before either.
+- **Built in**: six colour looks and four black-and-whites, which all cover the same settings (vibrance, saturation, the curves and the colour mixer), so picking another replaces the last one cleanly; and four finishing touches (grain, vignette, crispness) that cover one thing each.
+- **Your own**: **+** saves the photo's edits as a preset. You choose which groups it covers (Light, Color, Curve, Color mixer, Detail, Effects); the ones you changed are ticked to begin with. Right-click one of yours, or use its **…** button, to rename it, update it from the photo in front of you, export it or delete it.
+- **In the grid**, right-click a selection and choose **Apply preset** to put one on every photo in it.
+- **Files**: a preset exports as a small `.tonality-preset` file, and **+** imports them, to share or to carry to another library.
+
+`src-tauri/src/presets.rs` holds the built-in presets and the rules, with `tests/presets.rs`; `src/presets.ts` works out the amount.
+
+### Masks
+
+Masks change one part of the photo. Each mask is an area, built from parts, with its own sliders (light, color, clarity, dehaze, sharpening, noise reduction) that add to the photo's own wherever it covers.
+
+- **The Masks tab** (`M`): **+** starts a mask from a brush, a linear gradient, a radial gradient or a brightness range. The eye hides a mask's effect without removing it; **…** renames, inverts or deletes it.
+- **Parts** combine in order: each one adds to the area, subtracts from it, or intersects with it (keeps only what both cover). A brightness range added to a gradient intersects to begin with, so "the sky, but only its bright part" is two parts.
+- **On the photo**: a gradient's ends and a radial's edges, centre and turning knob are dragged into place. With a brush part chosen, dragging paints; Alt erases, `[` and `]` change the size. `O` tints the mask red.
+- **They stay on the photo**: parts are kept on the file itself, so they follow crops, turns and flips. Presets never include masks; pasting edits does.
+- **Limits**: 8 masks, 32 parts and 8 brush parts a photo.
+
+Gradients and brightness ranges are worked out per pixel in the shader. Brush strokes are painted into a coverage map per brush part (`src-tauri/src/masks.rs`); while you paint only the newest length of the stroke is painted again. `tests/masks.rs` checks each kind on the GPU; `src/masks.ts` places them on screen.
 
 ### History and branches
 
@@ -56,8 +82,6 @@ History works like a small git repository per photo, and takes the place of "vir
 
 Exports are sRGB and carry the capture date, camera, lens and exposure. `src-tauri/src/export.rs` holds the rules and `tests/export.rs` checks them.
 
-Not there yet: presets.
-
 ## Development
 
 ```sh
@@ -68,15 +92,18 @@ bun run tauri dev
 Needs Rust, Bun, the [Tauri prerequisites](https://tauri.app/start/prerequisites/), and `libheif` for HEIC support (build with `--no-default-features` to leave HEIC out).
 
 ```sh
-bun test                                  # crop arithmetic (src/crop.ts)
-cd src-tauri && cargo test                # library, history, export and GPU pipeline tests, synthetic files
+bun test                                  # crop arithmetic (src/crop.ts) and preset amounts (src/presets.ts)
+cd src-tauri && cargo test                # library, history, preset, export and GPU pipeline tests, synthetic files
 TONALITY_SAMPLES=/path/to/raws cargo test real_samples -- --ignored --nocapture
 # Render real photos through the editor (optionally with a recipe) next to the camera's JPEG:
 TONALITY_SAMPLES=/path/to/raws TONALITY_OUT=/tmp/out TONALITY_RECIPE='{"shadows":60}' \
   cargo test gpu_render -- --ignored --nocapture
+# Render real photos with every built-in preset, to judge them by eye:
+TONALITY_SAMPLES=/path/to/raws TONALITY_OUT=/tmp/out cargo test preset_sheet -- --ignored
 ```
 
 - `TONALITY_LIBRARY=/some/folder` runs against another library instead of `~/Pictures/Tonality`.
 - `TONALITY_FAKE_VOLUMES=/some/folder` (debug builds) treats a folder containing `DCIM` as a camera card.
+- `TONALITY_EVAL=/some/folder` (debug builds) runs each `.js` file put in the folder inside the window, then deletes it: a way to script pointer drags when checking the mask tools.
 
-Layout: `src-tauri/src` is the backend (`library.rs` database, `import.rs` scan and copy, `media.rs` decoding and metadata, `thumbs.rs` generated images, `volumes.rs` card detection, `develop.rs` RAW to linear light, `geometry.rs` crop and rotation arithmetic, `gpu.rs` the GPU pipeline, `edit.rs` the edit recipe, `history.rs` steps and branches, `export.rs` writing pictures out, `commands.rs` the interface's API). `src` is the React interface, with all state in `store.ts` and the editor under `components/editor`. The GPU tests skip themselves on a machine without a graphics adapter.
+Layout: `src-tauri/src` is the backend (`library.rs` database, `import.rs` scan and copy, `media.rs` decoding and metadata, `thumbs.rs` generated images, `volumes.rs` card detection, `develop.rs` RAW to linear light, `geometry.rs` crop and rotation arithmetic, `gpu.rs` the GPU pipeline, `edit.rs` the edit recipe, `history.rs` steps and branches, `presets.rs` presets, `masks.rs` mask packing and brush coverage, `export.rs` writing pictures out, `commands.rs` the interface's API). `src` is the React interface, with all state in `store.ts` and the editor under `components/editor`. The GPU tests skip themselves on a machine without a graphics adapter.

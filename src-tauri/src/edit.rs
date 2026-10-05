@@ -52,6 +52,111 @@ impl Default for Crop {
     }
 }
 
+/// The sliders a mask can carry. Each is added to the photo's own setting
+/// wherever the mask covers it, in the same units.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct LocalAdjustments {
+    pub exposure: f32,
+    pub contrast: f32,
+    pub highlights: f32,
+    pub shadows: f32,
+    pub whites: f32,
+    pub blacks: f32,
+    pub temperature: f32,
+    pub tint: f32,
+    pub vibrance: f32,
+    pub saturation: f32,
+    pub clarity: f32,
+    pub dehaze: f32,
+    pub sharpening: f32,
+    pub noise_reduction: f32,
+}
+
+/// One brush stroke. Positions are on the photo file, 0..1 across and down.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct Stroke {
+    pub points: Vec<[f32; 2]>,
+    /// The brush's radius, as a share of the photo's longer side.
+    pub radius: f32,
+    /// 0..1: how much of the radius fades out rather than covering fully.
+    pub feather: f32,
+    /// 0..1: how much the stroke covers at its centre.
+    pub strength: f32,
+    /// Takes coverage away instead of adding it.
+    pub erase: bool,
+}
+
+impl Default for Stroke {
+    fn default() -> Self {
+        Self { points: Vec::new(), radius: 0.02, feather: 0.5, strength: 1.0, erase: false }
+    }
+}
+
+/// What a part of a mask covers. Positions are on the photo file, 0..1
+/// across and down; sizes are shares of its longer side; angles are degrees
+/// clockwise as the file is stored.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum Shape {
+    /// Painted by hand.
+    Brush { strokes: Vec<Stroke> },
+    /// Full effect at `from`, fading to none at `to`, in parallel bands.
+    Linear { from: [f32; 2], to: [f32; 2] },
+    /// An ellipse, fading out over its outer `feather` (0..1) share.
+    Radial { center: [f32; 2], radius: [f32; 2], angle: f32, feather: f32 },
+    /// The parts of the photo within a range of brightness (0 black, 1 white),
+    /// fading out over `smoothness` either side.
+    Luminance { low: f32, high: f32, smoothness: f32 },
+}
+
+/// How a part combines with the parts before it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Mode {
+    #[default]
+    Add,
+    Subtract,
+    /// Keeps only what is covered both by the parts before and by this one.
+    Intersect,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MaskPart {
+    #[serde(default)]
+    pub mode: Mode,
+    pub shape: Shape,
+}
+
+/// A local adjustment: an area of the photo, and the sliders that apply there.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct Mask {
+    /// Tells masks apart while they are edited; unique within a recipe.
+    pub id: u32,
+    pub name: String,
+    /// A hidden mask stays in the recipe but has no effect.
+    pub visible: bool,
+    /// Applies everywhere the parts do not cover instead.
+    pub invert: bool,
+    pub parts: Vec<MaskPart>,
+    pub adjustments: LocalAdjustments,
+}
+
+impl Default for Mask {
+    fn default() -> Self {
+        Self {
+            id: 0,
+            name: String::new(),
+            visible: true,
+            invert: false,
+            parts: Vec::new(),
+            adjustments: LocalAdjustments::default(),
+        }
+    }
+}
+
 /// Every slider in the editor. Zero everywhere means "as shot".
 /// Exposure is in stops (-5..5); everything else runs -100..100 or 0..100.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -89,6 +194,9 @@ pub struct Adjustments {
     /// Mirrors applied after the quarter-turns, so they flip what you see.
     pub flip_horizontal: bool,
     pub flip_vertical: bool,
+
+    /// Local adjustments, laid over the rest in order.
+    pub masks: Vec<Mask>,
 }
 
 impl Adjustments {

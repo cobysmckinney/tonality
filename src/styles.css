@@ -546,6 +546,35 @@ button {
   font-size: 15px;
   letter-spacing: -0.005em;
 }
+/* A day in the import review: the whole heading is its checkbox. */
+.day-toggle {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  /* Room for the focus ring, without moving the tick out of line with the photos. */
+  margin: -3px 0 -3px -3px;
+  padding: 3px 9px 3px 3px;
+  border-radius: 13px;
+}
+.day-toggle .tick {
+  position: static;
+  align-self: center;
+  flex: none;
+  border-color: var(--faint);
+  background: none;
+}
+.day-toggle:hover .tick {
+  border-color: var(--text);
+}
+.day-toggle.chosen .tick {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+.day-toggle .day-detail {
+  font-size: 13px;
+  font-weight: 400;
+  letter-spacing: 0;
+}
 
 .photo {
   position: relative;
@@ -822,6 +851,74 @@ button {
   fill: transparent;
 }
 
+/* Masks drawn over the photo: white lines and knobs, like the crop frame. */
+.mask-overlay {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  touch-action: none;
+}
+.mask-overlay.brushing {
+  cursor: none;
+}
+.mask-paint {
+  fill: transparent;
+}
+.mask-line {
+  fill: none;
+  stroke: rgb(255 255 255 / 0.9);
+  stroke-width: 1.5;
+  pointer-events: none;
+}
+.mask-line.faint {
+  stroke-opacity: 0.45;
+}
+.mask-line.dashed {
+  stroke-dasharray: 5 5;
+  stroke-opacity: 0.7;
+}
+.mask-line.grip {
+  stroke-opacity: 0.3;
+}
+.mask-part:not(.active) {
+  opacity: 0.5;
+}
+.mask-part.subtract .mask-line {
+  stroke: #ff9b8f;
+}
+.mask-knob {
+  cursor: grab;
+}
+.mask-knob-grip {
+  fill: transparent;
+}
+.mask-knob-dot {
+  fill: #fff;
+  stroke: rgb(0 0 0 / 0.55);
+  stroke-width: 1.5;
+}
+.mask-knob.pin .mask-knob-dot {
+  fill: var(--accent);
+  stroke: #fff;
+}
+.mask-knob.turn .mask-knob-dot {
+  fill: rgb(0 0 0 / 0.35);
+  stroke: #fff;
+}
+.brush-cursor circle {
+  fill: none;
+  stroke: #fff;
+  stroke-width: 1.5;
+  pointer-events: none;
+}
+.brush-cursor .inner {
+  stroke-opacity: 0.55;
+  stroke-dasharray: 3 3;
+}
+.brush-cursor.erasing circle {
+  stroke: #ff9b8f;
+}
+
 .crop-panel {
   flex: 1;
   display: flex;
@@ -1014,11 +1111,13 @@ button {
   background: var(--well);
 }
 .side-tabs button {
-  flex: 1;
+  flex: 1 1 auto;
   min-width: 0;
   height: 26px;
+  padding: 0 4px;
   border-radius: 7px;
   color: var(--muted);
+  font-size: 12px;
   font-weight: 550;
 }
 .side-tabs button:hover {
@@ -1378,6 +1477,237 @@ button {
   margin: 0 0 4px 29px;
   color: var(--faint);
   font-size: 11px;
+}
+
+/* ---- presets ---- */
+
+.presets {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.presets.waiting {
+  opacity: 0.4;
+}
+.preset-list {
+  flex: 1;
+  min-height: 0;
+  padding: 2px 6px 14px;
+  overflow-y: auto;
+}
+.preset-list ul {
+  margin: 0;
+  list-style: none;
+}
+.preset-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 30px;
+  margin: 6px 0 0;
+  padding: 0 4px 0 10px;
+  color: var(--faint);
+  font-size: 12px;
+  font-weight: 600;
+}
+.preset {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+}
+.preset-main {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  height: 30px;
+  padding: 0 4px 0 10px;
+  border-radius: 7px;
+  color: var(--muted);
+  text-align: left;
+}
+.preset-main:hover,
+.preset-main:focus-visible {
+  background: var(--raised);
+  color: var(--text);
+}
+/* Lit on the presets the photo is wearing. */
+.preset-dot {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+.preset.on .preset-dot {
+  background: var(--accent);
+}
+.preset.on .preset-main {
+  color: var(--text);
+  font-weight: 600;
+}
+.preset-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.preset-more {
+  margin-left: 2px;
+  opacity: 0;
+}
+.preset:hover .preset-more,
+.preset-more:focus-visible {
+  opacity: 1;
+}
+.preset > .branch-name {
+  grid-column: 1 / -1;
+}
+.preset-empty {
+  padding: 4px 10px 0 26px;
+  color: var(--faint);
+  font-size: 12px;
+  line-height: 1.45;
+}
+.preset-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 2px 4px 12px;
+}
+.preset-form .branch-name {
+  flex: none;
+}
+.preset-form .branch-name:not(:focus) {
+  outline-color: var(--line);
+}
+.preset-form .panel-hint {
+  padding: 0 2px;
+}
+.preset-form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+}
+/* Stays put under the list, so the presets don't jump when one is applied. */
+.preset-amount {
+  flex: none;
+  padding: 12px 14px 14px;
+  border-top: 1px solid var(--line);
+}
+
+/* ---- masks ---- */
+
+.masks {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.masks.waiting {
+  opacity: 0.4;
+}
+.mask-scroll {
+  flex: 1;
+  min-height: 0;
+  padding: 2px 6px 16px;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+}
+.mask-list,
+.mask-parts {
+  margin: 0;
+  list-style: none;
+}
+.mask-row,
+.mask-part-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 2px;
+}
+.mask-part-row {
+  grid-template-columns: minmax(0, 1fr) auto auto;
+}
+.mask-main {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+  height: 30px;
+  padding: 0 4px 0 10px;
+  border-radius: 7px;
+  color: var(--muted);
+  text-align: left;
+}
+.mask-main svg {
+  flex: none;
+  color: var(--faint);
+}
+.mask-main:hover,
+.mask-main:focus-visible {
+  background: var(--raised);
+  color: var(--text);
+}
+.mask-row.selected .mask-main,
+.mask-part-row.selected .mask-main {
+  background: var(--accent-wash);
+  color: var(--accent);
+  font-weight: 600;
+}
+.mask-row.selected .mask-main svg,
+.mask-part-row.selected .mask-main svg {
+  color: var(--accent);
+}
+.mask-row.hidden .mask-name {
+  color: var(--faint);
+}
+.mask-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mask-row > .branch-name {
+  grid-column: 1 / -1;
+}
+.mode-button {
+  height: 22px;
+  padding: 0 8px;
+  border-radius: 6px;
+  background: var(--raised);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 550;
+}
+.mode-button:hover {
+  color: var(--text);
+}
+.mask-detail {
+  margin-top: 10px;
+  padding-top: 2px;
+  border-top: 1px solid var(--line);
+}
+.mask-settings {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px 6px 2px 10px;
+}
+.mask-options {
+  padding: 14px 6px 2px 10px;
+}
+.mask-group {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  padding: 0 6px 6px 10px;
+}
+.mask-group .preset-heading {
+  padding: 0;
+  margin-top: 10px;
 }
 
 .info {

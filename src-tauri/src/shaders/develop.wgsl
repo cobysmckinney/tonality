@@ -4,6 +4,28 @@
 // white balance and local contrast behave like they do in a camera. The
 // second works on display-encoded values, where curves and colour tweaks
 // behave like they look.
+//
+// Masks come first: each says how much of its sliders to add to the photo's
+// own at this pixel, so every tool below works locally without knowing it.
+
+// A local adjustment's sliders, laid out like the photo's own, then
+// invert and how much it applies (0 for a hidden mask).
+struct Mask {
+    light: vec4f,
+    tone: vec4f,
+    color: vec4f,
+    detail: vec4f,
+    info: vec4f,
+}
+
+// One part of a mask: kind (1 brush, 2 linear, 3 radial, 4 brightness range),
+// mode (0 add, 1 subtract, 2 intersect), which mask, which coverage map;
+// then numbers that depend on the kind. See masks.rs.
+struct MaskPart {
+    info: vec4f,
+    a: vec4f,
+    b: vec4f,
+}
 
 struct Params {
     // The part of the frame being drawn: frame = view.xy + uv * view.zw.
@@ -26,6 +48,10 @@ struct Params {
     flags: vec4f,
     // Per colour band: hue shift, saturation, luminance, unused.
     mixer: array<vec4f, 8>,
+    // Masks in use, parts in use, the mask to tint red (or -1), unused.
+    mask_counts: vec4f,
+    masks: array<Mask, 8>,
+    mask_parts: array<MaskPart, 32>,
 }
 
 @group(0) @binding(0) var source: texture_2d<f32>;
@@ -36,6 +62,8 @@ struct Params {
 @group(0) @binding(3) var curves: texture_2d<f32>;
 @group(0) @binding(4) var linear_sampler: sampler;
 @group(0) @binding(5) var<uniform> p: Params;
+// One layer per brush part: how much its strokes cover, laid over the photo file.
+@group(0) @binding(6) var brushes: texture_2d_array<f32>;
 
 struct VertexOutput {
     @builtin(position) position: vec4f,
@@ -163,6 +191,64 @@ fn mix_bands(hue: f32) -> vec3f {
     return result;
 }
 
+// How much each mask covers this pixel, 0..1, before inverting. `c` is
+// the photo here as it came from the file.
+fn mask_coverage(uv: vec2f, c: vec3f, scene_referred: bool) -> array<f32, 8> {
+    // Below zero: no part of that mask has been met yet.
+    var w = array<f32, 8>(-1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0);
+    let size = p.image.xy;
+    // Shapes are measured in shares of the photo's longer side, both ways.
+    let q = uv * size / max(size.x, size.y);
+    // Brightness as the photo looks at its own exposure, 0 black to 1 white.
+    var shown = clamp(c * exp2(p.light.x), vec3f(0.0), vec3f(1e4));
+    if (scene_referred) {
+        shown = base_look(shown);
+    }
+    let lightness = srgb_encode(vec3f(clamp(luma(shown), 0.0, 1.0))).x;
+
+    let count = i32(p.mask_counts.y);
+    for (var k = 0; k < count; k++) {
+        let part = p.mask_parts[k];
+        let kind = i32(part.info.x);
+        var v = 0.0;
+        if (kind == 1) {
+            v = textureSampleLevel(brushes, linear_sampler, uv, i32(part.info.w), 0.0).r;
+        } else if (kind == 2) {
+            // Full at the first point, none at the second, in parallel bands.
+            let start = part.a.xy;
+            let along = part.a.zw - start;
+            let t = dot(q - start, along) / max(dot(along, along), 1e-8);
+            v = 1.0 - smoothstep(0.0, 1.0, t);
+        } else if (kind == 3) {
+            let offset = q - part.a.xy;
+            let turn = vec2f(cos(part.b.x), sin(part.b.x));
+            // In the ellipse's own axes, as a share of its radii.
+            let own = vec2f(dot(offset, turn), dot(offset, vec2f(-turn.y, turn.x))) / part.a.zw;
+            v = 1.0 - smoothstep(1.0 - max(part.b.y, 0.002), 1.0, length(own));
+        } else if (kind == 4) {
+            let soft = max(part.a.z, 0.001);
+            v = smoothstep(part.a.x - soft, part.a.x, lightness) * (1.0 - smoothstep(part.a.y, part.a.y + soft, lightness));
+        }
+        let index = i32(part.info.z);
+        let mode = i32(part.info.y);
+        let before = w[index];
+        if (before < 0.0) {
+            // The first part of a mask starts it, unless it takes away from nothing.
+            w[index] = select(v, 0.0, mode == 1);
+        } else if (mode == 0) {
+            w[index] = max(before, v);
+        } else if (mode == 1) {
+            w[index] = before * (1.0 - v);
+        } else {
+            w[index] = before * v;
+        }
+    }
+    for (var i = 0; i < 8; i++) {
+        w[i] = max(w[i], 0.0);
+    }
+    return w;
+}
+
 @fragment
 fn fragment(in: VertexOutput) -> @location(0) vec4f {
     let frame_uv = p.view.xy + in.uv * p.view.zw;
@@ -184,18 +270,47 @@ fn fragment(in: VertexOutput) -> @location(0) vec4f {
     // ---- linear light ----
 
     var c = read_source(uv, lod);
+
+    // The sliders at this pixel: the photo's own, plus each mask's as far as it covers here.
+    var light = p.light;
+    var tone = p.tone;
+    var color = p.color;
+    var detail = p.detail;
+    var tint = 0.0;
+    let mask_count = i32(p.mask_counts.x);
+    if (mask_count > 0) {
+        let coverage = mask_coverage(uv, c, scene_referred);
+        for (var i = 0; i < mask_count; i++) {
+            let mask = p.masks[i];
+            let w = select(coverage[i], 1.0 - coverage[i], mask.info.x > 0.5);
+            if (i == i32(p.mask_counts.z)) {
+                tint = w;
+            }
+            let applied = w * mask.info.y;
+            light += applied * mask.light;
+            tone += applied * mask.tone;
+            color += applied * mask.color;
+            detail += applied * mask.detail;
+        }
+        // Each slider still ends at its own limits, however many masks add up.
+        light = vec4f(light.x, clamp(light.yzw, vec3f(-1.0), vec3f(1.0)));
+        tone = clamp(tone, vec4f(-1.0), vec4f(1.0));
+        color = clamp(color, vec4f(-1.0), vec4f(1.0));
+        detail = clamp(detail, vec4f(-1.0), vec4f(1.0));
+    }
+
     if (scene_referred) {
         // Where one sensor channel has clipped the colour can't be trusted;
         // fade it to neutral so blown highlights come out white, not pink.
         let peak = max(c.r, max(c.g, c.b));
         c = mix(c, vec3f(peak), smoothstep(0.82, 1.0, peak));
     }
-    let noise_reduction = p.detail.y;
+    let noise_reduction = detail.y;
     if (noise_reduction > 0.0) {
         c = denoise(uv, lod, texel, c, noise_reduction * fine);
     }
 
-    var sharpening = p.detail.x * 1.6;
+    var sharpening = detail.x * 1.6;
     if (scene_referred) {
         sharpening += BASE_SHARPENING;
     }
@@ -208,16 +323,16 @@ fn fragment(in: VertexOutput) -> @location(0) vec4f {
 
     // White balance: temperature trades red against blue, tint green against
     // magenta, keeping overall brightness where it was.
-    var gains = vec3f(exp2(p.tone.z * 0.6), exp2(-p.tone.w * 0.35), exp2(-p.tone.z * 0.6));
+    var gains = vec3f(exp2(tone.z * 0.6), exp2(-tone.w * 0.35), exp2(-tone.z * 0.6));
     gains /= luma(gains);
-    let gain = gains * exp2(p.light.x);
+    let gain = gains * exp2(light.x);
     c *= gain;
     let medium = max(textureSampleLevel(blur_medium, linear_sampler, uv, 0.0).rgb, vec3f(0.0)) * gain;
     let large = max(textureSampleLevel(blur_large, linear_sampler, uv, 0.0).rgb, vec3f(0.0)) * gain;
 
     // Dehaze: haze is a veil of light, strongest where even the darkest
     // channel of the neighbourhood is bright. Lift it off (or lay it on).
-    let dehaze = p.color.w;
+    let dehaze = color.w;
     if (dehaze != 0.0) {
         var haze = min(min(large.r, min(large.g, large.b)), 0.9);
         if (dehaze > 0.0) {
@@ -231,7 +346,7 @@ fn fragment(in: VertexOutput) -> @location(0) vec4f {
 
     // Clarity: exaggerate (or soften) how each pixel differs from its
     // surroundings, mostly in the midtones.
-    let clarity = p.color.z;
+    let clarity = color.z;
     if (clarity != 0.0) {
         let difference = clamp(log2((luma(c) + 0.003) / (luma(medium) + 0.003)), -2.0, 2.0);
         let position = tonal_position(luma(c));
@@ -244,10 +359,10 @@ fn fragment(in: VertexOutput) -> @location(0) vec4f {
     let region = tonal_position(mix(luma(large), luma(c), 0.25));
     let shadow_weight = 1.0 - smoothstep(0.0, 0.55, region);
     let highlight_weight = smoothstep(0.45, 1.0, region);
-    c *= exp2(p.light.w * 1.8 * shadow_weight + p.light.z * 1.8 * highlight_weight);
+    c *= exp2(light.w * 1.8 * shadow_weight + light.z * 1.8 * highlight_weight);
 
     // Contrast pivots on mid gray, so it changes spread without changing exposure.
-    c = MID_GRAY * pow(c / MID_GRAY, vec3f(1.0 + p.light.y * 0.5));
+    c = MID_GRAY * pow(c / MID_GRAY, vec3f(1.0 + light.y * 0.5));
 
     // ---- to the display ----
 
@@ -260,8 +375,8 @@ fn fragment(in: VertexOutput) -> @location(0) vec4f {
     v = clamp(v, vec3f(0.0), vec3f(1.0));
 
     // Whites and blacks move the two ends of the range.
-    v += p.tone.x * 0.25 * v * v;
-    v += p.tone.y * 0.25 * (1.0 - v) * (1.0 - v);
+    v += tone.x * 0.25 * v * v;
+    v += tone.y * 0.25 * (1.0 - v) * (1.0 - v);
     v = clamp(v, vec3f(0.0), vec3f(1.0));
 
     // Tone curves: the master curve first, then each channel's own.
@@ -293,17 +408,17 @@ fn fragment(in: VertexOutput) -> @location(0) vec4f {
     // Vibrance favours muted colours; saturation treats all alike.
     let gray = luma(v);
     let saturation_now = rgb_to_hsv(clamp(v, vec3f(0.0), vec3f(1.0))).y;
-    let boost = (1.0 + p.color.y) * (1.0 + p.color.x * (1.0 - saturation_now));
+    let boost = (1.0 + color.y) * (1.0 + color.x * (1.0 - saturation_now));
     v = mix(vec3f(gray), v, boost);
 
     // Vignette: darken or lighten towards the corners.
     // It follows the crop, so it frames the picture you end up with.
     let from_center = length((frame_uv - 0.5) * 1.41421356);
     let edge = smoothstep(0.25, 1.0, from_center);
-    v *= 1.0 + p.detail.z * 0.85 * edge * edge;
+    v *= 1.0 + detail.z * 0.85 * edge * edge;
 
     // Grain is tied to image pixels, so it stays put as you pan and zoom.
-    let grain = p.detail.w;
+    let grain = detail.w;
     if (grain > 0.0) {
         let cell = floor(uv * size / max(1.6, scale));
         let noise = hash(cell) + hash(cell + 17.0) - 1.0;
@@ -312,6 +427,11 @@ fn fragment(in: VertexOutput) -> @location(0) vec4f {
     }
 
     v = clamp(v, vec3f(0.0), vec3f(1.0));
+
+    // The mask being worked on, tinted red where it applies.
+    if (p.mask_counts.z >= 0.0) {
+        v = mix(v, vec3f(0.95, 0.12, 0.08), tint * 0.6);
+    }
 
     // Clipping warnings: blown highlights in red, crushed shadows in blue.
     if (p.flags.x > 0.5) {

@@ -5,7 +5,7 @@ use image::{Rgb, RgbImage};
 use tempfile::TempDir;
 use tonality_lib::develop;
 use tonality_lib::edit::Adjustments;
-use tonality_lib::gpu::{self, Gpu, Region, Session};
+use tonality_lib::gpu::{self, Gpu, Guides, Region, Session};
 
 const WIDTH: u32 = 256;
 const HEIGHT: u32 = 64;
@@ -122,7 +122,7 @@ fn the_colour_mixer_only_touches_its_own_hues() {
 fn a_region_renders_just_that_part_of_the_picture() {
     let Some(f) = fixture() else { return };
     let right_half = Region { x: 0.5, y: 0.0, width: 0.5, height: 1.0 };
-    let rgba = f.gpu.render(&f.session, &Adjustments::default(), right_half, WIDTH / 2, HEIGHT, false, false).unwrap();
+    let rgba = f.gpu.render(&f.session, &Adjustments::default(), right_half, (WIDTH / 2, HEIGHT), Guides::default()).unwrap();
     assert_eq!(rgba.len() as u32, WIDTH / 2 * HEIGHT * 4);
     // Left edge of the frame is the middle of the ramp; right edge is its end.
     assert!(rgba[0].abs_diff(128) <= 1 && rgba[(WIDTH as usize / 2 - 1) * 4].abs_diff(255) <= 1);
@@ -132,7 +132,7 @@ fn a_region_renders_just_that_part_of_the_picture() {
 #[test]
 fn clipping_warnings_mark_pure_white_and_black() {
     let Some(f) = fixture() else { return };
-    let rgba = f.gpu.render(&f.session, &Adjustments::default(), Region::FULL, WIDTH, HEIGHT, true, false).unwrap();
+    let rgba = f.gpu.render(&f.session, &Adjustments::default(), Region::FULL, (WIDTH, HEIGHT), Guides { show_clipping: true, ..Default::default() }).unwrap();
     let pixel = |x: usize| &rgba[x * 4..x * 4 + 3];
     assert!(pixel(255)[0] > 200 && pixel(255)[2] < 60, "white is flagged red: {:?}", pixel(255));
     assert!(pixel(0)[2] > 200 && pixel(0)[0] < 60, "black is flagged blue: {:?}", pixel(0));
@@ -178,7 +178,7 @@ fn the_crop_tool_view_shows_the_whole_tilted_photo_with_empty_corners() {
     let edit = recipe(r#"{"straighten": 20, "crop": {"x": 0.5, "y": 0.5, "width": 0.2, "height": 0.2}}"#);
     let (width, height) = f.gpu.frame_size(&f.session, &edit, true);
     assert!(width > WIDTH && height > HEIGHT, "the tilted card needs a bigger box: {width}x{height}");
-    let rgba = f.gpu.render(&f.session, &edit, Region::FULL, width, height, false, true).unwrap();
+    let rgba = f.gpu.render(&f.session, &edit, Region::FULL, (width, height), Guides { uncropped: true, ..Default::default() }).unwrap();
     let alpha = |x: u32, y: u32| rgba[((y * width + x) * 4 + 3) as usize];
     assert_eq!(alpha(1, 1), 0, "corners lie outside the photo");
     assert_eq!(alpha(width / 2, height / 2), 255, "the middle is the photo");

@@ -14,6 +14,7 @@ use crate::gpu::{self, Region, Session};
 use crate::history::History;
 use crate::import::{self, ImportSummary, ScanSession, ScanView};
 use crate::library::{Library, Overview, PhotoInfo, PhotoItem, View};
+use crate::presets::{self, ImportedPresets, Preset, Settings};
 use crate::thumbs;
 use crate::volumes::{self, Volume};
 
@@ -246,6 +247,7 @@ pub fn render_frame(
     height: u32,
     show_clipping: bool,
     uncropped: bool,
+    mask_overlay: Option<u32>,
 ) -> Result<tauri::ipc::Response, String> {
     let editing = state.editing.lock().unwrap();
     let Some((_, session)) = editing.as_ref().filter(|(open, _)| *open == id) else {
@@ -254,8 +256,8 @@ pub fn render_frame(
     let gpu = gpu::shared().map_err(message)?;
     let region = Region { x: region.x, y: region.y, width: region.width, height: region.height };
     let (width, height) = (width.clamp(1, 4096), height.clamp(1, 4096));
-    let frame =
-        gpu.render(session, &adjustments, region, width, height, show_clipping, uncropped).map_err(message)?;
+    let guides = gpu::Guides { show_clipping, uncropped, mask_overlay };
+    let frame = gpu.render(session, &adjustments, region, (width, height), guides).map_err(message)?;
 
     // The histogram always describes the whole photo, whatever the zoom.
     let small = gpu.render_image(session, &adjustments, 256).map_err(message)?;
@@ -332,13 +334,36 @@ pub struct AppliedEdits {
     cancelled: bool,
 }
 
-/// Applies one recipe to several photos as a step in each one's history
-/// (pasting edits, or reverting to the original, from the grid). With
-/// `keep_crop` each photo keeps its own crop, straightening, turns and flips.
+/// Changes several photos' recipes, as a step in each one's history.
+/// `change` is given a photo's own recipe and returns what it becomes.
 ///
 /// Photos are finished one at a time, each recorded and redrawn before the
 /// next is touched, with an `edits-progress` event after each. That way
 /// stopping part-way leaves every photo either done or untouched.
+fn edit_each(
+    app: &AppHandle,
+    ids: &[i64],
+    label: &str,
+    change: impl Fn(&Adjustments) -> Adjustments,
+) -> CommandResult<AppliedEdits> {
+    let state = app.state::<AppState>();
+    state.cancel_edits.store(false, Ordering::Relaxed);
+    let mut versions = Vec::with_capacity(ids.len());
+    for &id in ids {
+        if state.cancel_edits.load(Ordering::Relaxed) {
+            return Ok(AppliedEdits { versions, cancelled: true });
+        }
+        let own = Adjustments::from_json(state.library.edits(id).map_err(message)?.as_deref());
+        state.library.history_commit(id, &change(&own), label).map_err(message)?;
+        versions.extend(redraw(&state, &[id]).map_err(message)?);
+        let _ = app.emit("edits-progress", Progress { done: versions.len(), total: ids.len() });
+    }
+    Ok(AppliedEdits { versions, cancelled: false })
+}
+
+/// Applies one recipe to several photos (pasting edits, or reverting to the
+/// original, from the grid). With `keep_crop` each photo keeps its own crop,
+/// straightening, turns and flips.
 #[tauri::command]
 pub async fn apply_edits(
     app: AppHandle,
@@ -348,24 +373,26 @@ pub async fn apply_edits(
     keep_crop: bool,
 ) -> CommandResult<AppliedEdits> {
     tauri::async_runtime::spawn_blocking(move || {
-        let state = app.state::<AppState>();
-        state.cancel_edits.store(false, Ordering::Relaxed);
-        let mut versions = Vec::with_capacity(ids.len());
-        for &id in &ids {
-            if state.cancel_edits.load(Ordering::Relaxed) {
-                return Ok(AppliedEdits { versions, cancelled: true });
-            }
+        edit_each(&app, &ids, &label, |own| {
             let mut recipe = adjustments.clone();
             if keep_crop {
                 // Pasted edits bring the look, not the framing.
-                let own = Adjustments::from_json(state.library.edits(id).map_err(message)?.as_deref());
-                recipe.keep_framing_of(&own);
+                recipe.keep_framing_of(own);
             }
-            state.library.history_commit(id, &recipe, &label).map_err(message)?;
-            versions.extend(redraw(&state, &[id]).map_err(message)?);
-            let _ = app.emit("edits-progress", Progress { done: versions.len(), total: ids.len() });
-        }
-        Ok(AppliedEdits { versions, cancelled: false })
+            recipe
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Lays a preset over the edits of several photos, from the grid. Each
+/// photo keeps the settings the preset does not cover.
+#[tauri::command]
+pub async fn apply_preset(app: AppHandle, ids: Vec<i64>, preset_id: i64) -> CommandResult<AppliedEdits> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let preset = app.state::<AppState>().library.preset(preset_id).map_err(message)?;
+        edit_each(&app, &ids, &format!("Preset: {}", preset.name), |own| presets::apply(&preset.settings, own))
     })
     .await
     .map_err(|e| e.to_string())?
@@ -380,6 +407,43 @@ pub fn cancel_edits(state: State<AppState>) {
 #[tauri::command(async)]
 pub fn get_edits(state: State<AppState>, id: i64) -> CommandResult<Adjustments> {
     Ok(Adjustments::from_json(state.library.edits(id).map_err(message)?.as_deref()))
+}
+
+// ---- presets ----
+
+#[tauri::command(async)]
+pub fn list_presets(state: State<AppState>) -> CommandResult<Vec<Preset>> {
+    state.library.presets().map_err(message)
+}
+
+#[tauri::command(async)]
+pub fn create_preset(state: State<AppState>, name: String, settings: Settings) -> CommandResult<Preset> {
+    state.library.create_preset(&name, settings).map_err(message)
+}
+
+#[tauri::command(async)]
+pub fn rename_preset(state: State<AppState>, id: i64, name: String) -> CommandResult<Preset> {
+    state.library.rename_preset(id, &name).map_err(message)
+}
+
+#[tauri::command(async)]
+pub fn update_preset(state: State<AppState>, id: i64, settings: Settings) -> CommandResult<Preset> {
+    state.library.update_preset(id, settings).map_err(message)
+}
+
+#[tauri::command(async)]
+pub fn delete_preset(state: State<AppState>, id: i64) -> CommandResult<()> {
+    state.library.delete_preset(id).map_err(message)
+}
+
+#[tauri::command(async)]
+pub fn export_preset(state: State<AppState>, id: i64, path: PathBuf) -> CommandResult<()> {
+    state.library.export_preset(id, &path).map_err(message)
+}
+
+#[tauri::command(async)]
+pub fn import_presets(state: State<AppState>, paths: Vec<PathBuf>) -> CommandResult<ImportedPresets> {
+    state.library.import_presets(&paths).map_err(message)
 }
 
 // ---- history ----

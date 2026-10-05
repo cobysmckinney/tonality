@@ -1,7 +1,7 @@
 import { memo, useEffect, useMemo, useState } from "react";
-import { Check, ImageOff } from "lucide-react";
+import { Check, ImageOff, Minus } from "lucide-react";
 import { ScanItem, scanThumbUrl } from "../api";
-import { count, plural } from "../format";
+import { count, dayHeading, plural } from "../format";
 import { ImportState, useStore } from "../store";
 import { GridSection, VirtualGrid } from "./VirtualGrid";
 
@@ -48,6 +48,42 @@ function SectionHeading({ title, detail }: { title: string; detail?: string }) {
   );
 }
 
+/** One day's new photos. The heading selects the whole day, or clears it. */
+function DayHeading({ day, indices }: { day: string; indices: number[] }) {
+  // Null while copying, when the choice can no longer change.
+  const chosen = useStore((s) => {
+    const state = s.importState;
+    return state?.phase === "review" ? indices.filter((index) => state.chosen.has(index)).length : null;
+  });
+  const { title, detail } = dayHeading(day);
+  const all = chosen === indices.length;
+  const some = !all && !!chosen;
+
+  return (
+    <header className="day-heading compact">
+      <h2>
+        <button
+          className={`day-toggle ${all || some ? "chosen" : ""}`}
+          title={all ? "Deselect this day" : "Select this day"}
+          disabled={chosen === null}
+          aria-pressed={some ? "mixed" : all}
+          onClick={() => useStore.getState().toggleChosen(indices, !all)}
+        >
+          <span className="tick">
+            {all && <Check size={12} strokeWidth={3} />}
+            {some && <Minus size={12} strokeWidth={3} />}
+          </span>
+          {title}
+          <span className="day-detail">{detail}</span>
+        </button>
+      </h2>
+      <span className="day-count">
+        {some ? `${count(chosen)} of ${count(indices.length)}` : count(indices.length)}
+      </span>
+    </header>
+  );
+}
+
 function Review({ state }: { state: Extract<ImportState, { phase: "review" | "importing" }> }) {
   const { scan } = state;
   const importing = state.phase === "importing";
@@ -61,10 +97,19 @@ function Review({ state }: { state: Extract<ImportState, { phase: "review" | "im
 
   const sections = useMemo(() => {
     const list: GridSection<ScanItem>[] = [];
+    // New photos go by the day they were taken, so a whole shoot can be taken or left.
+    // They arrive newest first, which makes each day one contiguous run.
+    for (const item of groups.fresh) {
+      const key = item.takenAt.slice(0, 10);
+      if (list.at(-1)?.key !== key) list.push({ key, items: [] });
+      list.at(-1)!.items.push(item);
+    }
+    for (const day of list) {
+      day.header = <DayHeading day={day.key} indices={day.items.map((item) => item.index)} />;
+    }
     const add = (key: string, items: ScanItem[], title: string, detail?: string) => {
       if (items.length > 0) list.push({ key, items, header: <SectionHeading title={title} detail={detail} /> });
     };
-    add("new", groups.fresh, `${count(groups.fresh.length)} new`);
     add(
       "deleted",
       groups.deleted,

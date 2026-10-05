@@ -13,6 +13,15 @@ export function albumEntries(ids: number[]): MenuEntry[] {
   ];
 }
 
+/** Every preset, to apply to a set of photos; a line parts the groups. */
+export function presetEntries(ids: number[]): MenuEntry[] {
+  const { presets, applyPreset } = useStore.getState();
+  return presets.flatMap((preset, i): MenuEntry[] => [
+    ...(i > 0 && presets[i - 1].group !== preset.group ? ["separator" as const] : []),
+    { label: preset.name, run: () => void applyPreset(ids, preset) },
+  ]);
+}
+
 /** The right-click menu for one or more photos in the current view. */
 export function photoMenu(ids: number[]): MenuEntry[] {
   const s = useStore.getState();
@@ -39,6 +48,7 @@ export function photoMenu(ids: number[]): MenuEntry[] {
     "separator",
     ...(single !== null ? [{ label: "Copy edits", run: () => void s.copyEdits(single) }] : []),
     { label: "Paste edits", disabled: s.clipboard === null, run: () => void s.pasteEdits(ids) },
+    { label: "Apply preset", submenu: presetEntries(ids) },
     { label: "Revert to original", disabled: !photos.some((p) => p.edited), run: () => void s.revertEdits(ids) },
     "separator",
     { label: "Export…", run: () => void s.startExport(ids) },

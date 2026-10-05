@@ -1,11 +1,9 @@
 import { ReactNode, useState } from "react";
 import { ChevronDown } from "lucide-react";
-import { Band, DEFAULTS, LABELS, MIXER_BANDS, SECTIONS, SliderKey } from "../../adjustments";
+import { Band, DEFAULTS, LABELS, MIXER_BANDS, rangeOf, same, SECTIONS, SliderKey } from "../../adjustments";
 import { useStore } from "../../store";
 import { CurveEditor } from "./CurveEditor";
 import { Slider } from "./Slider";
-
-const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
 
 /** A collapsible group of tools, with a reset that appears once something in it has changed. */
 function Section(props: { title: string; children: ReactNode }) {
@@ -37,15 +35,13 @@ function Section(props: { title: string; children: ReactNode }) {
 }
 
 /** A slider bound to one numeric adjustment. */
-function Tool(props: { name: SliderKey; min?: number; max?: number; step?: number; track?: string }) {
+function Tool(props: { name: SliderKey; track?: string }) {
   const value = useStore((s) => s.editor.adjustments[props.name]);
   return (
     <Slider
       label={LABELS[props.name]}
       value={value}
-      min={props.min ?? -100}
-      max={props.max ?? 100}
-      step={props.step}
+      {...rangeOf(props.name)}
       track={props.track}
       onChange={(next) => useStore.getState().adjust({ [props.name]: next })}
     />
@@ -117,7 +113,7 @@ export function AdjustPanel() {
   return (
     <div className={`adjust ${ready ? "" : "waiting"}`} inert={!ready}>
       <Section title="Light">
-        <Tool name="exposure" min={-5} max={5} step={0.01} />
+        <Tool name="exposure" />
         <Tool name="contrast" />
         <Tool name="highlights" />
         <Tool name="shadows" />
@@ -137,14 +133,14 @@ export function AdjustPanel() {
         <Mixer />
       </Section>
       <Section title="Detail">
-        <Tool name="sharpening" min={0} />
-        <Tool name="noiseReduction" min={0} />
+        <Tool name="sharpening" />
+        <Tool name="noiseReduction" />
         <Tool name="clarity" />
         <Tool name="dehaze" />
       </Section>
       <Section title="Effects">
         <Tool name="vignette" />
-        <Tool name="grain" min={0} />
+        <Tool name="grain" />
       </Section>
     </div>
   );

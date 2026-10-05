@@ -12,15 +12,19 @@ interface Props {
   origin?: number;
   /** A CSS gradient for sliders whose track shows what they do (temperature, hue). */
   track?: string;
+  /** How the value reads; a signed number unless given. */
+  format?: (value: number) => string;
   onChange: (value: number) => void;
+  /** What the history calls the step a change makes, when not the usual name for it; read as the change is recorded. */
+  commitLabel?: () => string | undefined;
 }
 
 /**
  * One adjustment. Dragging changes the photo live; letting go makes the
  * whole drag a single undo step.
  */
-export function Slider({ label, value, min, max, step = 1, origin = 0, track, onChange }: Props) {
-  const commit = () => useStore.getState().commitAdjust();
+export function Slider({ label, value, min, max, step = 1, origin = 0, track, format, onChange, commitLabel }: Props) {
+  const commit = () => useStore.getState().commitAdjust(commitLabel?.());
   // Arrow-key nudges arrive one at a time; a short pause ends the run, so a
   // burst of them undoes together rather than press by press.
   const pause = useRef<ReturnType<typeof setTimeout>>(undefined);
@@ -44,7 +48,7 @@ export function Slider({ label, value, min, max, step = 1, origin = 0, track, on
       <span className="slider-label" onDoubleClick={reset}>
         {label}
       </span>
-      <output className="slider-value">{formatValue(value, step)}</output>
+      <output className="slider-value">{format ? format(value) : formatValue(value, step)}</output>
       <input
         type="range"
         className={track ? "tinted" : ""}

@@ -35,7 +35,9 @@ pub struct ScanItem {
     pub kind: Kind,
     pub size: u64,
     pub fingerprint: String,
-    pub modified: NaiveDateTime,
+    /// When it was taken, as far as a quick look at the file can tell; the
+    /// file's own date otherwise. The review groups photos by this day.
+    pub taken_at: NaiveDateTime,
     pub status: Status,
 }
 
@@ -54,7 +56,7 @@ pub struct ScanItemView {
     pub kind: &'static str,
     pub has_jpeg: bool,
     pub size: u64,
-    pub modified: String,
+    pub taken_at: String,
     pub status: &'static str,
 }
 
@@ -78,7 +80,7 @@ impl ScanSession {
                 kind: item.kind.as_str(),
                 has_jpeg: item.jpeg.is_some(),
                 size: item.size,
-                modified: item.modified.format("%Y-%m-%dT%H:%M:%S").to_string(),
+                taken_at: item.taken_at.format("%Y-%m-%dT%H:%M:%S").to_string(),
                 status: match item.status {
                     Status::New => "new",
                     Status::Duplicate => "duplicate",
@@ -179,11 +181,16 @@ pub fn scan(
         .into_par_iter()
         .filter_map(|(path, kind, jpeg)| {
             let item = media::fingerprint(&path).ok().map(|(fingerprint, size)| {
-                let modified = fs::metadata(&path)
-                    .and_then(|m| m.modified())
-                    .map(|time| DateTime::<Local>::from(time).naive_local())
-                    .unwrap_or_else(|_| Local::now().naive_local());
-                ScanItem { path, jpeg, kind, size, fingerprint, modified, status: Status::New }
+                let modified = || {
+                    fs::metadata(&path)
+                        .and_then(|m| m.modified())
+                        .map(|time| DateTime::<Local>::from(time).naive_local())
+                        .unwrap_or_else(|_| Local::now().naive_local())
+                };
+                let taken_at = media::quick_taken_at(&path)
+                    .or_else(|| media::quick_taken_at(jpeg.as_ref()?))
+                    .unwrap_or_else(modified);
+                ScanItem { path, jpeg, kind, size, fingerprint, taken_at, status: Status::New }
             });
             let done = checked.fetch_add(1, Ordering::Relaxed) + 1;
             if done.is_multiple_of(20) || done == total {
@@ -192,7 +199,7 @@ pub fn scan(
             item
         })
         .collect();
-    items.sort_by(|a, b| b.modified.cmp(&a.modified).then_with(|| a.path.cmp(&b.path)));
+    items.sort_by(|a, b| b.taken_at.cmp(&a.taken_at).then_with(|| a.path.cmp(&b.path)));
 
     let known = library.fingerprints()?;
     let mut seen = HashSet::new();
@@ -349,7 +356,7 @@ fn import_one(
     let taken_at = meta
         .taken_at
         .or_else(|| media::read_meta(holding_jpeg.as_ref()?, Kind::Image).taken_at)
-        .unwrap_or(item.modified);
+        .unwrap_or(item.taken_at);
 
     let day = library
         .originals_dir()

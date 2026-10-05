@@ -1,5 +1,6 @@
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import type { Adjustments } from "./adjustments";
+import type { Preset, PresetSettings } from "./presets";
 
 export type View =
   | { kind: "library" }
@@ -80,7 +81,8 @@ export interface ScanItem {
   kind: "raw" | "image";
   hasJpeg: boolean;
   size: number;
-  modified: string;
+  /** When it was taken, as near as the scan could tell: `YYYY-MM-DDTHH:MM:SS`, camera-local. */
+  takenAt: string;
   /** `deleted` means the photo is in Recently Deleted; importing it recovers it. */
   status: "new" | "duplicate" | "deleted";
 }
@@ -237,6 +239,12 @@ export interface AppliedEdits {
   cancelled: boolean;
 }
 
+/** What reading preset files came to. */
+export interface ImportedPresets {
+  imported: Preset[];
+  failed: { fileName: string; reason: string }[];
+}
+
 export interface Progress {
   done: number;
   total: number;
@@ -277,8 +285,10 @@ export const api = {
     showClipping: boolean,
     /** Ignore the crop and draw the whole tilted photo: the crop tool's view. */
     uncropped: boolean,
+    /** The mask, by id, to tint red where it applies. */
+    maskOverlay: number | null,
   ) =>
-    invoke<ArrayBuffer>("render_frame", { id, adjustments, region, width, height, showClipping, uncropped }).then(
+    invoke<ArrayBuffer>("render_frame", { id, adjustments, region, width, height, showClipping, uncropped, maskOverlay }).then(
       decodeFrame,
     ),
   /** Redraws thumbnails to match the photos' current edits; returns each photo's new version. */
@@ -293,6 +303,17 @@ export const api = {
   /** Stops `applyEdits` after the photo it is on. */
   cancelEdits: () => invoke<void>("cancel_edits"),
   getEdits: (id: number) => invoke<Adjustments>("get_edits", { id }),
+
+  /** Every preset: the built-in ones in their order, then your own by name. */
+  listPresets: () => invoke<Preset[]>("list_presets"),
+  createPreset: (name: string, settings: PresetSettings) => invoke<Preset>("create_preset", { name, settings }),
+  renamePreset: (id: number, name: string) => invoke<Preset>("rename_preset", { id, name }),
+  updatePreset: (id: number, settings: PresetSettings) => invoke<Preset>("update_preset", { id, settings }),
+  deletePreset: (id: number) => invoke<void>("delete_preset", { id }),
+  exportPreset: (id: number, path: string) => invoke<void>("export_preset", { id, path }),
+  importPresets: (paths: string[]) => invoke<ImportedPresets>("import_presets", { paths }),
+  /** Lays a preset over each photo's own edits, the way `applyEdits` applies a recipe. */
+  applyPreset: (ids: number[], presetId: number) => invoke<AppliedEdits>("apply_preset", { ids, presetId }),
 
   getHistory: (id: number) => invoke<History>("get_history", { id }),
   historyCommit: (id: number, adjustments: Adjustments, label: string) =>

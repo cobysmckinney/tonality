@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState } from "react";
-import { CurveChannel, CurvePoints, curveSampler, isStraight } from "../../adjustments";
+import { CurveChannel, CurvePoints, curveSampler, isStraight, POINT_GAP } from "../../adjustments";
 import { useStore } from "../../store";
 
 const CHANNELS: { key: CurveChannel; label: string }[] = [
@@ -58,7 +58,7 @@ export function CurveEditor() {
   const movePoint = (index: number, [x, y]: [number, number]) => {
     const last = points.length - 1;
     // Each point stays between its neighbours; the ends keep their place across.
-    const fixedX = index === 0 ? 0 : index === last ? 1 : clamp(x, points[index - 1][0] + 0.02, points[index + 1][0] - 0.02);
+    const fixedX = index === 0 ? 0 : index === last ? 1 : clamp(x, points[index - 1][0] + POINT_GAP, points[index + 1][0] - POINT_GAP);
     setPoints(points.map((p, i) => (i === index ? [fixedX, y] : p)));
   };
 

@@ -7,15 +7,20 @@ use bytemuck::{Pod, Zeroable};
 use half::f16;
 use rayon::prelude::*;
 
+use std::sync::Mutex;
+
 use crate::develop::LinearImage;
-use crate::edit::{curve_table, Adjustments};
+use crate::edit::{curve_table, Adjustments, Stroke};
 use crate::geometry;
+use crate::masks::{self, Coverage, COVERAGE_EDGE, MAX_BRUSHES, MAX_MASKS, MAX_PARTS};
 
 const WORKING_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 const OUTPUT_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 /// What 16-bit exports are drawn into: the same picture before it is rounded
 /// to 256 levels.
 const DEEP_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba32Float;
+/// Brush coverage: 256 levels is far finer than any slider step it scales.
+const COVERAGE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R8Unorm;
 
 /// Long edge and blur width (in their own pixels) of the two blurred copies.
 /// Fixed sizes make the blurs cover the same share of any photo.
@@ -45,6 +50,18 @@ impl Region {
     pub const FULL: Region = Region { x: 0.0, y: 0.0, width: 1.0, height: 1.0 };
 }
 
+/// What the editor can draw over the picture while you work on it. None of
+/// it is ever part of an export or a thumbnail.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Guides {
+    /// Blown highlights in red, crushed shadows in blue.
+    pub show_clipping: bool,
+    /// The whole tilted photo with transparent corners, for the crop tool.
+    pub uncropped: bool,
+    /// The mask, by id, whose coverage is tinted red.
+    pub mask_overlay: Option<u32>,
+}
+
 /// Mirrors `Params` in develop.wgsl.
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
@@ -58,6 +75,9 @@ struct Params {
     detail: [f32; 4],
     flags: [f32; 4],
     mixer: [[f32; 4]; 8],
+    mask_counts: [f32; 4],
+    masks: [[[f32; 4]; 5]; MAX_MASKS],
+    mask_parts: [[[f32; 4]; 3]; MAX_PARTS],
 }
 
 #[repr(C)]
@@ -87,6 +107,24 @@ pub struct Session {
     scene_referred: bool,
     params: wgpu::Buffer,
     curves: wgpu::Texture,
+    views: Views,
+    brushes: Mutex<Brushes>,
+}
+
+/// What the develop shader reads, apart from the brush coverage.
+struct Views {
+    source: wgpu::TextureView,
+    blur_medium: wgpu::TextureView,
+    blur_large: wgpu::TextureView,
+    curves: wgpu::TextureView,
+}
+
+/// The coverage maps of the photo's brush parts, and the bindings that
+/// include them. Made on the first brush stroke; until then a blank
+/// stand-in is bound.
+struct Brushes {
+    texture: Option<wgpu::Texture>,
+    maps: Vec<Coverage>,
     bind_group: wgpu::BindGroup,
     /// The same bindings for the deep pipeline; a bind group belongs to one pipeline's layout.
     deep_bind_group: wgpu::BindGroup,
@@ -298,23 +336,90 @@ impl Gpu {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        let curves_view = curves.create_view(&Default::default());
-        let bindings = |pipeline: &wgpu::RenderPipeline| {
-            self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("develop"),
-                layout: &pipeline.get_bind_group_layout(0),
-                entries: &[
-                    wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&source_view) },
-                    wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&blur_medium) },
-                    wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&blur_large) },
-                    wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&curves_view) },
-                    wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::Sampler(&self.sampler) },
-                    wgpu::BindGroupEntry { binding: 5, resource: params.as_entire_binding() },
-                ],
-            })
+        let views = Views { source: source_view, blur_medium, blur_large, curves: curves.create_view(&Default::default()) };
+        let (_, blank) = self.coverage_maps(1, 1, 1);
+        let brushes = Brushes {
+            bind_group: self.develop_bindings(&self.develop, &views, &params, &blank),
+            deep_bind_group: self.develop_bindings(&self.develop_deep, &views, &params, &blank),
+            texture: None,
+            maps: Vec::new(),
         };
-        let (bind_group, deep_bind_group) = (bindings(&self.develop), bindings(&self.develop_deep));
-        Ok(Session { width, height, scene_referred: image.scene_referred, params, curves, bind_group, deep_bind_group })
+        Ok(Session { width, height, scene_referred: image.scene_referred, params, curves, views, brushes: Mutex::new(brushes) })
+    }
+
+    /// A stack of `layers` coverage maps, as the shader reads them.
+    fn coverage_maps(&self, width: u32, height: u32, layers: u32) -> (wgpu::Texture, wgpu::TextureView) {
+        let texture = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("brush coverage"),
+            size: wgpu::Extent3d { width, height, depth_or_array_layers: layers },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: COVERAGE_FORMAT,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&wgpu::TextureViewDescriptor {
+            dimension: Some(wgpu::TextureViewDimension::D2Array),
+            ..Default::default()
+        });
+        (texture, view)
+    }
+
+    fn develop_bindings(
+        &self,
+        pipeline: &wgpu::RenderPipeline,
+        views: &Views,
+        params: &wgpu::Buffer,
+        brushes: &wgpu::TextureView,
+    ) -> wgpu::BindGroup {
+        self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("develop"),
+            layout: &pipeline.get_bind_group_layout(0),
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&views.source) },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&views.blur_medium) },
+                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&views.blur_large) },
+                wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&views.curves) },
+                wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::Sampler(&self.sampler) },
+                wgpu::BindGroupEntry { binding: 5, resource: params.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(brushes) },
+            ],
+        })
+    }
+
+    /// Brings the coverage maps up to date with the brush parts' strokes,
+    /// uploading only the rows that changed.
+    fn paint_brushes(&self, session: &Session, brushes: &mut Brushes, strokes: &[&[Stroke]]) {
+        let (width, height) =
+            fit_within(session.width, session.height, COVERAGE_EDGE.min(session.width.max(session.height)));
+        if brushes.texture.is_none() {
+            let (texture, view) = self.coverage_maps(width, height, MAX_BRUSHES as u32);
+            brushes.bind_group = self.develop_bindings(&self.develop, &session.views, &session.params, &view);
+            brushes.deep_bind_group = self.develop_bindings(&self.develop_deep, &session.views, &session.params, &view);
+            brushes.texture = Some(texture);
+        }
+        let texture = brushes.texture.as_ref().expect("just made");
+        for (layer, strokes) in strokes.iter().enumerate() {
+            if brushes.maps.len() <= layer {
+                brushes.maps.push(Coverage::new(width, height));
+            }
+            let map = &mut brushes.maps[layer];
+            let Some(rows) = map.update(strokes) else { continue };
+            let span = rows.start as usize * width as usize..rows.end as usize * width as usize;
+            let levels: Vec<u8> = map.values[span].iter().map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8).collect();
+            self.queue.write_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d { x: 0, y: rows.start, z: layer as u32 },
+                    aspect: wgpu::TextureAspect::All,
+                },
+                &levels,
+                wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(width), rows_per_image: Some(rows.len() as u32) },
+                wgpu::Extent3d { width, height: rows.len() as u32, depth_or_array_layers: 1 },
+            );
+        }
     }
 
     /// The size in photo pixels of the picture `adjustments` produce: the
@@ -328,18 +433,15 @@ impl Gpu {
     /// `width` x `height` RGBA bytes. With `uncropped` the crop is ignored
     /// and the whole photo is drawn, tilted by the straighten angle, with
     /// transparent corners: the view the crop tool works on.
-    #[allow(clippy::too_many_arguments)]
     pub fn render(
         &self,
         session: &Session,
         adjustments: &Adjustments,
         region: Region,
-        width: u32,
-        height: u32,
-        show_clipping: bool,
-        uncropped: bool,
+        (width, height): (u32, u32),
+        guides: Guides,
     ) -> Result<Vec<u8>> {
-        self.draw_frame(session, adjustments, region, width, height, show_clipping, uncropped, false)
+        self.draw_frame(session, adjustments, region, width, height, guides, false)
     }
 
     /// `render`, or with `deep` the same frame as four little-endian f32s a
@@ -352,15 +454,20 @@ impl Gpu {
         region: Region,
         width: u32,
         height: u32,
-        show_clipping: bool,
-        uncropped: bool,
+        guides: Guides,
         deep: bool,
     ) -> Result<Vec<u8>> {
+        let Guides { show_clipping, uncropped, mask_overlay } = guides;
         let (width, height) = (width.clamp(1, self.max_texture_size), height.clamp(1, self.max_texture_size));
         let a = adjustments;
         let unit = |value: f32| (value / 100.0).clamp(-1.0, 1.0);
         let frame = geometry::frame(session.width, session.height, adjustments, uncropped);
         let to_source = geometry::frame_to_source(session.width, session.height, adjustments, &frame).0;
+        let (packed, strokes) = masks::pack(&a.masks, session.width, session.height, mask_overlay);
+        let mut brushes = session.brushes.lock().unwrap();
+        if !strokes.is_empty() {
+            self.paint_brushes(session, &mut brushes, &strokes);
+        }
         let source_pixels_per_output_pixel = (region.width * frame.size[0] as f32 / width as f32)
             .max(region.height * frame.size[1] as f32 / height as f32);
         let params = Params {
@@ -378,6 +485,9 @@ impl Gpu {
             detail: [unit(a.sharpening).max(0.0), unit(a.noise_reduction).max(0.0), unit(a.vignette), unit(a.grain).max(0.0)],
             flags: [show_clipping as u8 as f32, uncropped as u8 as f32, 0.0, 0.0],
             mixer: a.mixer.map(|band| [unit(band.hue), unit(band.saturation), unit(band.luminance), 0.0]),
+            mask_counts: packed.counts,
+            masks: packed.masks,
+            mask_parts: packed.parts,
         };
         self.queue.write_buffer(&session.params, 0, bytemuck::bytes_of(&params));
 
@@ -394,8 +504,8 @@ impl Gpu {
         );
 
         let (format, pipeline, bindings, pixel_bytes) = match deep {
-            false => (OUTPUT_FORMAT, &self.develop, &session.bind_group, 4),
-            true => (DEEP_FORMAT, &self.develop_deep, &session.deep_bind_group, 16),
+            false => (OUTPUT_FORMAT, &self.develop, &brushes.bind_group, 4),
+            true => (DEEP_FORMAT, &self.develop_deep, &brushes.deep_bind_group, 16),
         };
         let target = self.texture("frame", width, height, 1, format);
         // Rows in a readback buffer must be padded to a multiple of 256 bytes.
@@ -475,7 +585,7 @@ impl Gpu {
         for top in (0..height).step_by(band as usize) {
             let rows = band.min(height - top);
             let region = Region { x: 0.0, y: top as f32 / height as f32, width: 1.0, height: rows as f32 / height as f32 };
-            take(self.draw_frame(session, adjustments, region, width, rows, false, false, deep)?);
+            take(self.draw_frame(session, adjustments, region, width, rows, Guides::default(), deep)?);
         }
         Ok((width, height))
     }

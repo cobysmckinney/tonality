@@ -1,29 +1,10 @@
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import { ChevronDown, Download, GitBranch, GitBranchPlus } from "lucide-react";
 import { Step } from "../../api";
 import { ago } from "../../format";
 import { useStore } from "../../store";
 import { menuBelow } from "../Toolbar";
-
-function BranchName({ name, onDone }: { name: string; onDone: (name: string) => void }) {
-  const input = useRef<HTMLInputElement>(null);
-  useEffect(() => input.current?.select(), []);
-  return (
-    <input
-      ref={input}
-      className="branch-name"
-      defaultValue={name}
-      aria-label="Branch name"
-      onBlur={(event) => onDone(event.currentTarget.value)}
-      onKeyDown={(event) => {
-        if (event.key === "Enter") event.currentTarget.blur();
-        if (event.key === "Escape") onDone(name);
-        // Typing a name must not trigger the editor's single-key shortcuts.
-        event.stopPropagation();
-      }}
-    />
-  );
-}
+import { NameInput } from "./NameInput";
 
 function StepRow(props: { step: Step; state: "done" | "current" | "undone"; onGo: () => void; onBranch: () => void }) {
   const { step, state } = props;
@@ -102,8 +83,9 @@ export function HistoryPanel() {
     <div className="history">
       <div className="branch-bar">
         {renaming ? (
-          <BranchName
+          <NameInput
             name={branch.name}
+            label="Branch name"
             onDone={(name) => {
               setRenaming(false);
               void s.renameBranch(branch.id, name);

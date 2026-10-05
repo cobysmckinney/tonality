@@ -19,6 +19,56 @@ export interface Crop {
   height: number;
 }
 
+/** A position on the photo file: 0..1 across and down, before any turn, flip or crop. */
+export type Point = [number, number];
+
+/** One brush stroke. Mirrors `Stroke` in edit.rs. */
+export interface Stroke {
+  points: Point[];
+  /** The brush's radius, as a share of the photo's longer side. */
+  radius: number;
+  /** 0..1: how much of the radius fades out. */
+  feather: number;
+  /** 0..1: how much the stroke covers at its centre. */
+  strength: number;
+  /** Takes coverage away instead of adding it. */
+  erase: boolean;
+}
+
+/**
+ * What a part of a mask covers. Sizes are shares of the photo's longer side;
+ * angles are degrees clockwise on the file as stored. Mirrors `Shape` in edit.rs.
+ */
+export type Shape =
+  | { kind: "brush"; strokes: Stroke[] }
+  /** Full effect at `from`, none at `to`. */
+  | { kind: "linear"; from: Point; to: Point }
+  /** An ellipse fading out over its outer `feather` (0..1) share. */
+  | { kind: "radial"; center: Point; radius: [number, number]; angle: number; feather: number }
+  /** Parts of the photo within a range of brightness, 0 black to 1 white. */
+  | { kind: "luminance"; low: number; high: number; smoothness: number };
+
+/** How a part combines with the parts before it. */
+export type MaskMode = "add" | "subtract" | "intersect";
+
+export interface MaskPart {
+  mode: MaskMode;
+  shape: Shape;
+}
+
+/** A local adjustment: an area of the photo and the sliders that apply there. Mirrors `Mask` in edit.rs. */
+export interface Mask {
+  /** Unique within a recipe. */
+  id: number;
+  name: string;
+  /** A hidden mask stays in the recipe but has no effect. */
+  visible: boolean;
+  /** Applies everywhere the parts do not cover instead. */
+  invert: boolean;
+  parts: MaskPart[];
+  adjustments: LocalAdjustments;
+}
+
 /**
  * Every slider in the editor; zero everywhere means "as shot". Exposure is in
  * stops (-5..5), everything else runs -100..100 or 0..100. Mirrors
@@ -50,6 +100,8 @@ export interface Adjustments {
   rotation: number;
   flipHorizontal: boolean;
   flipVertical: boolean;
+  /** Local adjustments, laid over the rest in order. */
+  masks: Mask[];
 }
 
 /** The adjustments that reshape the picture rather than recolour it. */
@@ -59,6 +111,29 @@ export const GEOMETRY = ["crop", "straighten", "rotation", "flipHorizontal", "fl
 export type SliderKey = {
   [K in keyof Adjustments]: Adjustments[K] extends number ? K : never;
 }[keyof Adjustments];
+
+/** The sliders a mask can carry. Each adds to the photo's own setting wherever the mask covers. */
+export const LOCAL_KEYS = [
+  "exposure",
+  "contrast",
+  "highlights",
+  "shadows",
+  "whites",
+  "blacks",
+  "temperature",
+  "tint",
+  "vibrance",
+  "saturation",
+  "clarity",
+  "dehaze",
+  "sharpening",
+  "noiseReduction",
+] as const satisfies readonly SliderKey[];
+export type LocalKey = (typeof LOCAL_KEYS)[number];
+export type LocalAdjustments = Record<LocalKey, number>;
+
+export const noLocalAdjustments = (): LocalAdjustments =>
+  Object.fromEntries(LOCAL_KEYS.map((key) => [key, 0])) as LocalAdjustments;
 
 const straight = (): CurvePoints => [
   [0, 0],
@@ -101,6 +176,7 @@ export function defaultAdjustments(): Adjustments {
     rotation: 0,
     flipHorizontal: false,
     flipVertical: false,
+    masks: [],
   };
 }
 
@@ -128,6 +204,15 @@ export const LABELS: Record<SliderKey, string> = {
   rotation: "Rotate",
 };
 
+/** How far a slider runs, and in what steps: -100..100 in whole numbers unless it says otherwise here. */
+const RANGES: Partial<Record<SliderKey, { min?: number; max?: number; step?: number }>> = {
+  exposure: { min: -5, max: 5, step: 0.01 },
+  sharpening: { min: 0 },
+  noiseReduction: { min: 0 },
+  grain: { min: 0 },
+};
+export const rangeOf = (key: SliderKey) => ({ min: -100, max: 100, step: 1, ...RANGES[key] });
+
 /** The groups of tools in the adjust panel, in order. */
 export const SECTIONS: { title: string; keys: (keyof Adjustments)[] }[] = [
   { title: "Light", keys: ["exposure", "contrast", "highlights", "shadows", "whites", "blacks"] },
@@ -146,7 +231,18 @@ export function formatValue(value: number, step = 1): string {
   return `${value > 0 ? "+" : "−"}${text}`;
 }
 
-const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
+/**
+ * Whether two values (a slider, a curve, a whole recipe) are the same,
+ * whatever order their fields happen to be written in.
+ */
+export function same(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (typeof a !== "object" || typeof b !== "object" || a === null || b === null) return false;
+  if (Array.isArray(a) !== Array.isArray(b)) return false;
+  const [x, y] = [a as Record<string, unknown>, b as Record<string, unknown>];
+  const keys = Object.keys(x);
+  return keys.length === Object.keys(y).length && keys.every((key) => key in y && same(x[key], y[key]));
+}
 
 /** Names the difference between two recipes for the history: "Exposure +0.50". */
 export function describeChange(before: Adjustments, after: Adjustments): string {
@@ -164,6 +260,8 @@ export function describeChange(before: Adjustments, after: Adjustments): string 
 
   if (changed.length === 1) {
     const key = changed[0];
+    // The masks panel names its own steps; this is only a fallback.
+    if (key === "masks") return "Masks";
     if (key === "curves") {
       if (same(after.curves, DEFAULTS.curves)) return "Reset curve";
       const channels = (Object.keys(after.curves) as CurveChannel[]).filter((c) => !same(before.curves[c], after.curves[c]));
@@ -185,8 +283,11 @@ export function describeChange(before: Adjustments, after: Adjustments): string 
   return `${changed.length} adjustments`;
 }
 
-export const sameAdjustments = (a: Adjustments, b: Adjustments) => a === b || JSON.stringify(a) === JSON.stringify(b);
+export const sameAdjustments = (a: Adjustments, b: Adjustments) => same(a, b);
 export const isAsShot = (a: Adjustments) => sameAdjustments(a, DEFAULTS);
+
+/** How close together two points of a curve may be. */
+export const POINT_GAP = 0.02;
 
 export const isStraight = (points: CurvePoints) =>
   points.length === 2 && points[0][0] === 0 && points[0][1] === 0 && points[1][0] === 1 && points[1][1] === 1;
