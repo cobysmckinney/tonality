@@ -60,6 +60,8 @@ pub struct Guides {
     pub uncropped: bool,
     /// The mask, by id, whose coverage is tinted red.
     pub mask_overlay: Option<u32>,
+    /// Instead of the picture, that mask's coverage alone: white where it applies, black where not.
+    pub matte: bool,
 }
 
 /// Mirrors `Params` in develop.wgsl.
@@ -457,7 +459,7 @@ impl Gpu {
         guides: Guides,
         deep: bool,
     ) -> Result<Vec<u8>> {
-        let Guides { show_clipping, uncropped, mask_overlay } = guides;
+        let Guides { show_clipping, uncropped, mask_overlay, matte } = guides;
         let (width, height) = (width.clamp(1, self.max_texture_size), height.clamp(1, self.max_texture_size));
         let a = adjustments;
         let unit = |value: f32| (value / 100.0).clamp(-1.0, 1.0);
@@ -483,7 +485,7 @@ impl Gpu {
             tone: [unit(a.whites), unit(a.blacks), unit(a.temperature), unit(a.tint)],
             color: [unit(a.vibrance), unit(a.saturation), unit(a.clarity), unit(a.dehaze)],
             detail: [unit(a.sharpening).max(0.0), unit(a.noise_reduction).max(0.0), unit(a.vignette), unit(a.grain).max(0.0)],
-            flags: [show_clipping as u8 as f32, uncropped as u8 as f32, 0.0, 0.0],
+            flags: [show_clipping as u8 as f32, uncropped as u8 as f32, matte as u8 as f32, 0.0],
             mixer: a.mixer.map(|band| [unit(band.hue), unit(band.saturation), unit(band.luminance), 0.0]),
             mask_counts: packed.counts,
             masks: packed.masks,

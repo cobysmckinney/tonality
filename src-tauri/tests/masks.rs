@@ -162,4 +162,10 @@ fn a_hidden_mask_does_nothing_but_can_still_be_shown() {
     let (centre, corner) = (pixel(60, 40), pixel(2, 2));
     assert!(centre[0] > centre[1] + 60, "tinted red where the mask covers: {centre:?}");
     assert_eq!(corner[0], corner[1], "and grey elsewhere: {corner:?}");
+
+    // Its thumbnail: white where it covers, black where it doesn't, hidden or not.
+    let matte = gpu.render(&session, &recipe, Region::FULL, (120, 80), Guides { matte: true, ..guides }).unwrap();
+    let level = |x: usize, y: usize| matte[(y * 120 + x) * 4];
+    assert!(level(60, 40) > 240, "{}", level(60, 40));
+    assert_eq!(level(2, 2), 0);
 }

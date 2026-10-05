@@ -44,7 +44,7 @@ struct Params {
     color: vec4f,
     // sharpening, noise reduction, vignette, grain
     detail: vec4f,
-    // show clipping, leave outside the photo transparent, unused…
+    // show clipping, leave outside the photo transparent, draw the mask to tint as a matte, unused
     flags: vec4f,
     // Per colour band: hue shift, saturation, luminance, unused.
     mixer: array<vec4f, 8>,
@@ -297,6 +297,10 @@ fn fragment(in: VertexOutput) -> @location(0) vec4f {
         tone = clamp(tone, vec4f(-1.0), vec4f(1.0));
         color = clamp(color, vec4f(-1.0), vec4f(1.0));
         detail = clamp(detail, vec4f(-1.0), vec4f(1.0));
+    }
+    if (p.flags.z > 0.5) {
+        // A mask's thumbnail: its coverage alone.
+        return vec4f(vec3f(tint), 1.0);
     }
 
     if (scene_referred) {

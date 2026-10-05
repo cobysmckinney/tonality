@@ -291,6 +291,17 @@ export const api = {
     invoke<ArrayBuffer>("render_frame", { id, adjustments, region, width, height, showClipping, uncropped, maskOverlay }).then(
       decodeFrame,
     ),
+  /** Each mask's coverage as a small black-and-white picture, in the order of `adjustments.masks`. */
+  maskMattes: (id: number, adjustments: Adjustments, longEdge: number) =>
+    invoke<ArrayBuffer>("mask_mattes", { id, adjustments, longEdge }).then((buffer) => {
+      const [width, height, count] = new Uint32Array(buffer, 0, 3);
+      return Array.from({ length: count }, (_, i) => {
+        const gray = new Uint8Array(buffer, 16 + i * width * height, width * height);
+        const pixels = new ImageData(width, height);
+        gray.forEach((value, p) => pixels.data.set([value, value, value, 255], p * 4));
+        return pixels;
+      });
+    }),
   /** Redraws thumbnails to match the photos' current edits; returns each photo's new version. */
   refreshRendered: (ids: number[]) => invoke<number[]>("refresh_rendered", { ids }),
   /**
@@ -310,6 +321,22 @@ export const api = {
   renamePreset: (id: number, name: string) => invoke<Preset>("rename_preset", { id, name }),
   updatePreset: (id: number, settings: PresetSettings) => invoke<Preset>("update_preset", { id, settings }),
   deletePreset: (id: number) => invoke<void>("delete_preset", { id }),
+  /** The starred presets' ids, in the order they were starred. */
+  favoritePresets: () => invoke<number[]>("favorite_presets"),
+  setPresetFavorite: (id: number, favorite: boolean) => invoke<number[]>("set_preset_favorite", { id, favorite }),
+  /** The open photo with each preset laid over these edits, small, by preset id. */
+  presetPreviews: (id: number, adjustments: Adjustments, longEdge: number) =>
+    invoke<ArrayBuffer>("preset_previews", { id, adjustments, longEdge }).then((buffer) => {
+      const [width, height, count] = new Uint32Array(buffer, 0, 3);
+      const each = 8 + width * height * 4;
+      const previews = new Map<number, ImageData>();
+      for (let i = 0; i < count; i++) {
+        const at = 16 + i * each;
+        const id = Number(new DataView(buffer, at, 8).getBigInt64(0, true));
+        previews.set(id, new ImageData(new Uint8ClampedArray(buffer.slice(at + 8, at + each)), width, height));
+      }
+      return previews;
+    }),
   exportPreset: (id: number, path: string) => invoke<void>("export_preset", { id, path }),
   importPresets: (paths: string[]) => invoke<ImportedPresets>("import_presets", { paths }),
   /** Lays a preset over each photo's own edits, the way `applyEdits` applies a recipe. */

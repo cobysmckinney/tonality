@@ -43,6 +43,7 @@ function MenuList({ entries, x, y }: { entries: MenuEntry[]; x: number; y: numbe
             >
               <span className="menu-check">{entry.checked && <Check size={13} strokeWidth={2.5} />}</span>
               {entry.label}
+              {entry.hint && <span className="menu-hint">{entry.hint}</span>}
               {entry.submenu && <ChevronRight size={14} className="menu-arrow" />}
             </button>
           ),

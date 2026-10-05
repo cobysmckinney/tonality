@@ -175,6 +175,8 @@ export interface ConfirmRequest {
 
 export interface MenuItem {
   label: string;
+  /** A key that does the same, shown at the right. */
+  hint?: string;
   run?: () => void;
   danger?: boolean;
   checked?: boolean;
@@ -206,6 +208,8 @@ interface State {
   clipboard: Adjustments | null;
   /** Every preset: the built-in ones, then your own. */
   presets: Preset[];
+  /** The starred presets' ids, in the order they were starred. */
+  favoritePresets: number[];
   /** The crop tool's chosen shape: its name, and width over height (null leaves it free). */
   cropShape: string;
   cropAspect: number | null;
@@ -283,6 +287,8 @@ interface State {
   /** Replaces what a preset holds with the open photo's edits, for the same settings. */
   updatePreset: (preset: Preset) => Promise<void>;
   deletePreset: (preset: Preset) => Promise<void>;
+  /** Stars a preset so it is listed among the favorites at the top, or takes the star away. */
+  toggleFavoritePreset: (id: number) => Promise<void>;
   importPresets: () => Promise<void>;
   exportPreset: (preset: Preset) => Promise<void>;
 
@@ -547,6 +553,7 @@ export const useStore = create<State>((set, get) => {
     editor: idleEditor,
     clipboard: null,
     presets: [],
+    favoritePresets: [],
     cropShape: "Free",
     cropAspect: null,
     brush: { size: 30, feather: 50, strength: 100, erase: false },
@@ -561,8 +568,12 @@ export const useStore = create<State>((set, get) => {
 
     async init() {
       await get().reload();
-      const [volumes, presets] = await Promise.all([api.listVolumes(), api.listPresets()]);
-      set({ volumes, presets });
+      const [volumes, presets, favoritePresets] = await Promise.all([
+        api.listVolumes(),
+        api.listPresets(),
+        api.favoritePresets(),
+      ]);
+      set({ volumes, presets, favoritePresets });
 
       void listen<Volume[]>("volumes-changed", ({ payload }) => {
         const known = new Set(get().volumes.map((v) => v.path));
@@ -923,7 +934,18 @@ export const useStore = create<State>((set, get) => {
         body: "Photos it was applied to keep their edits.",
         confirmLabel: "Delete preset",
       });
-      if (confirmed && (await attempt(() => api.deletePreset(preset.id)))) set({ presets: await api.listPresets() });
+      if (confirmed && (await attempt(() => api.deletePreset(preset.id)))) {
+        set({ presets: await api.listPresets(), favoritePresets: await api.favoritePresets() });
+      }
+    },
+
+    async toggleFavoritePreset(id) {
+      const favorite = !get().favoritePresets.includes(id);
+      try {
+        set({ favoritePresets: await api.setPresetFavorite(id, favorite) });
+      } catch (error) {
+        get().toast({ text: String(error), tone: "error" });
+      }
     },
 
     async importPresets() {

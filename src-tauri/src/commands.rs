@@ -256,7 +256,7 @@ pub fn render_frame(
     let gpu = gpu::shared().map_err(message)?;
     let region = Region { x: region.x, y: region.y, width: region.width, height: region.height };
     let (width, height) = (width.clamp(1, 4096), height.clamp(1, 4096));
-    let guides = gpu::Guides { show_clipping, uncropped, mask_overlay };
+    let guides = gpu::Guides { show_clipping, uncropped, mask_overlay, matte: false };
     let frame = gpu.render(session, &adjustments, region, (width, height), guides).map_err(message)?;
 
     // The histogram always describes the whole photo, whatever the zoom.
@@ -285,6 +285,68 @@ pub fn render_frame(
         reply.extend_from_slice(&bin.to_le_bytes());
     }
     reply.extend_from_slice(&frame);
+    Ok(tauri::ipc::Response::new(reply))
+}
+
+/// Each mask's coverage of the open photo, as a small black-and-white picture
+/// of the cropped frame: white where the mask applies.
+///
+/// The reply is binary: width, height and the number of masks (three u32s
+/// and a spare), then one byte a pixel for each mask in turn.
+#[tauri::command(async)]
+pub fn mask_mattes(
+    state: State<AppState>,
+    id: i64,
+    adjustments: Adjustments,
+    long_edge: u32,
+) -> Result<tauri::ipc::Response, String> {
+    let editing = state.editing.lock().unwrap();
+    let Some((_, session)) = editing.as_ref().filter(|(open, _)| *open == id) else {
+        return Err("This photo is no longer open in the editor.".into());
+    };
+    let gpu = gpu::shared().map_err(message)?;
+    let (width, height) = gpu::picture_size(session.width, session.height, &adjustments, long_edge.clamp(8, 512));
+    let mut reply = Vec::new();
+    for value in [width, height, adjustments.masks.len() as u32, 0] {
+        reply.extend_from_slice(&value.to_le_bytes());
+    }
+    for mask in &adjustments.masks {
+        let guides = gpu::Guides { mask_overlay: Some(mask.id), matte: true, ..Default::default() };
+        let rgba = gpu.render(session, &adjustments, Region::FULL, (width, height), guides).map_err(message)?;
+        reply.extend(rgba.as_chunks::<4>().0.iter().map(|pixel| pixel[0]));
+    }
+    Ok(tauri::ipc::Response::new(reply))
+}
+
+/// The open photo with each preset laid over its edits, small, for choosing between them.
+///
+/// The reply is binary: width, height and the number of presets (three u32s
+/// and a spare), then for each preset its id (an i64) and its picture as RGBA bytes.
+#[tauri::command(async)]
+pub fn preset_previews(
+    state: State<AppState>,
+    id: i64,
+    adjustments: Adjustments,
+    long_edge: u32,
+) -> Result<tauri::ipc::Response, String> {
+    let presets = state.library.presets().map_err(message)?;
+    let editing = state.editing.lock().unwrap();
+    let Some((_, session)) = editing.as_ref().filter(|(open, _)| *open == id) else {
+        return Err("This photo is no longer open in the editor.".into());
+    };
+    let gpu = gpu::shared().map_err(message)?;
+    // Presets never touch the framing, so every preview is the same size.
+    let (width, height) = gpu::picture_size(session.width, session.height, &adjustments, long_edge.clamp(16, 512));
+    let mut reply = Vec::new();
+    for value in [width, height, presets.len() as u32, 0] {
+        reply.extend_from_slice(&value.to_le_bytes());
+    }
+    for preset in &presets {
+        let recipe = presets::apply(&preset.settings, &adjustments);
+        let rgba = gpu.render(session, &recipe, Region::FULL, (width, height), gpu::Guides::default()).map_err(message)?;
+        reply.extend_from_slice(&preset.id.to_le_bytes());
+        reply.extend_from_slice(&rgba);
+    }
     Ok(tauri::ipc::Response::new(reply))
 }
 
@@ -429,6 +491,16 @@ pub fn rename_preset(state: State<AppState>, id: i64, name: String) -> CommandRe
 #[tauri::command(async)]
 pub fn update_preset(state: State<AppState>, id: i64, settings: Settings) -> CommandResult<Preset> {
     state.library.update_preset(id, settings).map_err(message)
+}
+
+#[tauri::command(async)]
+pub fn favorite_presets(state: State<AppState>) -> CommandResult<Vec<i64>> {
+    state.library.favorite_presets().map_err(message)
+}
+
+#[tauri::command(async)]
+pub fn set_preset_favorite(state: State<AppState>, id: i64, favorite: bool) -> CommandResult<Vec<i64>> {
+    state.library.set_preset_favorite(id, favorite).map_err(message)
 }
 
 #[tauri::command(async)]

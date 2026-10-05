@@ -1,4 +1,4 @@
-import { useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { dragged, Handle, Rect, Size, toCrop, toFrame, toRect, turnedSize } from "../../crop";
 import { useStore } from "../../store";
 
@@ -35,6 +35,17 @@ export function CropOverlay({ photo, scale, width, height }: Props) {
   const adjustments = useStore((s) => s.editor.adjustments);
   const aspect = useStore((s) => s.cropAspect);
   const drag = useRef<{ handle: Handle; start: Rect; x: number; y: number } | null>(null);
+  // Guides appear only while they help: thirds while the frame moves, a finer grid while straightening.
+  const [dragging, setDragging] = useState(false);
+  const [straightening, setStraightening] = useState(false);
+  const firstAngle = useRef(adjustments.straighten);
+  useEffect(() => {
+    if (adjustments.straighten === firstAngle.current) return;
+    firstAngle.current = NaN;
+    setStraightening(true);
+    const timer = setTimeout(() => setStraightening(false), 700);
+    return () => clearTimeout(timer);
+  }, [adjustments.straighten]);
 
   const turned = turnedSize(photo, adjustments.rotation);
   const rect = toRect(adjustments.crop, turned);
@@ -49,6 +60,7 @@ export function CropOverlay({ photo, scale, width, height }: Props) {
     if (event.button !== 0) return;
     event.stopPropagation();
     drag.current = { handle, start: rect, x: event.clientX, y: event.clientY };
+    setDragging(true);
     event.currentTarget.setPointerCapture(event.pointerId);
   };
   const move = (event: React.PointerEvent) => {
@@ -61,13 +73,15 @@ export function CropOverlay({ photo, scale, width, height }: Props) {
   const end = () => {
     if (!drag.current) return;
     drag.current = null;
+    setDragging(false);
     useStore.getState().commitAdjust();
   };
 
-  const third = (from: number, size: number, n: number) => from + (size * n) / 3;
-  const thirds =
-    `M${third(left, w, 1)} ${top}v${h}M${third(left, w, 2)} ${top}v${h}` +
-    `M${left} ${third(top, h, 1)}h${w}M${left} ${third(top, h, 2)}h${w}`;
+  const grid = (parts: number) =>
+    Array.from({ length: parts - 1 }, (_, i) => {
+      const n = i + 1;
+      return `M${left + (w * n) / parts} ${top}v${h}M${left} ${top + (h * n) / parts}h${w}`;
+    }).join("");
   // Corner brackets, so the corners read as grabbable.
   const b = Math.min(BRACKET, w / 3, h / 3);
   const brackets =
@@ -86,7 +100,11 @@ export function CropOverlay({ photo, scale, width, height }: Props) {
     >
       <path className="crop-shade" fillRule="evenodd" d={`M0 0H${width}V${height}H0ZM${left} ${top}h${w}v${h}h${-w}Z`} />
       <rect className="crop-area" x={left} y={top} width={w} height={h} onPointerDown={begin({ x: 0, y: 0 })} />
-      <path className="crop-thirds" d={thirds} />
+      {straightening ? (
+        <path className="crop-thirds fine" d={grid(8)} />
+      ) : (
+        dragging && <path className="crop-thirds" d={grid(3)} />
+      )}
       <rect className="crop-edge" x={left} y={top} width={w} height={h} />
       <path className="crop-brackets" d={brackets} />
       {HANDLES.map((handle) => {

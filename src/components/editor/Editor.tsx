@@ -1,16 +1,20 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowLeft,
-  BookImage,
   Check,
-  ClipboardPaste,
-  Copy,
+  Crop,
   Download,
+  Ellipsis,
   FolderOpen,
   Heart,
+  History as HistoryIcon,
+  Info as InfoIcon,
+  Layers,
+  LucideIcon,
   Redo2,
+  SlidersHorizontal,
   SquareSplitHorizontal,
-  Trash2,
+  SwatchBook,
   Undo2,
   X,
 } from "lucide-react";
@@ -20,19 +24,20 @@ import { withPreset } from "../../presets";
 import { api, Photo, PhotoInfo, previewUrl, Region, thumbUrl } from "../../api";
 import * as format from "../../format";
 import { albumEntries } from "../../menus";
-import { neighbours, SidePanel as SidePanelName, useStore, visiblePhotos } from "../../store";
+import { MenuEntry, neighbours, SidePanel as SidePanelName, useStore, visiblePhotos } from "../../store";
 import { menuBelow, useTitle } from "../Toolbar";
 import { frameSize } from "../../crop";
 import { AdjustPanel } from "./AdjustPanel";
 import { CropOverlay } from "./CropOverlay";
 import { CropPanel } from "./CropPanel";
 import { Histogram } from "./Histogram";
+import { MaskLayers } from "./MaskLayers";
 import { MaskOverlay } from "./MaskOverlay";
 import { MasksPanel } from "./MasksPanel";
 import { HistoryPanel } from "./HistoryPanel";
 import { PresetsPanel } from "./PresetsPanel";
 
-const STRIP_ITEM = 68;
+const STRIP_ITEM = 54;
 const STRIP_GAP = 4;
 const MAX_ZOOM = 4;
 
@@ -66,7 +71,7 @@ function Filmstrip({ photos, current }: { photos: Photo[]; current: number }) {
   const last = Math.min(photos.length, Math.ceil((range.left + range.width) / pitch) + 6);
 
   return (
-    <div className="panel filmstrip" ref={scroller} onScroll={measure}>
+    <div className="filmstrip" ref={scroller} onScroll={measure}>
       <div className="filmstrip-track" style={{ width: photos.length * pitch - STRIP_GAP }}>
         {photos.slice(first, last).map((photo, offset) => (
           <button
@@ -96,8 +101,13 @@ function Fact({ label, children }: { label: string; children: React.ReactNode })
   );
 }
 
+/** The folder a photo's file is in: in the library, the one named for the day it was taken. */
+const folderOf = (path: string) => path.split(/[\\/]/).slice(-2, -1)[0] ?? path;
+
 function Info({ photo }: { photo: Photo }) {
   const [info, setInfo] = useState<PhotoInfo | null>(null);
+  const size = useStore((s) => s.editor.size);
+  const adjustments = useStore((s) => s.editor.adjustments);
   useEffect(() => {
     let current = true;
     setInfo(null);
@@ -108,30 +118,46 @@ function Info({ photo }: { photo: Photo }) {
   }, [photo.id]);
 
   const camera = [info?.make, info?.model].filter(Boolean).join(" ");
-  const exposure = info && [
-    info.iso !== null && `ISO ${info.iso}`,
-    info.focalLength !== null && format.focalLength(info.focalLength),
-    info.aperture !== null && format.aperture(info.aperture),
-    info.shutter !== null && format.shutter(info.shutter),
-  ].filter(Boolean);
+  const readings = info
+    ? [
+        { label: "Shutter", value: info.shutter !== null ? format.shutter(info.shutter) : null },
+        { label: "Aperture", value: info.aperture !== null ? format.aperture(info.aperture) : null },
+        { label: "Focal length", value: info.focalLength !== null ? format.focalLength(info.focalLength) : null },
+        { label: "ISO", value: info.iso !== null ? String(info.iso) : null },
+      ].filter((reading) => reading.value !== null)
+    : [];
+  // What an export at full size would measure, once the crop is taken into account.
+  const cropped = size && frameSize(size, adjustments, false);
+  const croppedSize = cropped && { width: Math.round(cropped.width), height: Math.round(cropped.height) };
+  const isCropped =
+    croppedSize && photo.width !== null && photo.height !== null
+      ? !(croppedSize.width === photo.width && croppedSize.height === photo.height) &&
+        !(croppedSize.width === photo.height && croppedSize.height === photo.width)
+      : false;
 
   return (
     <div className="info">
-      <h2>{photo.fileName}</h2>
-      <p className="info-date">{format.longDateTime(format.parseLocal(photo.takenAt))}</p>
+      <header className="info-header">
+        <h2>{photo.fileName}</h2>
+        <p>{format.longDateTime(format.parseLocal(photo.takenAt))}</p>
+      </header>
 
-      {info && (camera || info.lens || exposure!.length > 0) && (
-        <section className="info-card">
-          {camera && <strong>{camera}</strong>}
-          {info.lens && <span>{info.lens}</span>}
-          {exposure!.length > 0 && (
-            <div className="exposure">
-              {exposure!.map((value) => (
-                <span key={String(value)}>{value}</span>
-              ))}
+      {readings.length > 0 && (
+        <dl className="readings">
+          {readings.map(({ label, value }) => (
+            <div key={label}>
+              <dd>{value}</dd>
+              <dt>{label}</dt>
             </div>
-          )}
-        </section>
+          ))}
+        </dl>
+      )}
+
+      {info && (camera || info.lens) && (
+        <dl className="facts">
+          {camera && <Fact label="Camera">{camera}</Fact>}
+          {info.lens && <Fact label="Lens">{info.lens}</Fact>}
+        </dl>
       )}
 
       {info && (
@@ -141,20 +167,27 @@ function Info({ photo }: { photo: Photo }) {
             {photo.hasJpeg && " + JPEG"}
           </Fact>
           {photo.width !== null && photo.height !== null && (
-            <Fact label="Size">
-              {photo.width} × {photo.height}, {format.megapixels(photo.width, photo.height)}
+            <Fact label="Dimensions">
+              {photo.width} × {photo.height}
+              <span className="fact-note">{format.megapixels(photo.width, photo.height)}</span>
             </Fact>
           )}
-          <Fact label="File">{format.fileSize(info.fileSize)}</Fact>
+          {isCropped && croppedSize && (
+            <Fact label="Cropped to">
+              {croppedSize.width} × {croppedSize.height}
+              <span className="fact-note">{format.megapixels(croppedSize.width, croppedSize.height)}</span>
+            </Fact>
+          )}
+          <Fact label="File size">{format.fileSize(info.fileSize)}</Fact>
           <Fact label="Imported">{format.longDateTime(new Date(info.importedAt * 1000))}</Fact>
           {info.albums.length > 0 && <Fact label="Albums">{info.albums.join(", ")}</Fact>}
+          <Fact label="Folder">
+            <button className="link" title={info.path} onClick={() => void revealItemInDir(info.path)}>
+              {folderOf(info.path)}
+              <FolderOpen size={13} />
+            </button>
+          </Fact>
         </dl>
-      )}
-
-      {info && (
-        <button className="button" onClick={() => void revealItemInDir(info.path)}>
-          <FolderOpen size={15} /> Show in file manager
-        </button>
       )}
     </div>
   );
@@ -403,33 +436,45 @@ function Stage({ photo, onZoomChange }: { photo: Photo; onZoomChange: (label: st
   );
 }
 
-const SIDE_TABS: { panel: SidePanelName; label: string }[] = [
-  { panel: "adjust", label: "Adjust" },
-  { panel: "crop", label: "Crop" },
-  { panel: "masks", label: "Masks" },
-  { panel: "presets", label: "Presets" },
-  { panel: "history", label: "History" },
-  { panel: "info", label: "Info" },
+/** The side panel's tools, in the order of the rail, with the key that opens each. */
+const TOOLS: { panel: SidePanelName; label: string; key: string; icon: LucideIcon }[] = [
+  { panel: "adjust", label: "Adjust", key: "A", icon: SlidersHorizontal },
+  { panel: "crop", label: "Crop", key: "C", icon: Crop },
+  { panel: "masks", label: "Masks", key: "M", icon: Layers },
+  { panel: "presets", label: "Presets", key: "Shift+P", icon: SwatchBook },
+  { panel: "history", label: "History", key: "H", icon: HistoryIcon },
+  { panel: "info", label: "Info", key: "I", icon: InfoIcon },
 ];
 
-function SidePanel({ photo }: { photo: Photo }) {
+/** The tools, as a column of icons along the window's right edge. */
+function Rail() {
   const panel = useStore((s) => s.sidePanel);
   const setPanel = useStore((s) => s.setSidePanel);
   return (
-    <aside className="panel side">
-      <div className="side-tabs" role="tablist">
-        {SIDE_TABS.map((tab) => (
-          <button
-            key={tab.panel}
-            role="tab"
-            aria-selected={panel === tab.panel}
-            className={panel === tab.panel ? "active" : ""}
-            onClick={() => setPanel(tab.panel)}
-          >
-            {tab.label}
-          </button>
-        ))}
-      </div>
+    <nav className="panel rail" role="tablist" aria-orientation="vertical" aria-label="Tools">
+      {TOOLS.map(({ panel: tool, label, key, icon: Icon }) => (
+        <button
+          key={tool}
+          role="tab"
+          aria-selected={panel === tool}
+          aria-label={label}
+          title={`${label} (${key})`}
+          className={panel === tool ? "active" : ""}
+          onClick={() => setPanel(tool)}
+        >
+          <Icon size={17} strokeWidth={1.75} />
+        </button>
+      ))}
+    </nav>
+  );
+}
+
+function SidePanel({ photo }: { photo: Photo }) {
+  const panel = useStore((s) => s.sidePanel);
+  const title = TOOLS.find((tool) => tool.panel === panel)?.label;
+  return (
+    <aside className="side" aria-label={title}>
+      <h2 className="side-title">{title}</h2>
       {panel === "adjust" && <AdjustPanel />}
       {panel === "crop" && <CropPanel />}
       {panel === "masks" && <MasksPanel />}
@@ -451,6 +496,7 @@ export function Editor({ photo, inert }: { photo: Photo; inert: boolean }) {
   const edited = useStore((s) => s.editor.ready && !isAsShot(s.editor.adjustments));
   const showOriginal = useStore((s) => s.editor.showOriginal);
   const hasClipboard = useStore((s) => s.clipboard !== null);
+  const masking = useStore((s) => s.sidePanel === "masks");
   const [zoomLabel, setZoomLabel] = useState("Fit");
   const s = useStore.getState();
   const ids = [photo.id];
@@ -495,6 +541,7 @@ export function Editor({ photo, inert }: { photo: Photo; inert: boolean }) {
         else state.closePhoto();
       } else if (key === "\\") state.setShowOriginal(true);
       else if (key === "j") state.toggleClipping();
+      else if (key === "a") state.setSidePanel("adjust");
       else if (key === "c") state.setSidePanel(state.sidePanel === "crop" ? "adjust" : "crop");
       else if (key === "m") state.setSidePanel(state.sidePanel === "masks" ? "adjust" : "masks");
       else if (key === "o" && state.sidePanel === "masks") state.toggleMaskOverlay();
@@ -521,23 +568,40 @@ export function Editor({ photo, inert }: { photo: Photo; inert: boolean }) {
     };
   }, []);
 
+  // Everything the toolbar doesn't need to show all the time. The keys still work without it.
+  const more = (): MenuEntry[] => [
+    { label: "Favorite", hint: "F", checked: photo.favorite, run: () => void s.toggleFavorite(ids) },
+    { label: "Pick", hint: "P", checked: photo.flag === 1, run: () => void s.toggleFlag(ids, 1) },
+    { label: "Reject", hint: "X", checked: photo.flag === -1, run: () => void s.toggleFlag(ids, -1) },
+    "separator",
+    { label: "Copy edits", hint: "Ctrl+C", run: () => void s.copyEdits(photo.id) },
+    { label: "Paste edits", hint: "Ctrl+V", disabled: !hasClipboard, run: () => void s.pasteEdits(ids) },
+    { label: "Remove all edits", disabled: !edited, run: s.resetEdits },
+    "separator",
+    { label: "Add to album", submenu: albumEntries(ids) },
+    { label: "Delete", hint: "Del", danger: true, run: () => void s.trash(ids) },
+  ];
+
   return (
     <div className="viewer" inert={inert}>
-      <section className="panel stage">
+      <section className="stage">
         <header className="toolbar">
-          <button className="button" onClick={s.closePhoto}>
-            <ArrowLeft size={15} /> {viewTitle}
+          <button className="button quiet back" title={`Back to ${viewTitle} (Esc)`} onClick={s.closePhoto}>
+            <ArrowLeft size={15} /> <span className="collapsible">{viewTitle}</span>
           </button>
+          <div className="photo-title">
+            <span className="file-name">{photo.fileName}</span>
+            {photo.favorite && <Heart size={13} fill="currentColor" aria-label="Favorite" />}
+            {photo.flag === 1 && <Check size={14} strokeWidth={2.5} className="picked" aria-label="Picked" />}
+            {photo.flag === -1 && <X size={14} strokeWidth={2.5} className="rejected" aria-label="Rejected" />}
+          </div>
 
-          <div className="tool-group">
+          <div className="toolbar-controls">
             <button className="icon-button" title="Undo (Ctrl+Z)" aria-label="Undo" disabled={!canUndo} onClick={() => void s.undo()}>
               <Undo2 size={16} />
             </button>
             <button className="icon-button" title="Redo (Ctrl+Shift+Z)" aria-label="Redo" disabled={!canRedo} onClick={() => void s.redo()}>
               <Redo2 size={16} />
-            </button>
-            <button className="button quiet" title="Remove all edits" disabled={!edited} onClick={s.resetEdits}>
-              Reset
             </button>
             <button
               className={`icon-button ${showOriginal ? "engaged" : ""}`}
@@ -550,75 +614,25 @@ export function Editor({ photo, inert }: { photo: Photo; inert: boolean }) {
             >
               <SquareSplitHorizontal size={16} />
             </button>
-            <span className="divider" />
-            <button className="icon-button" title="Copy edits (Ctrl+C)" aria-label="Copy edits" onClick={() => void s.copyEdits(photo.id)}>
-              <Copy size={15} />
-            </button>
-            <button
-              className="icon-button"
-              title="Paste edits (Ctrl+V)"
-              aria-label="Paste edits"
-              disabled={!hasClipboard}
-              onClick={() => void s.pasteEdits(ids)}
-            >
-              <ClipboardPaste size={16} />
-            </button>
-          </div>
-
-          <div className="toolbar-controls">
             <span className="zoom-label" title="Scroll to zoom, double-click or Z for 100%">
               {showOriginal ? "Original" : zoomLabel}
             </span>
-            <span className="divider" />
-            <button
-              className={`icon-button ${photo.favorite ? "favorite" : ""}`}
-              title="Favorite (F)"
-              aria-label="Favorite"
-              aria-pressed={photo.favorite}
-              onClick={() => void s.toggleFavorite(ids)}
-            >
-              <Heart size={16} fill={photo.favorite ? "currentColor" : "none"} />
+            <button className="icon-button" title="More" aria-label="More" onClick={(event) => menuBelow(event, more())}>
+              <Ellipsis size={16} />
             </button>
-            <button
-              className={`icon-button ${photo.flag === 1 ? "picked" : ""}`}
-              title="Pick (P)"
-              aria-label="Pick"
-              aria-pressed={photo.flag === 1}
-              onClick={() => void s.toggleFlag(ids, 1)}
-            >
-              <Check size={16} />
-            </button>
-            <button
-              className={`icon-button ${photo.flag === -1 ? "rejected" : ""}`}
-              title="Reject (X)"
-              aria-label="Reject"
-              aria-pressed={photo.flag === -1}
-              onClick={() => void s.toggleFlag(ids, -1)}
-            >
-              <X size={16} />
-            </button>
-            <button
-              className="icon-button"
-              title="Add to album"
-              aria-label="Add to album"
-              onClick={(event) => menuBelow(event, albumEntries(ids))}
-            >
-              <BookImage size={16} />
-            </button>
-            <button className="icon-button" title="Delete (Del)" aria-label="Delete" onClick={() => void s.trash(ids)}>
-              <Trash2 size={16} />
+            <button className="button primary" title="Export this photo (Ctrl+E)" onClick={() => void s.startExport(ids)}>
+              <Download size={15} /> <span className="collapsible">Export</span>
             </button>
           </div>
-          <button className="button primary" title="Export this photo (Ctrl+E)" aria-label="Export" onClick={() => void s.startExport(ids)}>
-            <Download size={15} /> <span className="collapsible">Export</span>
-          </button>
         </header>
         <Stage photo={photo} onZoomChange={setZoomLabel} />
+        {masking && <MaskLayers />}
       </section>
-      <div className="side-column">
+      <div className="panel side-column">
         <Histogram />
         <SidePanel photo={photo} />
       </div>
+      <Rail />
       <Filmstrip photos={photos} current={photo.id} />
     </div>
   );

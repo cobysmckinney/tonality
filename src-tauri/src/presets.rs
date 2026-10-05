@@ -30,6 +30,16 @@ CREATE TABLE presets (
 );
 ";
 
+/// The presets starred as favorites, built-in or your own, in the order they were starred.
+pub(crate) const FAVORITES_SCHEMA: &str = "
+CREATE TABLE preset_favorites (
+    -- Counts up as presets are starred, so the order holds within the same second.
+    position    INTEGER PRIMARY KEY AUTOINCREMENT,
+    preset_id   INTEGER NOT NULL UNIQUE,
+    starred_at  INTEGER NOT NULL
+);
+";
+
 /// The extension of a preset written out as a file.
 pub const FILE_EXTENSION: &str = "tonality-preset";
 
@@ -497,8 +507,35 @@ impl Library {
     }
 
     pub fn delete_preset(&self, id: i64) -> Result<()> {
-        self.db().execute("DELETE FROM presets WHERE id = ?1", [id])?;
+        let db = self.db();
+        db.execute("DELETE FROM presets WHERE id = ?1", [id])?;
+        db.execute("DELETE FROM preset_favorites WHERE preset_id = ?1", [id])?;
         Ok(())
+    }
+
+    /// The favorite presets' ids, in the order they were starred. Only presets that still exist.
+    pub fn favorite_presets(&self) -> Result<Vec<i64>> {
+        let existing: std::collections::HashSet<i64> = self.presets()?.iter().map(|preset| preset.id).collect();
+        let db = self.db();
+        let mut stmt = db.prepare("SELECT preset_id FROM preset_favorites ORDER BY position")?;
+        let ids = stmt.query_map([], |r| r.get::<_, i64>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(ids.into_iter().filter(|id| existing.contains(id)).collect())
+    }
+
+    /// Stars a preset, or takes its star away.
+    pub fn set_preset_favorite(&self, id: i64, favorite: bool) -> Result<Vec<i64>> {
+        {
+            let db = self.db();
+            if favorite {
+                db.execute(
+                    "INSERT OR IGNORE INTO preset_favorites (preset_id, starred_at) VALUES (?1, ?2)",
+                    params![id, chrono::Utc::now().timestamp()],
+                )?;
+            } else {
+                db.execute("DELETE FROM preset_favorites WHERE preset_id = ?1", [id])?;
+            }
+        }
+        self.favorite_presets()
     }
 
     /// Writes a preset out as a file, to share or to keep.

@@ -23,17 +23,18 @@ Tonality keeps one managed library, like Apple Photos. Importing copies photos i
 
 Opening a photo (double-click or Enter) loads it at full resolution onto the GPU. Every slider change is one pass of a single shader, `src-tauri/src/shaders/develop.wgsl`, drawn at exactly the size and crop on screen. Editing never touches the original: the recipe is stored in the library database, and the same shader redraws the photo's thumbnail so the grid matches.
 
-- **Tools**: light (exposure, contrast, highlights, shadows, whites, blacks), color (temperature, tint, vibrance, saturation), tone curve with per-channel curves, an eight-band color mixer, detail (sharpening, noise reduction, clarity, dehaze), effects (vignette, grain).
+- **Adjust**: light (exposure, contrast, highlights, shadows, whites, blacks), color (temperature, tint, vibrance, saturation), tone curve with per-channel curves, an eight-band color mixer, detail (sharpening, noise reduction, clarity, dehaze), effects (vignette, grain).
 - **Crop** (`C`): the photo is shown whole with an upright crop frame over it. Shapes (free, original, 1:1, 5:4, 4:3, 3:2, 16:9), a straighten slider that turns the photo under the frame and keeps the frame on the photo, quarter-turns and flips. Pasting edits onto another photo leaves that photo's own crop alone.
 - **Starting look**: RAW files open with a built-in tone curve fitted to match camera JPEGs. The constants at the top of the shader hold it.
 - **Histogram** with clipping markers; `J` shows clipped areas on the photo.
-- **Keys**: `C` crop, `M` masks, `Shift+P` presets, `H` history, `I` info; `Ctrl+Z` / `Ctrl+Shift+Z` undo and redo, hold `\` for the original, `Z` or double-click for 100%, scroll to zoom, `Ctrl+C` / `Ctrl+V` copy and paste edits (in the grid too, onto a whole selection), double-click a slider to reset it.
+- **Tools** sit in a rail of icons along the right edge; `A` adjust, `C` crop, `M` masks, `Shift+P` presets, `H` history, `I` info; `Ctrl+Z` / `Ctrl+Shift+Z` undo and redo, hold `\` for the original, `Z` or double-click for 100%, scroll to zoom, `Ctrl+C` / `Ctrl+V` copy and paste edits (in the grid too, onto a whole selection), double-click a slider to reset it.
 
 ### Presets
 
 A preset is a named look to lay over a photo's edits. Each one *covers* some settings and leaves the rest alone, so a look keeps the exposure you already corrected, and a grain preset goes on top of a look. No preset touches the crop.
 
-- **The Presets tab** (`Shift+P`) lists them by name. Point at one, or walk the list with the arrow keys, to see it on the photo; click or Enter applies it. A dot marks the presets the photo is wearing.
+- **The Presets tool** (`Shift+P`) shows each preset as a small picture of the open photo wearing it, drawn over the photo's current edits. Point at one, or walk the grid with the arrow keys, to see it large; click or Enter applies it. An outline marks the presets the photo is wearing.
+- **Favorites**: the star on a preset lists it again in a Favorites group at the top, in the order you starred them. Stars are kept in the library.
 - **Applying is a step** in the history ("Preset: Warm fade"), so it undoes and branches like any other edit.
 - **Amount**: once applied, a slider under the list fades the preset from none of it (0%) to double (200%). It stays for as long as the settings the preset covers are left as it set them, and comes back when undo or redo lands on a step it made. Applying the same preset again, or another look in its place, keeps the amount measured from the photo as it was before either.
 - **Built in**: six colour looks and four black-and-whites, which all cover the same settings (vibrance, saturation, the curves and the colour mixer), so picking another replaces the last one cleanly; and four finishing touches (grain, vignette, crispness) that cover one thing each.
@@ -47,8 +48,9 @@ A preset is a named look to lay over a photo's edits. Each one *covers* some set
 
 Masks change one part of the photo. Each mask is an area, built from parts, with its own sliders (light, color, clarity, dehaze, sharpening, noise reduction) that add to the photo's own wherever it covers.
 
-- **The Masks tab** (`M`): **+** starts a mask from a brush, a linear gradient, a radial gradient or a brightness range. The eye hides a mask's effect without removing it; **…** renames, inverts or deletes it.
-- **Parts** combine in order: each one adds to the area, subtracts from it, or intersects with it (keeps only what both cover). A brightness range added to a gradient intersects to begin with, so "the sky, but only its bright part" is two parts.
+- **The Masks tool** (`M`) starts a mask from a brush, a linear gradient, a radial gradient or a brightness range, each described in a line.
+- **Layers**: while the tool is open, the photo's masks float as layers over its corner, each with a black-and-white thumbnail of what it covers. The eye hides a mask's effect without removing it; **…** (or a right-click) renames, inverts or deletes it, and **+** starts another. The side column holds the chosen mask's sliders.
+- **Parts**: the chosen layer opens to list its parts. **Add**, **Subtract** and **Intersect** put another one on: it adds to the area, takes from it, or keeps only what both cover ("the sky, but only its bright part"). The mark in front of a part changes how it combines.
 - **On the photo**: a gradient's ends and a radial's edges, centre and turning knob are dragged into place. With a brush part chosen, dragging paints; Alt erases, `[` and `]` change the size. `O` tints the mask red.
 - **They stay on the photo**: parts are kept on the file itself, so they follow crops, turns and flips. Presets never include masks; pasting edits does.
 - **Limits**: 8 masks, 32 parts and 8 brush parts a photo.

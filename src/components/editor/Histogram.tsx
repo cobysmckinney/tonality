@@ -37,7 +37,7 @@ export function Histogram() {
   }, [histogram]);
 
   return (
-    <section className="panel histogram" aria-label="Histogram">
+    <section className="histogram" aria-label="Histogram">
       <svg viewBox={`0 0 ${WIDTH} ${HEIGHT}`} preserveAspectRatio="none" aria-hidden>
         {paths && (
           <>

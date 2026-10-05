@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { Ellipsis, Plus } from "lucide-react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Ellipsis, Plus, Star } from "lucide-react";
+import { api } from "../../api";
 import { changedSections, isOn, Preset, PRESET_SECTIONS } from "../../presets";
 import { adjustablePreset, MenuEntry, presetStepLabel, useStore } from "../../store";
 import { menuBelow } from "../Toolbar";
@@ -68,12 +69,65 @@ function NewPreset({ onDone }: { onDone: () => void }) {
   );
 }
 
-function PresetRow(props: { preset: Preset; on: boolean; renaming: boolean; onRename: (renaming: boolean) => void }) {
-  const { preset, on } = props;
+/** A preview this long along the photo's longer side fills a tile sharply on a scaled screen. */
+const PREVIEW_EDGE = 200;
+
+/**
+ * The open photo with each preset laid over its edits, by preset id. Drawn
+ * again a moment after the edits stop changing.
+ */
+function usePreviews(): Map<number, ImageData> {
+  const photoId = useStore((s) => s.editor.photoId);
+  const ready = useStore((s) => s.editor.ready);
+  const adjustments = useStore((s) => s.editor.adjustments);
+  const presets = useStore((s) => s.presets);
+  const [previews, setPreviews] = useState(new Map<number, ImageData>());
+  useEffect(() => {
+    if (!ready || photoId === null) return;
+    let current = true;
+    const timer = setTimeout(async () => {
+      try {
+        const drawn = await api.presetPreviews(photoId, adjustments, PREVIEW_EDGE);
+        if (current) setPreviews(drawn);
+      } catch {
+        // The photo was closed meanwhile.
+      }
+    }, 400);
+    return () => {
+      current = false;
+      clearTimeout(timer);
+    };
+  }, [photoId, ready, adjustments, presets]);
+  // A different photo's previews would mislead.
+  useEffect(() => setPreviews(new Map()), [photoId]);
+  return previews;
+}
+
+function Preview({ pixels }: { pixels: ImageData | undefined }) {
+  const canvas = useRef<HTMLCanvasElement>(null);
+  useLayoutEffect(() => {
+    const target = canvas.current;
+    if (!target || !pixels) return;
+    target.width = pixels.width;
+    target.height = pixels.height;
+    target.getContext("2d")!.putImageData(pixels, 0, 0);
+  }, [pixels]);
+  return <span className="preset-preview">{pixels && <canvas ref={canvas} />}</span>;
+}
+
+function PresetTile(props: {
+  preset: Preset;
+  preview: ImageData | undefined;
+  on: boolean;
+  favorite: boolean;
+  renaming: boolean;
+  onRename: (renaming: boolean) => void;
+}) {
+  const { preset, on, favorite } = props;
   const s = useStore.getState();
   if (props.renaming) {
     return (
-      <li className="preset">
+      <li className="preset-tile renaming">
         <NameInput
           name={preset.name}
           label="Preset name"
@@ -87,19 +141,28 @@ function PresetRow(props: { preset: Preset; on: boolean; renaming: boolean; onRe
   }
 
   const own = preset.group === null;
-  const entries: MenuEntry[] = [
-    { label: "Rename", run: () => props.onRename(true) },
-    { label: "Update with this photo’s edits", run: () => void s.updatePreset(preset) },
-    { label: "Export as a file…", run: () => void s.exportPreset(preset) },
-    "separator",
-    { label: "Delete", danger: true, run: () => void s.deletePreset(preset) },
-  ];
+  const star: MenuEntry = {
+    label: favorite ? "Remove from favorites" : "Add to favorites",
+    run: () => void s.toggleFavoritePreset(preset.id),
+  };
+  const entries: MenuEntry[] = own
+    ? [
+        star,
+        "separator",
+        { label: "Rename", run: () => props.onRename(true) },
+        { label: "Update with this photo’s edits", run: () => void s.updatePreset(preset) },
+        { label: "Export as a file…", run: () => void s.exportPreset(preset) },
+        "separator",
+        { label: "Delete", danger: true, run: () => void s.deletePreset(preset) },
+      ]
+    : [star];
 
   return (
-    <li className={`preset ${on ? "on" : ""}`}>
+    <li className={`preset-tile ${on ? "on" : ""}`}>
       <button
         className="preset-main"
         aria-pressed={on}
+        title={preset.name}
         // Pointing at a preset, or reaching it with the keyboard, tries it on
         // the photo. Once applied the photo shows what was made, not the trial.
         onMouseEnter={() => s.previewPreset(preset)}
@@ -107,35 +170,76 @@ function PresetRow(props: { preset: Preset; on: boolean; renaming: boolean; onRe
         onFocus={(event) => event.currentTarget.matches(":focus-visible") && s.previewPreset(preset)}
         onBlur={() => s.previewPreset(null)}
         onClick={() => void s.applyPreset([useStore.getState().openId!], preset)}
-        onContextMenu={(event) => own && s.openMenu(event.clientX, event.clientY, entries)}
+        onContextMenu={(event) => {
+          event.preventDefault();
+          s.openMenu(event.clientX, event.clientY, entries);
+        }}
       >
-        <span className="preset-dot" />
+        <Preview pixels={props.preview} />
         <span className="preset-name">{preset.name}</span>
       </button>
+      <button
+        className={`preset-star ${favorite ? "on" : ""}`}
+        title={favorite ? "Remove from favorites" : "Add to favorites"}
+        aria-label={favorite ? `Remove ${preset.name} from favorites` : `Add ${preset.name} to favorites`}
+        aria-pressed={favorite}
+        tabIndex={-1}
+        onClick={() => void s.toggleFavoritePreset(preset.id)}
+      >
+        <Star size={13} fill={favorite ? "currentColor" : "none"} />
+      </button>
       {own && (
-        <button className="icon-button small preset-more" title="Rename, update, export or delete" aria-label={`More for ${preset.name}`} onClick={(event) => menuBelow(event, entries)}>
-          <Ellipsis size={14} />
+        <button
+          className="preset-more"
+          title="Rename, update, export or delete"
+          aria-label={`More for ${preset.name}`}
+          tabIndex={-1}
+          onClick={(event) => menuBelow(event, entries)}
+        >
+          <Ellipsis size={13} />
         </button>
       )}
     </li>
   );
 }
 
+/** The tile next to `from` in the grid, by where the tiles are on screen. */
+function neighbourTile(tiles: HTMLElement[], from: HTMLElement, key: string): HTMLElement | undefined {
+  const at = tiles.indexOf(from);
+  if (key === "ArrowRight") return tiles[at + 1];
+  if (key === "ArrowLeft") return tiles[at - 1];
+  const here = from.getBoundingClientRect();
+  const down = key === "ArrowDown";
+  // The nearest row above or below, then the tile in it closest across.
+  const candidates = tiles.filter((tile) => {
+    const box = tile.getBoundingClientRect();
+    return down ? box.top >= here.bottom - 1 : box.bottom <= here.top + 1;
+  });
+  const rowTop = down
+    ? Math.min(...candidates.map((tile) => tile.getBoundingClientRect().top))
+    : Math.max(...candidates.map((tile) => tile.getBoundingClientRect().top));
+  return candidates
+    .filter((tile) => Math.abs(tile.getBoundingClientRect().top - rowTop) < 2)
+    .sort((a, b) => Math.abs(a.getBoundingClientRect().left - here.left) - Math.abs(b.getBoundingClientRect().left - here.left))[0];
+}
+
 /**
  * Presets: looks to lay over the photo's edits. Each covers some settings
- * and leaves the others alone. The built-in ones come first, then your own.
- * Pointing at one shows it on the photo; clicking applies it, as a step in
- * the history, and its amount can then be turned down or up.
+ * and leaves the others alone. Each is shown on this photo; pointing at one
+ * shows it large, and clicking applies it, as a step in the history, after
+ * which its amount can be turned down or up. Starred ones also sit at the top.
  */
 export function PresetsPanel() {
   const presets = useStore((s) => s.presets);
+  const favorites = useStore((s) => s.favoritePresets);
   // Only once the photo being shown is the one loaded: a preset clicked
   // while the next photo loads must not land on the last one.
   const ready = useStore((s) => s.editor.ready && s.editor.photoId === s.openId);
   const adjustments = useStore((s) => s.editor.adjustments);
   const applied = useStore(adjustablePreset);
+  const previews = usePreviews();
   const [adding, setAdding] = useState(false);
-  const [renaming, setRenaming] = useState<number | null>(null);
+  const [renaming, setRenaming] = useState<string | null>(null);
   const list = useRef<HTMLDivElement>(null);
   const s = useStore.getState();
 
@@ -144,28 +248,42 @@ export function PresetsPanel() {
 
   const groups = useMemo(() => {
     const titles = [...new Set(presets.map((preset) => preset.group).filter((group) => group !== null))];
-    return titles.map((title) => ({ title, presets: presets.filter((preset) => preset.group === title) }));
-  }, [presets]);
+    const byId = new Map(presets.map((preset) => [preset.id, preset]));
+    return [
+      { title: "Favorites", presets: favorites.map((id) => byId.get(id)).filter((preset) => preset !== undefined) },
+      ...titles.map((title) => ({ title, presets: presets.filter((preset) => preset.group === title) })),
+    ].filter((group) => group.presets.length > 0);
+  }, [presets, favorites]);
   const own = presets.filter((preset) => preset.group === null);
 
-  const row = (preset: Preset) => (
-    <PresetRow
-      key={preset.id}
-      preset={preset}
-      on={isOn(preset, adjustments) || (applied?.preset.id === preset.id && applied.amount > 0)}
-      renaming={renaming === preset.id}
-      onRename={(yes) => setRenaming(yes ? preset.id : null)}
-    />
-  );
+  // Renaming is keyed by group too: a favorite appears twice, and only the one clicked becomes a field.
+  const tile = (group: string) => (preset: Preset) => {
+    const key = `${group}:${preset.id}`;
+    return (
+      <PresetTile
+        key={preset.id}
+        preset={preset}
+        preview={previews.get(preset.id)}
+        on={isOn(preset, adjustments) || (applied?.preset.id === preset.id && applied.amount > 0)}
+        favorite={favorites.includes(preset.id)}
+        renaming={renaming === key}
+        onRename={(yes) => setRenaming(yes ? key : null)}
+      />
+    );
+  };
 
-  // Up and down walk the presets, trying each on the photo as they go.
+  // The arrow keys walk the grid, trying each preset on the photo as they go.
   const onKeyDown = (event: React.KeyboardEvent) => {
-    if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
-    const rows = [...list.current!.querySelectorAll<HTMLButtonElement>(".preset-main")];
-    const at = rows.indexOf(document.activeElement as HTMLButtonElement);
-    if (at < 0) return;
+    if (!["ArrowDown", "ArrowUp", "ArrowLeft", "ArrowRight"].includes(event.key)) return;
+    const tiles = [...list.current!.querySelectorAll<HTMLButtonElement>(".preset-main")];
+    const from = document.activeElement as HTMLButtonElement;
+    if (!tiles.includes(from)) return;
     event.preventDefault();
-    rows[at + (event.key === "ArrowDown" ? 1 : -1)]?.focus();
+    // Left and right would otherwise change photo.
+    event.stopPropagation();
+    const next = neighbourTile(tiles, from, event.key);
+    next?.focus();
+    next?.scrollIntoView({ block: "nearest" });
   };
 
   const addMenu = (event: React.MouseEvent) =>
@@ -180,7 +298,7 @@ export function PresetsPanel() {
         {groups.map((group) => (
           <section key={group.title}>
             <h3 className="preset-heading">{group.title}</h3>
-            <ul>{group.presets.map(row)}</ul>
+            <ul className="preset-grid">{group.presets.map(tile(group.title))}</ul>
           </section>
         ))}
         <section>
@@ -191,7 +309,7 @@ export function PresetsPanel() {
             </button>
           </h3>
           {adding && <NewPreset onDone={() => setAdding(false)} />}
-          <ul>{own.map(row)}</ul>
+          <ul className="preset-grid">{own.map(tile("Yours"))}</ul>
           {own.length === 0 && !adding && <p className="preset-empty">Save a photo’s edits here to use them again.</p>}
         </section>
       </div>

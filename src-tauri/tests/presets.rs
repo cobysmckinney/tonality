@@ -162,6 +162,24 @@ fn your_own_presets_are_kept_in_the_library() {
 }
 
 #[test]
+fn favorites_are_kept_in_the_order_they_were_starred() {
+    let (dir, library) = library();
+    assert!(library.favorite_presets().unwrap().is_empty());
+    let mine = library.create_preset("Mine", settings(json!({ "grain": 5 }))).unwrap();
+    library.set_preset_favorite(mine.id, true).unwrap();
+    library.set_preset_favorite(-3, true).unwrap();
+    assert_eq!(library.set_preset_favorite(mine.id, true).unwrap(), [mine.id, -3], "starring twice changes nothing");
+    assert_eq!(library.set_preset_favorite(-3, false).unwrap(), [mine.id]);
+
+    // A deleted preset takes its star with it, and the stars outlast the library being closed.
+    library.set_preset_favorite(-1, true).unwrap();
+    library.delete_preset(mine.id).unwrap();
+    drop(library);
+    let library = Library::open(&dir.path().join("Tonality")).unwrap();
+    assert_eq!(library.favorite_presets().unwrap(), [-1]);
+}
+
+#[test]
 fn presets_travel_as_files() {
     let (dir, library) = library();
     let made = library
