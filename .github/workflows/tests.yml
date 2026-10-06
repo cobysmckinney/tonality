@@ -92,7 +92,8 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libheif-dev
+            libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libheif-dev \
+            mesa-vulkan-drivers
       - name: Rust
         run: |
           rustup toolchain install stable --profile minimal --component clippy
@@ -104,7 +105,8 @@ jobs:
       - name: Clippy
         working-directory: src-tauri
         run: cargo clippy --all-targets --locked -- -D warnings
-      # GPU tests skip themselves: the runner has no graphics adapter.
+      # The runner has no graphics card: mesa-vulkan-drivers gives the GPU
+      # tests a software Vulkan device (lavapipe) to run on.
       - name: Tests
         working-directory: src-tauri
-        run: cargo test --locked
+        run: cargo test --locked --no-fail-fast
