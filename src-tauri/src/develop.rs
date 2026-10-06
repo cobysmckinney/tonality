@@ -22,7 +22,7 @@ pub struct LinearImage {
 }
 
 pub fn load(path: &Path, is_raw: bool) -> Result<LinearImage> {
-    let image = if is_raw { load_raw(path) } else { load_rendered(path) };
+    let image = if is_raw { media::decoder_guard(|| load_raw(path)) } else { load_rendered(path) };
     image.with_context(|| format!("opening {} for editing", path.display()))
 }
 
@@ -114,6 +114,13 @@ fn orient<T: Copy>(width: usize, height: usize, pixels: Vec<T>, orientation: u16
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_decoder_that_panics_gives_an_error() {
+        let result: Result<()> = media::decoder_guard(|| panic!("index out of bounds"));
+        assert_eq!(format!("{:#}", result.unwrap_err()), "the decoder crashed");
+        assert_eq!(media::decoder_guard(|| Ok(7)).unwrap(), 7);
+    }
 
     #[test]
     fn orientation_moves_pixels_where_exif_says() {
