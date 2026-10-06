@@ -38,7 +38,7 @@ What is left to do on Tonality, grouped by kind of work. The list is not complet
   - [ ] Color range masks, picked from the photo.
   - [x] Subject and background masks found automatically.
   - [x] Sky masks found automatically, and objects selected by drawing a loop.
-  - [ ] Sky seen through tree canopies: the small sky model misses blown-out sky between branches.
+  - [x] Sky seen through tree canopies: the small sky model misses blown-out sky between branches.
   - [ ] Keyboard nudges for a mask's handles; painting while zoomed in can't pan.
 - [ ] **Spot removal.**
 - [ ] **Lens corrections and perspective.**

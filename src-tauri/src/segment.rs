@@ -1,12 +1,12 @@
 //! Finding parts of a photo with small segmentation models: its main
 //! subject, its sky, and the object inside a circle drawn on it.
 //!
-//! Each model (`models/README.md`) sees the photo squeezed to a few hundred
-//! pixels square and says how likely each pixel is to belong to what it
-//! looks for: U²-Netp for the subject and the sky, EfficientSAM for the
-//! object in a circle's box. That rough map is then fitted to the photo's
-//! own edges by a guided filter, so hair and branches are followed far more
-//! finely than the model's view allows.
+//! Each model (`models/README.md`) sees the photo squeezed to a square and
+//! says how likely each pixel is to belong to what it looks for: IS-Net for
+//! the subject, U²-Netp checked by a scene parser for the sky, EfficientSAM
+//! for the object in a circle's box. That rough map is then fitted to the
+//! photo's own edges by a guided filter, so hair and branches are followed
+//! far more finely than the model's view allows.
 //!
 //! A matte is worked out from the photo file alone, the right way up but
 //! before any edits, so it follows crops and turns like every other mask
@@ -28,9 +28,8 @@ use crate::edit::Shape;
 use crate::gpu::fit_within;
 use crate::masks::COVERAGE_EDGE;
 
-/// The normalisation both models were trained with (ImageNet's).
-const MEAN: [f32; 3] = [0.485, 0.456, 0.406];
-const DEVIATION: [f32; 3] = [0.229, 0.224, 0.225];
+/// ImageNet's colour normalisation, which most of the models were trained with.
+const IMAGENET: Normalise = Normalise { mean: [0.485, 0.456, 0.406], deviation: [0.229, 0.224, 0.225] };
 
 /// The long edge at which the guided filter works out how the matte follows
 /// the photo; the answer is then applied at the guide's full size.
@@ -52,12 +51,19 @@ const CIRCLE_REACH: f32 = 0.04;
 /// EfficientSAM sees the photo squeezed to this many pixels square.
 const SAM_INPUT: usize = 1024;
 
+/// How a model wants its input's colours: each channel, 0..1, less `mean` and over `deviation`.
+struct Normalise {
+    mean: [f32; 3],
+    deviation: [f32; 3],
+}
+
 /// One of the bundled models, and how its answer is read.
 struct Model {
     name: &'static str,
     onnx: &'static [u8],
     /// Its input, a square this many pixels a side.
     input: u32,
+    normalise: Normalise,
     /// Whether its answer is stretched to fill 0..1. The subject model's is,
     /// as its authors do: there is always a most likely subject. The sky
     /// model's is not: a photo may have no sky.
@@ -102,29 +108,60 @@ impl Grid {
     }
 }
 
-static SUBJECT: Model =
-    Model { name: "subject", onnx: include_bytes!("../models/u2netp.onnx"), input: 320, stretch: true, loaded: OnceLock::new() };
-static SKY: Model =
-    Model { name: "sky", onnx: include_bytes!("../models/u2netp_sky.onnx"), input: 384, stretch: false, loaded: OnceLock::new() };
+static SUBJECT: Model = Model {
+    name: "subject",
+    onnx: include_bytes!("../models/isnet_general_use.f16.onnx"),
+    input: 1024,
+    normalise: Normalise { mean: [0.5; 3], deviation: [1.0; 3] },
+    stretch: true,
+    loaded: OnceLock::new(),
+};
+static SKY: Model = Model {
+    name: "sky",
+    onnx: include_bytes!("../models/u2netp_sky.onnx"),
+    input: 384,
+    normalise: IMAGENET,
+    stretch: false,
+    loaded: OnceLock::new(),
+};
+/// The scene parser: how likely each part of the photo is to be each of
+/// ADE20K's 150 kinds of thing, on a grid an eighth of its input's size.
+static SCENE: Model = Model {
+    name: "sky",
+    onnx: include_bytes!("../models/ade20k_mobilenetv2.onnx"),
+    input: 512,
+    normalise: IMAGENET,
+    stretch: false,
+    loaded: OnceLock::new(),
+};
+/// The sky, among the scene parser's classes.
+const SCENE_SKY: usize = 2;
 
 /// Names the subject model and the way its answer is refined. Part of each
 /// cached matte's file name, so changing either finds every matte again.
-const SUBJECT_TAG: &str = "u2netp-2";
-const SKY_TAG: &str = "skyseg-1";
+const SUBJECT_TAG: &str = "isnet-1";
+const SKY_TAG: &str = "skyseg-ade-1";
 
 impl Model {
-    /// How likely each pixel of the model's square view of `picture` is to be what it finds, 0..1.
-    fn run(&'static self, picture: &RgbImage) -> Result<Grid> {
+    /// The model's answer for its square view of `picture`: its first output, and that output's shape.
+    fn answer(&'static self, picture: &RgbImage) -> Result<(Vec<f32>, Vec<usize>)> {
         let side = self.input as usize;
         let model = load(&self.loaded, self.name, self.onnx, vec![f32::fact([1, 3, side, side]).into()])?;
         let small = resize(picture, self.input, self.input)?;
+        let Normalise { mean, deviation } = self.normalise;
         let input: Tensor = tract_ndarray::Array4::from_shape_fn((1, 3, side, side), |(_, c, y, x)| {
-            (small.get_pixel(x as u32, y as u32)[c] as f32 / 255.0 - MEAN[c]) / DEVIATION[c]
+            (small.get_pixel(x as u32, y as u32)[c] as f32 / 255.0 - mean[c]) / deviation[c]
         })
         .into();
         let outputs = run(model, self.name, tvec!(input.into()))?;
         let view = outputs[0].to_plain_array_view::<f32>().map_err(|error| anyhow!("{error:#}"))?;
-        let mut values: Vec<f32> = view.iter().copied().collect();
+        Ok((view.iter().copied().collect(), view.shape().to_vec()))
+    }
+
+    /// How likely each pixel of the model's square view of `picture` is to be what it finds, 0..1.
+    fn run(&'static self, picture: &RgbImage) -> Result<Grid> {
+        let side = self.input as usize;
+        let (mut values, _) = self.answer(picture)?;
         if self.stretch {
             let (low, high) = values.iter().fold((f32::MAX, f32::MIN), |(lo, hi), &v| (lo.min(v), hi.max(v)));
             let span = (high - low).max(1e-6);
@@ -143,7 +180,7 @@ static SAM_ENCODER: Loaded = OnceLock::new();
 static SAM_DECODER: Loaded = OnceLock::new();
 const SAM_ENCODER_ONNX: &[u8] = include_bytes!("../models/efficient_sam_vitt_encoder.onnx");
 const SAM_DECODER_ONNX: &[u8] = include_bytes!("../models/efficient_sam_vitt_decoder.onnx");
-const OBJECT_TAG: &str = "esam-1";
+const OBJECT_TAG: &str = "esam-2";
 
 /// A photo as the models see it: small and in sRGB (`guide`), with what
 /// EfficientSAM makes of it kept once worked out, as that takes a few
@@ -219,7 +256,7 @@ impl Found {
     pub fn find(&self, picture: &Picture) -> Result<GrayImage> {
         match self {
             Found::Subject => SUBJECT.matte(&picture.guide),
-            Found::Sky => SKY.matte(&picture.guide),
+            Found::Sky => find_sky(&picture.guide),
             Found::Object(points) => find_object(picture, points),
         }
     }
@@ -240,7 +277,8 @@ impl Found {
 
 /// The picture the subject is found in: the photo in sRGB, at most
 /// `COVERAGE_EDGE` on its long side, averaged down from the working image.
-/// RAW files are shown as they were captured, clipped at the sensor's white.
+/// RAW files are given the editor's own look first: the models were trained
+/// on finished photos, and see too little in a RAW's dark, flat linear values.
 pub fn guide(image: &LinearImage) -> RgbImage {
     let (width, height) = fit_within(image.width, image.height, COVERAGE_EDGE.min(image.width.max(image.height)));
     let (sx, sy) = (image.width as f32 / width as f32, image.height as f32 / height as f32);
@@ -267,10 +305,114 @@ pub fn guide(image: &LinearImage) -> RgbImage {
                 }
             }
             let count = (lines.len() * columns.len()) as f32;
-            *out = sum.map(|v| encode(v / count));
+            let average = sum.map(|v| v / count);
+            *out = if image.scene_referred { base_look(average) } else { average }.map(encode);
         }
     });
     RgbImage::from_raw(width, height, bytes).expect("sized to fit")
+}
+
+/// The editor's built-in look for RAW files (`base_look` in develop.wgsl,
+/// with the fade of clipped colours to white before it): scene values to
+/// display-linear, the sensor's clipping point on white.
+fn base_look(c: [f32; 3]) -> [f32; 3] {
+    const EXPOSURE: f32 = 1.4;
+    const SATURATION: f32 = 1.05;
+    let curve = |x: f32| (x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14);
+    let peak = c[0].max(c[1]).max(c[2]);
+    let fade = smoothstep(0.82, 1.0, peak);
+    let toned = c.map(|v| (curve((v + (peak - v) * fade).max(0.0) * EXPOSURE) / curve(EXPOSURE)).clamp(0.0, 1.0));
+    let luma = 0.2126 * toned[0] + 0.7152 * toned[1] + 0.0722 * toned[2];
+    toned.map(|v| luma + (v - luma) * SATURATION)
+}
+
+fn smoothstep(low: f32, high: f32, x: f32) -> f32 {
+    let t = ((x - low) / (high - low)).clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
+}
+
+/// The sky in `guide`. The sky model follows its edges finely, but takes
+/// snow and white buildings against the sky for more of it, and misses the
+/// sky through leaves when it is blown out. The scene parser sees each
+/// part's place in the scene, but only on a coarse grid. So the sky model's
+/// answer is kept where the parser allows it, and where the sky model saw
+/// none, the parser's is taken, narrowed to what is as bright as the sky
+/// that is sure.
+fn find_sky(guide: &RgbImage) -> Result<GrayImage> {
+    let fine = SKY.run(guide)?;
+    let (classes, shape) = SCENE.answer(guide)?;
+    let cells = shape[3];
+    let plane = cells * cells;
+    // Closed, so a small cloud the parser wasn't sure of stays part of the sky around it.
+    let parsed = Grid { values: closing(&classes[SCENE_SKY * plane..(SCENE_SKY + 1) * plane], cells, 1), width: cells, height: cells };
+
+    let (width, height) = (fine.width, fine.height);
+    let at = |i: usize| (((i % width) as f32 + 0.5) / width as f32, ((i / width) as f32 + 0.5) / height as f32);
+    // Where the answer is the parser's alone: it sees sky and the sky model doesn't.
+    let alone: Vec<f32> = (0..width * height)
+        .map(|i| {
+            let (u, v) = at(i);
+            parsed.at(u, v) * (1.0 - fine.values[i] * 2.0).clamp(0.0, 1.0)
+        })
+        .collect();
+    let values = (0..width * height)
+        .map(|i| {
+            let (u, v) = at(i);
+            (fine.values[i] * smoothstep(SKY_ALLOWED.0, SKY_ALLOWED.1, parsed.at(u, v))).max(alone[i])
+        })
+        .collect();
+    let mut matte = refine(guide, &Grid { values, width, height });
+
+    let luma = |p: &image::Rgb<u8>| (0.2126 * p[0] as f32 + 0.7152 * p[1] as f32 + 0.0722 * p[2] as f32) / 255.0;
+    let mut sure: Vec<f32> = guide.pixels().zip(matte.pixels()).filter(|(_, m)| m[0] > 230).map(|(p, _)| luma(p)).collect();
+    if sure.len() < 64 {
+        return Ok(matte);
+    }
+    let middle = sure.len() / 2;
+    let reference = *sure.select_nth_unstable_by(middle, f32::total_cmp).1;
+    let (low, high) = (reference * SKY_BRIGHTNESS.0, (reference * SKY_BRIGHTNESS.1).max(reference * SKY_BRIGHTNESS.0 + 1e-3));
+    let alone = Grid { values: alone, width, height };
+    let (gw, gh) = guide.dimensions();
+    matte.par_chunks_mut(gw as usize).enumerate().for_each(|(y, row)| {
+        let v = (y as f32 + 0.5) / gh as f32;
+        for (x, m) in row.iter_mut().enumerate() {
+            let share = alone.at((x as f32 + 0.5) / gw as f32, v);
+            if share > 0.0 && *m > 0 {
+                let bright = smoothstep(low, high, luma(guide.get_pixel(x as u32, y as u32)));
+                *m = (*m as f32 * (1.0 - share + share * bright)).round() as u8;
+            }
+        }
+    });
+    Ok(matte)
+}
+
+/// The sky model's answer counts where the scene parser gives the sky at
+/// least the first of these, fully from the second. Snow it takes for sky
+/// is around 0.01..0.04, a cloud it isn't sure of 0.05 or more.
+const SKY_ALLOWED: (f32, f32) = (0.05, 0.3);
+/// Where only the scene parser sees sky, a pixel is none of it below the
+/// first of these shares of the sure sky's brightness, and all of it from
+/// the second.
+const SKY_BRIGHTNESS: (f32, f32) = (0.6, 0.85);
+
+/// `values` (a `size` x `size` grid) closed by a `(2r+1)²` square: holes and
+/// notches narrower than that are filled, and larger shapes are left alone.
+fn closing(values: &[f32], size: usize, radius: usize) -> Vec<f32> {
+    let rank = |values: &[f32], pick: fn(f32, f32) -> f32| -> Vec<f32> {
+        (0..size * size)
+            .map(|i| {
+                let (x, y) = (i % size, i / size);
+                let mut v = values[i];
+                for yy in y.saturating_sub(radius)..(y + radius + 1).min(size) {
+                    for xx in x.saturating_sub(radius)..(x + radius + 1).min(size) {
+                        v = pick(v, values[yy * size + xx]);
+                    }
+                }
+                v
+            })
+            .collect()
+    };
+    rank(&rank(values, f32::max), f32::min)
 }
 
 /// The object inside the circle `points` (0..1 on the photo): what
@@ -441,9 +583,7 @@ fn refine(guide: &RgbImage, likely: &Grid) -> GrayImage {
 
 /// `MATTE_LEVELS` applied to one value, with a smooth start and end.
 fn levels(q: f32) -> f32 {
-    let (low, high) = MATTE_LEVELS;
-    let t = ((q - low) / (high - low)).clamp(0.0, 1.0);
-    t * t * (3.0 - 2.0 * t)
+    smoothstep(MATTE_LEVELS.0, MATTE_LEVELS.1, q)
 }
 
 /// `s · a = b` for a symmetric 3 x 3 `s`, by Cramer's rule.
@@ -649,5 +789,35 @@ mod tests {
         assert_eq!(guide.dimensions(), (COVERAGE_EDGE, 2));
         // Linear 0.2 is about 124 in sRGB.
         assert!(guide.pixels().all(|p| (p[0] as i32 - 124).abs() <= 1), "{:?}", guide.get_pixel(0, 0));
+    }
+
+    #[test]
+    fn a_raw_guide_has_the_editors_look() {
+        // Mid grey off the sensor is shown well above mid grey, as the editor shows it.
+        let guide = guide(&LinearImage { width: 8, height: 8, pixels: vec![[0.18; 3]; 64], scene_referred: true });
+        assert!(guide.pixels().all(|p| (p[0] as i32 - 176).abs() <= 2), "{:?}", guide.get_pixel(0, 0));
+        // The sensor's clipping point is white, and a clipped colour fades to it.
+        let guide = super::guide(&LinearImage { width: 8, height: 8, pixels: vec![[1.0, 0.7, 0.6]; 64], scene_referred: true });
+        assert!(guide.get_pixel(0, 0).0.iter().all(|&v| v == 255), "{:?}", guide.get_pixel(0, 0));
+    }
+
+    #[test]
+    fn closing_fills_a_small_hole_and_leaves_a_wide_shape() {
+        // A 10 x 10 grid of sky with a one-cell hole near the top, and a
+        // block four cells wide rising into it from the bottom.
+        let size = 10;
+        let values: Vec<f32> = (0..size * size)
+            .map(|i| {
+                let (x, y) = (i % size, i / size);
+                if (x, y) == (5, 2) || (3..7).contains(&x) && y >= 6 { 0.0 } else { 1.0 }
+            })
+            .collect();
+        let closed = closing(&values, size, 1);
+        assert_eq!(closed[2 * size + 5], 1.0, "the hole");
+        for y in 6..size {
+            for x in 3..7 {
+                assert_eq!(closed[y * size + x], 0.0, "the block at {x},{y}");
+            }
+        }
     }
 }
