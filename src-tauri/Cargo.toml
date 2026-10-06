@@ -1,8 +1,10 @@
 [package]
 name = "tonality"
 version = "0.1.0"
-description = "A raw photo editor"
-authors = ["you"]
+description = "A RAW photo editor and library with a lot of power behind a simple interface"
+authors = ["Coby Mckinney"]
+license = "GPL-3.0-or-later"
+repository = "https://github.com/cobysmckinney/tonality"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html

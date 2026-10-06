@@ -1,0 +1,22 @@
+name: Idea or feature request
+description: Something Tonality should do, or do better
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do?
+      description: The photo problem or the job you want done, before any particular control or solution.
+      placeholder: I shoot weddings and want to give a whole set the same warm look quickly.
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would help?
+      description: How you picture it working. If another app does it well, say which and how.
+  - type: textarea
+    id: simple
+    attributes:
+      label: How would someone new find it?
+      description: Tonality tries to stay simple. How would this fit without adding clutter?
