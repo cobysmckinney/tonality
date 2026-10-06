@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { Adjustments, defaultAdjustments, Point } from "./adjustments";
-import { apply, frameToSource, newMask, newShape, screenMap } from "./masks";
+import { apply, canAdd, circleShape, foundCount, frameToSource, MAX_FOUND, newMask, newShape, screenMap } from "./masks";
 
 const photo = { width: 300, height: 200 };
 const edited = (change: Partial<Adjustments>): Adjustments => ({ ...defaultAdjustments(), ...change });
@@ -75,5 +75,33 @@ describe("new masks", () => {
     const second = newMask([first, { ...first, id: 5, name: "Mask 2" }], "radial", photo, defaultAdjustments());
     expect([first.id, first.name]).toEqual([1, "Mask 1"]);
     expect([second.id, second.name]).toEqual([6, "Mask 3"]);
+  });
+
+  test("the subject and the background start from the same found subject", () => {
+    expect(newShape("subject", photo, defaultAdjustments())).toEqual({ kind: "subject" });
+    const subject = newMask([], "subject", photo, defaultAdjustments());
+    const background = newMask([subject], "background", photo, defaultAdjustments());
+    expect([subject.name, subject.invert]).toEqual(["Subject", false]);
+    expect([background.name, background.invert]).toEqual(["Background", true]);
+    expect(background.parts).toEqual([{ mode: "add", shape: { kind: "subject" } }]);
+    expect(newMask([subject, background], "subject", photo, defaultAdjustments()).name).toBe("Subject 2");
+  });
+
+  test("a circle is kept short, and found parts have a limit of their own", () => {
+    const loop = Array.from({ length: 500 }, (_, i) => [0.5 + 0.2 * Math.cos(i / 80), 0.5 + 0.2 * Math.sin(i / 80)] as Point);
+    const shape = circleShape(loop);
+    expect(shape.kind).toBe("object");
+    expect(shape.kind === "object" && shape.points.length).toBeLessThanOrEqual(160);
+    expect(newMask([], "sky", photo, defaultAdjustments()).name).toBe("Sky");
+
+    const objects = Array.from({ length: MAX_FOUND }, (_, i) =>
+      newMask([], "object", photo, defaultAdjustments(), { kind: "object", points: [[i / 10, 0], [0.5, 0.5], [0, 0.5]] }),
+    ).map((mask, i) => ({ ...mask, id: i + 1 }));
+    expect(canAdd(objects, "object")).toBe(false);
+    expect(canAdd(objects, "linear")).toBe(true);
+    // The subject twice counts once.
+    const subjects = [newMask([], "subject", photo, defaultAdjustments()), newMask([], "background", photo, defaultAdjustments())];
+    expect(foundCount(subjects)).toBe(1);
+    expect(canAdd(subjects, "subject")).toBe(true);
   });
 });

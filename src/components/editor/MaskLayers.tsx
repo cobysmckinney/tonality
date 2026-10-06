@@ -8,7 +8,7 @@ import { menuBelow } from "../Toolbar";
 import { SHAPE_ICONS } from "./MasksPanel";
 import { NameInput } from "./NameInput";
 
-const KINDS: Shape["kind"][] = ["brush", "linear", "radial", "luminance"];
+const KINDS: Shape["kind"][] = ["subject", "sky", "object", "brush", "linear", "radial", "luminance"];
 /** How a part's mode reads in front of its name, for the parts after the first. */
 const MODE_MARKS: Record<MaskMode, string> = { add: "+", subtract: "−", intersect: "∩" };
 /** Thumbnails are drawn this big along the frame's long side, for sharp 36-pixel squares on scaled screens. */
@@ -24,14 +24,15 @@ function useMattes(): Map<number, ImageData> {
   const photoId = useStore((s) => s.editor.photoId);
   const ready = useStore((s) => s.editor.ready);
   const adjustments = useStore((s) => s.editor.adjustments);
-  const [mattes, setMattes] = useState(new Map<number, ImageData>());
+  // Kept with the photo they were drawn for: another photo's masks can have the same ids.
+  const [mattes, setMattes] = useState({ photoId, pictures: new Map<number, ImageData>() });
   useEffect(() => {
     if (!ready || photoId === null || adjustments.masks.length === 0) return;
     let current = true;
     const timer = setTimeout(async () => {
       try {
         const pictures = await api.maskMattes(photoId, adjustments, MATTE_EDGE);
-        if (current) setMattes(new Map(adjustments.masks.map((mask, i) => [mask.id, pictures[i]])));
+        if (current) setMattes({ photoId, pictures: new Map(adjustments.masks.map((mask, i) => [mask.id, pictures[i]])) });
       } catch {
         // The photo was closed meanwhile; the next one draws its own.
       }
@@ -41,8 +42,10 @@ function useMattes(): Map<number, ImageData> {
       clearTimeout(timer);
     };
   }, [photoId, ready, adjustments]);
-  return mattes;
+  return mattes.photoId === photoId ? mattes.pictures : NO_MATTES;
 }
+
+const NO_MATTES = new Map<number, ImageData>();
 
 function Matte({ pixels }: { pixels: ImageData | undefined }) {
   const canvas = useRef<HTMLCanvasElement>(null);
@@ -96,6 +99,8 @@ function PartRow(props: { mask: Mask; part: MaskPart; index: number; selected: b
 function Layer(props: { mask: Mask; matte: ImageData | undefined; selected: boolean; partIndex: number | null }) {
   const { mask, matte, selected, partIndex } = props;
   const masks = useStore((s) => s.editor.adjustments.masks);
+  const finding = useStore((s) => s.editor.finding !== null);
+  const circling = useStore((s) => s.editor.circling !== null);
   const [renaming, setRenaming] = useState(false);
   const s = useStore.getState();
 
@@ -166,17 +171,27 @@ function Layer(props: { mask: Mask; matte: ImageData | undefined; selected: bool
               <PartRow key={index} mask={mask} part={part} index={index} selected={index === partIndex} />
             ))}
           </ul>
-          <div className="layer-actions">
-            <button className="button quiet" onClick={partMenu("add")}>
-              Add
-            </button>
-            <button className="button quiet" onClick={partMenu("subtract")}>
-              Subtract
-            </button>
-            <button className="button quiet" onClick={partMenu("intersect")}>
-              Intersect
-            </button>
-          </div>
+          {circling && !finding ? (
+            <div className="layer-actions">
+              <span className="layer-note">Draw a loop on the photo</span>
+              <button className="button quiet" onClick={() => s.cancelCircle()}>
+                Cancel
+              </button>
+            </div>
+          ) : (
+            <div className="layer-actions" aria-busy={finding}>
+              <button className="button quiet" disabled={finding} onClick={partMenu("add")}>
+                Add
+              </button>
+              <button className="button quiet" disabled={finding} onClick={partMenu("subtract")}>
+                Subtract
+              </button>
+              <button className="button quiet" disabled={finding} onClick={partMenu("intersect")}>
+                Intersect
+              </button>
+              {finding && <span className="spinner" />}
+            </div>
+          )}
         </>
       )}
     </li>

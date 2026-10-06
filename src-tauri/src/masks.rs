@@ -4,13 +4,16 @@
 //! to work out for every pixel as it draws. Brush strokes are not: they are
 //! painted here into a coverage map, one for each brush part, which the
 //! shader reads like a picture. While you paint, only the newest part of the
-//! stroke is painted again.
+//! stroke is painted again. The subject, the sky and circled objects are
+//! read like pictures too, ones found by a model (`segment`) rather than
+//! painted.
 
 use std::ops::Range;
 
 use rayon::prelude::*;
 
 use crate::edit::{LocalAdjustments, Mask, Mode, Shape, Stroke};
+use crate::segment::Found;
 
 /// The most masks a recipe can use; any more are left out of the picture.
 pub const MAX_MASKS: usize = 8;
@@ -18,6 +21,9 @@ pub const MAX_MASKS: usize = 8;
 pub const MAX_PARTS: usize = 32;
 /// The most brush parts all the masks together can have: one coverage map each.
 pub const MAX_BRUSHES: usize = 8;
+/// The most different found parts (subject, sky, circled objects) all the
+/// masks together can have: one matte each.
+pub const MAX_FOUND: usize = 8;
 /// The long edge of a coverage map, in its own pixels.
 pub const COVERAGE_EDGE: u32 = 3072;
 
@@ -46,6 +52,20 @@ const BRUSH: f32 = 1.0;
 const LINEAR: f32 = 2.0;
 const RADIAL: f32 = 3.0;
 const LUMINANCE: f32 = 4.0;
+const FOUND: f32 = 5.0;
+
+/// The found parts the shader will draw, each once, in the order of their mattes.
+pub fn found(masks: &[Mask]) -> Vec<Found> {
+    let mut found: Vec<Found> = Vec::new();
+    for part in masks.iter().take(MAX_MASKS).flat_map(|mask| &mask.parts).take(MAX_PARTS) {
+        if let Some(part) = Found::of(&part.shape) {
+            if !found.contains(&part) && found.len() < MAX_FOUND {
+                found.push(part);
+            }
+        }
+    }
+    found
+}
 
 /// A mask's sliders in the units the shader works in: stops for exposure,
 /// -1..1 for the rest. Laid out like the photo's own.
@@ -61,10 +81,12 @@ fn local_rows(a: &LocalAdjustments) -> [[f32; 4]; 4] {
 
 /// Lays masks out for the shader, for a photo `width` x `height` (any scale).
 /// `overlay` names the mask whose coverage should be shown in red. Returns
-/// the strokes of each brush part too, in the order of their coverage maps.
-pub fn pack(masks: &[Mask], width: u32, height: u32, overlay: Option<u32>) -> (Packed, Vec<&[Stroke]>) {
+/// the strokes of each brush part too, in the order of their coverage maps,
+/// and the found parts in the order of their mattes (`found`).
+pub fn pack(masks: &[Mask], width: u32, height: u32, overlay: Option<u32>) -> (Packed, Vec<&[Stroke]>, Vec<Found>) {
     let mut packed = Packed::default();
     let mut brushes = Vec::new();
+    let found = found(masks);
     let long = width.max(height).max(1) as f32;
     // Shapes are measured in shares of the long side, both ways, so that
     // circles stay round on a photo that isn't square.
@@ -114,6 +136,11 @@ pub fn pack(masks: &[Mask], width: u32, height: u32, overlay: Option<u32>) -> (P
                     [low.clamp(0.0, 1.0), high.clamp(0.0, 1.0), smoothness.clamp(0.0, 1.0), 0.0],
                     [0.0; 4],
                 ],
+                Shape::Subject | Shape::Sky | Shape::Object { .. } => {
+                    let part = Found::of(&part.shape).expect("a found part");
+                    let Some(layer) = found.iter().position(|f| *f == part) else { continue };
+                    [[FOUND, mode, index as f32, layer as f32], [0.0; 4], [0.0; 4]]
+                }
             };
             packed.parts[parts] = row;
             parts += 1;
@@ -121,7 +148,7 @@ pub fn pack(masks: &[Mask], width: u32, height: u32, overlay: Option<u32>) -> (P
         packed.counts[0] = (index + 1) as f32;
     }
     packed.counts[1] = parts as f32;
-    (packed, brushes)
+    (packed, brushes, found)
 }
 
 /// The strokes of one brush part, painted: how much of each pixel they cover, 0..1.
@@ -325,7 +352,7 @@ mod tests {
             },
             Mask { id: 9, visible: false, invert: true, parts: vec![MaskPart { mode: Mode::Intersect, shape: Shape::Luminance { low: 0.2, high: 0.8, smoothness: 0.1 } }], ..Default::default() },
         ];
-        let (packed, brushes) = pack(&masks, 300, 200, Some(9));
+        let (packed, brushes, _) = pack(&masks, 300, 200, Some(9));
         assert_eq!(packed.counts, [2.0, 3.0, 1.0, 0.0]);
         assert_eq!(packed.masks[0][0], [1.5, 0.5, 0.0, 0.0]);
         assert_eq!(packed.masks[0][4], [0.0, 1.0, 0.0, 0.0]);
@@ -336,5 +363,25 @@ mod tests {
         assert_eq!(packed.parts[1][0], [BRUSH, 1.0, 0.0, 0.0]);
         assert_eq!(packed.parts[2][0], [LUMINANCE, 2.0, 1.0, 0.0]);
         assert_eq!(brushes.len(), 1);
+    }
+
+    #[test]
+    fn found_parts_read_from_json_and_share_a_matte_when_they_are_the_same() {
+        let parts: Vec<MaskPart> = serde_json::from_str(
+            r#"[{"mode":"subtract","shape":{"kind":"subject"}},
+                {"mode":"add","shape":{"kind":"sky"}},
+                {"mode":"intersect","shape":{"kind":"object","points":[[0.1,0.1],[0.4,0.1],[0.2,0.4]]}},
+                {"mode":"add","shape":{"kind":"subject"}}]"#,
+        )
+        .unwrap();
+        assert_eq!(parts[1].shape, Shape::Sky);
+        let masks = vec![Mask { parts, ..Default::default() }];
+        let (packed, brushes, found) = pack(&masks, 300, 200, None);
+        assert_eq!(found.len(), 3, "the subject is found once");
+        assert_eq!(packed.parts[0][0], [FOUND, 1.0, 0.0, 0.0]);
+        assert_eq!(packed.parts[1][0], [FOUND, 0.0, 0.0, 1.0]);
+        assert_eq!(packed.parts[2][0], [FOUND, 2.0, 0.0, 2.0]);
+        assert_eq!(packed.parts[3][0], [FOUND, 0.0, 0.0, 0.0]);
+        assert!(brushes.is_empty());
     }
 }

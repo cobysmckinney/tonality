@@ -46,7 +46,13 @@ export type Shape =
   /** An ellipse fading out over its outer `feather` (0..1) share. */
   | { kind: "radial"; center: Point; radius: [number, number]; angle: number; feather: number }
   /** Parts of the photo within a range of brightness, 0 black to 1 white. */
-  | { kind: "luminance"; low: number; high: number; smoothness: number };
+  | { kind: "luminance"; low: number; high: number; smoothness: number }
+  /** The photo's main subject, found by the backend's model; each photo finds its own. */
+  | { kind: "subject" }
+  /** The photo's sky, found the same way. */
+  | { kind: "sky" }
+  /** The object inside a circle drawn on the photo: the circle's outline, closed. */
+  | { kind: "object"; points: Point[] };
 
 /** How a part combines with the parts before it. */
 export type MaskMode = "add" | "subtract" | "intersect";

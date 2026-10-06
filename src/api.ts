@@ -1,5 +1,5 @@
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
-import type { Adjustments } from "./adjustments";
+import type { Adjustments, Shape } from "./adjustments";
 import type { Preset, PresetSettings } from "./presets";
 
 export type View =
@@ -302,6 +302,10 @@ export const api = {
         return pixels;
       });
     }),
+  /** Finds what these parts pick out of the open photo (subject, sky, circled object), so masks can use them. */
+  findParts: (id: number, shapes: Shape[]) => invoke<void>("find_parts", { id, shapes }),
+  /** Starts the object model's first look at the open photo, so a circle being drawn is answered quickly. */
+  prepareCircles: (id: number) => invoke<void>("prepare_circles", { id }),
   /** Redraws thumbnails to match the photos' current edits; returns each photo's new version. */
   refreshRendered: (ids: number[]) => invoke<number[]>("refresh_rendered", { ids }),
   /**

@@ -8,13 +8,14 @@ use std::sync::{Arc, Mutex};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
 
-use crate::edit::Adjustments;
+use crate::edit::{Adjustments, Shape};
 use crate::export;
 use crate::gpu::{self, Region, Session};
 use crate::history::History;
 use crate::import::{self, ImportSummary, ScanSession, ScanView};
 use crate::library::{Library, Overview, PhotoInfo, PhotoItem, View};
 use crate::presets::{self, ImportedPresets, Preset, Settings};
+use crate::segment::Found;
 use crate::thumbs;
 use crate::volumes::{self, Volume};
 
@@ -217,10 +218,74 @@ pub async fn open_editor(app: AppHandle, id: i64) -> CommandResult<EditorPhoto> 
         if !matches!(&*editing, Some((open, _)) if *open == id) {
             // Let go of the previous photo first; two at once is a lot of memory.
             *editing = None;
-            *editing = Some((id, thumbs::open_session(&state.library, id).map_err(message)?));
+            let session = thumbs::open_session(&state.library, id).map_err(message)?;
+            // Have found parts ready before the first frame needs them; usually a quick read of the cache.
+            let adjustments = Adjustments::from_json(state.library.edits(id).map_err(message)?.as_deref());
+            let found = crate::masks::found(&adjustments.masks);
+            gpu::shared().map_err(message)?.ensure_found(&session, &found).map_err(message)?;
+            *editing = Some((id, session));
         }
         let (_, session) = editing.as_ref().expect("just opened");
         Ok(EditorPhoto { width: session.width, height: session.height, history })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Gets the open photo ready for circles to be drawn on it: the object
+/// model's first look at a photo takes a few seconds, and is kept.
+#[tauri::command]
+pub async fn prepare_circles(app: AppHandle, id: i64) -> CommandResult<()> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        let picture = {
+            let editing = state.editing.lock().unwrap();
+            let (_, session) = editing.as_ref().filter(|(open, _)| *open == id).ok_or("This photo is no longer open in the editor.")?;
+            session.picture()
+        };
+        picture.prepare_circles().map_err(message)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Finds what these mask parts pick out of the open photo (its subject, its
+/// sky, a circled object), so masks can use them. A second or two each the
+/// first time; after that each is kept. Parts drawn by hand are passed over.
+#[tauri::command]
+pub async fn find_parts(app: AppHandle, id: i64, shapes: Vec<Shape>) -> CommandResult<()> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        let closed = || "This photo is no longer open in the editor.".to_string();
+        // The models run without holding the editor, so frames keep coming meanwhile.
+        let (picture, wanted) = {
+            let editing = state.editing.lock().unwrap();
+            let (_, session) = editing.as_ref().filter(|(open, _)| *open == id).ok_or_else(closed)?;
+            let wanted: Vec<_> = shapes
+                .iter()
+                .filter_map(Found::of)
+                .filter(|found| !session.has_matte(found))
+                .map(|found| {
+                    let path = session.matte_path(&found);
+                    (found, path)
+                })
+                .collect();
+            if wanted.is_empty() {
+                return Ok(());
+            }
+            (session.picture(), wanted)
+        };
+        let mattes = wanted
+            .into_iter()
+            .map(|(found, path)| Ok((found.find_cached(&picture, path.as_deref())?, found)))
+            .collect::<anyhow::Result<Vec<_>>>()
+            .map_err(message)?;
+        let editing = state.editing.lock().unwrap();
+        let (_, session) = editing.as_ref().filter(|(open, _)| *open == id).ok_or_else(closed)?;
+        for (matte, found) in mattes {
+            session.set_matte(&found, matte);
+        }
+        Ok(())
     })
     .await
     .map_err(|e| e.to_string())?

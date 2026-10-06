@@ -1,18 +1,30 @@
 import { ReactNode, useState } from "react";
-import { ChevronDown, CircleDashed, Paintbrush, Rows3, SunMedium } from "lucide-react";
-import { LABELS, LocalKey, Mask, MaskPart, noLocalAdjustments, rangeOf, Shape } from "../../adjustments";
-import { canAdd, describeLocal, MAX_MASKS, SHAPE_NAMES, tidy } from "../../masks";
+import { ChevronDown, CircleDashed, Cloud, LassoSelect, Mountain, Paintbrush, Rows3, SunMedium, User } from "lucide-react";
+import { LABELS, LocalKey, Mask, MaskPart, noLocalAdjustments, rangeOf } from "../../adjustments";
+import { canAdd, describeLocal, MaskStart, MAX_MASKS, SHAPE_NAMES, startKind, tidy } from "../../masks";
 import { useStore } from "../../store";
 import { Slider } from "./Slider";
 
-export const SHAPE_ICONS = { brush: Paintbrush, linear: Rows3, radial: CircleDashed, luminance: SunMedium };
+export const SHAPE_ICONS = {
+  brush: Paintbrush,
+  linear: Rows3,
+  radial: CircleDashed,
+  luminance: SunMedium,
+  subject: User,
+  sky: Cloud,
+  object: LassoSelect,
+};
 
 /** The ways to start a mask, in words someone new to masks can choose between. */
-const KINDS: { kind: Shape["kind"]; about: string }[] = [
-  { kind: "brush", about: "Paint over the part you want to change." },
-  { kind: "linear", about: "Fade a change across the photo, like darkening a sky." },
-  { kind: "radial", about: "A soft oval, to lift a face or draw the eye." },
-  { kind: "luminance", about: "Only the darkest or brightest parts of the photo." },
+const STARTS: { start: MaskStart; about: string }[] = [
+  { start: "subject", about: "The person or thing the photo is of, found for you." },
+  { start: "background", about: "Everything but the subject." },
+  { start: "sky", about: "The sky, found for you." },
+  { start: "object", about: "Draw a loop around something on the photo, and its outline is found for you." },
+  { start: "brush", about: "Paint over the part you want to change." },
+  { start: "linear", about: "Fade a change across the photo, like darkening a sky." },
+  { start: "radial", about: "A soft oval, to lift a face or draw the eye." },
+  { start: "luminance", about: "Only the darkest or brightest parts of the photo." },
 ];
 
 /** A mask's sliders, grouped as in the adjust panel. */
@@ -28,8 +40,24 @@ const committedMask = (id: number) => useStore.getState().editor.committed.masks
 /** Starting a mask: one choice for each way of picking out part of the photo. */
 function CreateMask({ another }: { another: boolean }) {
   const masks = useStore((s) => s.editor.adjustments.masks);
+  const finding = useStore((s) => s.editor.finding);
+  const circling = useStore((s) => s.editor.circling);
+  const [chosen, setChosen] = useState<MaskStart | null>(null);
   const s = useStore.getState();
   const full = masks.length >= MAX_MASKS;
+  if (circling && circling.mode === null && !finding) {
+    return (
+      <div className="mask-create">
+        <p className="panel-hint">Draw a loop around the thing you want on the photo. It needn’t be neat: the outline is found for you.</p>
+        <div className="part-footer">
+          <p className="panel-hint">Esc cancels.</p>
+          <button className="button quiet" onClick={() => s.cancelCircle()}>
+            Cancel
+          </button>
+        </div>
+      </div>
+    );
+  }
   return (
     <div className="mask-create">
       <p className="panel-hint">
@@ -40,14 +68,25 @@ function CreateMask({ another }: { another: boolean }) {
             : "Change one part of the photo on its own. Choose how to pick it out:"}
       </p>
       <div className="create-list">
-        {KINDS.map(({ kind, about }) => {
-          const Icon = SHAPE_ICONS[kind];
+        {STARTS.map(({ start, about }) => {
+          const kind = startKind(start);
+          const Icon = start === "background" ? Mountain : SHAPE_ICONS[kind];
+          const waiting = finding !== null && chosen === start;
           return (
-            <button key={kind} className="create-kind" disabled={full || !canAdd(masks, kind)} onClick={() => s.addMask(kind)}>
-              <Icon size={18} strokeWidth={1.6} />
+            <button
+              key={start}
+              className="create-kind"
+              disabled={full || finding !== null || !canAdd(masks, kind)}
+              aria-busy={waiting}
+              onClick={() => {
+                setChosen(start);
+                s.addMask(start);
+              }}
+            >
+              {waiting ? <span className="spinner" /> : <Icon size={18} strokeWidth={1.6} />}
               <span>
-                <strong>{SHAPE_NAMES[kind]}</strong>
-                <span>{about}</span>
+                <strong>{start === "background" ? "Background" : start === "object" ? "Select object" : SHAPE_NAMES[kind]}</strong>
+                <span>{waiting ? `Finding ${finding}…` : about}</span>
               </span>
             </button>
           );
@@ -103,6 +142,28 @@ function PartSettings({ mask, part, index }: { mask: Mask; part: MaskPart; index
             onClick={() => s.updateMaskPart(index, { ...part, shape: { kind: "brush", strokes: [] } }, `${mask.name}: clear brush`)}
           >
             Clear
+          </button>
+        </div>
+      </Group>
+    );
+  }
+  if (shape.kind === "subject" || shape.kind === "sky") {
+    return (
+      <Group title={title}>
+        <p className="panel-hint">
+          Found for you, and found again on each photo these edits are pasted onto. To tidy it, subtract a brush or intersect a gradient.
+        </p>
+      </Group>
+    );
+  }
+  if (shape.kind === "object") {
+    return (
+      <Group title={title}>
+        <p className="panel-hint">Found inside the loop you drew. To pick out something else, draw another.</p>
+        <div className="part-footer">
+          <span />
+          <button className="button quiet" onClick={() => s.startCircle({ mode: part.mode, replace: index })}>
+            Draw again
           </button>
         </div>
       </Group>

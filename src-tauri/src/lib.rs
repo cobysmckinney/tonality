@@ -10,6 +10,7 @@ pub mod library;
 pub mod masks;
 pub mod media;
 pub mod presets;
+pub mod segment;
 pub mod thumbs;
 pub mod volumes;
 
@@ -143,6 +144,8 @@ pub fn run() {
             commands::close_editor,
             commands::render_frame,
             commands::mask_mattes,
+            commands::find_parts,
+            commands::prepare_circles,
             commands::refresh_rendered,
             commands::apply_edits,
             commands::cancel_edits,

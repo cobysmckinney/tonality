@@ -6,7 +6,7 @@
 //!   Originals/2026/2026-10-04/IMG_0001.CR3
 //!   Exports/IMG_0001.jpg                      (unless another folder is chosen)
 //!   .tonality/library.db
-//!   .tonality/thumbs/…   .tonality/previews/…
+//!   .tonality/thumbs/…   .tonality/previews/…   .tonality/mattes/…
 //! ```
 
 use std::collections::HashMap;
@@ -278,6 +278,12 @@ impl Library {
 
     pub fn preview_path(&self, id: i64) -> PathBuf {
         self.root.join(format!(".tonality/previews/{:02x}/{id}.jpg", id & 0xff))
+    }
+
+    /// Where the photo's found mattes are kept (`segment`): the start of
+    /// their file names, which go on with each matte's key.
+    pub fn matte_files(&self, id: i64) -> PathBuf {
+        self.root.join(format!(".tonality/mattes/{:02x}/{id}-", id & 0xff))
     }
 
     // ---- settings ----
@@ -571,6 +577,14 @@ impl Library {
             }
             let _ = fs::remove_file(self.thumb_path(*id));
             let _ = fs::remove_file(self.preview_path(*id));
+            let start = self.matte_files(*id);
+            if let (Some(dir), Some(prefix)) = (start.parent(), start.file_name().and_then(|n| n.to_str())) {
+                for file in fs::read_dir(dir).into_iter().flatten().flatten() {
+                    if file.file_name().to_str().is_some_and(|name| name.starts_with(prefix)) {
+                        let _ = fs::remove_file(file.path());
+                    }
+                }
+            }
         }
         Ok(doomed.len() as u32)
     }

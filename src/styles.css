@@ -903,6 +903,17 @@ button {
 .mask-paint {
   fill: transparent;
 }
+/* Drawing a loop around an object: the rest of the photo dims once the loop is drawn. */
+.mask-overlay.circling {
+  cursor: crosshair;
+}
+.mask-overlay.finding {
+  cursor: progress;
+}
+.circle-shade {
+  fill: rgb(0 0 0 / 0.35);
+  pointer-events: none;
+}
 .mask-line {
   fill: none;
   stroke: rgb(255 255 255 / 0.9);
@@ -1830,6 +1841,13 @@ button {
   margin-top: 1px;
   color: var(--muted);
 }
+/* In place of the icon while the subject is found; the same 18px box. */
+.create-kind .spinner {
+  margin: 4px 3px 0;
+}
+.create-kind[aria-busy="true"] {
+  opacity: 1;
+}
 .create-kind > span {
   display: flex;
   flex-direction: column;
@@ -2037,8 +2055,17 @@ button.mode-mark:hover {
 }
 .layer-actions {
   display: flex;
+  align-items: center;
   gap: 2px;
   padding: 4px 6px 6px 30px;
+}
+.layer-actions .spinner {
+  margin-left: 6px;
+}
+.layer-note {
+  padding: 0 8px;
+  color: var(--muted);
+  font-size: 12px;
 }
 .layer-actions .button {
   height: 24px;

@@ -535,8 +535,9 @@ export function Editor({ photo, inert }: { photo: Photo; inert: boolean }) {
         const next = list[list.findIndex((p) => p.id === open) + (key === "ArrowLeft" ? -1 : 1)];
         if (next) state.openPhoto(next.id);
       } else if (key === "Escape" || (key === "Enter" && state.sidePanel === "crop" && !target.closest("button"))) {
-        // Escape backs out one level at a time: off a slider, out of the crop or mask tools, out of the photo.
+        // Escape backs out one level at a time: off a slider, out of a circle being drawn, out of the crop or mask tools, out of the photo.
         if (onSlider) target.blur();
+        else if (state.editor.circling && !state.editor.finding) state.cancelCircle();
         else if (state.sidePanel === "crop" || state.sidePanel === "masks") state.setSidePanel("adjust");
         else state.closePhoto();
       } else if (key === "\\") state.setShowOriginal(true);

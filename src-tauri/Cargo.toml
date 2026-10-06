@@ -38,6 +38,9 @@ wgpu = "30.0.1"
 pollster = "1.0.1"
 half = { version = "2.7.1", features = ["bytemuck"] }
 bytemuck = { version = "1.25.2", features = ["derive"] }
+# The subject model runs on the CPU in pure Rust, so mobile builds need no native runtime.
+tract-onnx = "0.23.8"
+tract-linalg = { version = "0.23.8", features = ["multithread-mm"] }
 
 
 [features]

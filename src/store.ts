@@ -11,6 +11,7 @@ import {
   Mask,
   MaskMode,
   MaskPart,
+  Point,
   sameAdjustments,
   Shape,
 } from "./adjustments";
@@ -33,7 +34,7 @@ import {
   Volume,
 } from "./api";
 import { plural } from "./format";
-import { canAdd, MAX_MASKS, newMask, newShape, SHAPE_NAMES } from "./masks";
+import { canAdd, circleShape, foundShapes, isFound, MaskStart, MAX_MASKS, newMask, newShape, SHAPE_NAMES, startKind } from "./masks";
 import { blend, holds, Preset, settingsFrom } from "./presets";
 
 export type Filter = "all" | "picks" | "unrejected" | "rejects";
@@ -142,6 +143,15 @@ export interface EditorState {
   partIndex: number | null;
   /** Whether the mask being worked on is tinted on the photo. */
   showMask: boolean;
+  /** What the backend is looking for in the photo, for a mask to use ("the subject"), while it does. */
+  finding: string | null;
+  /**
+   * Drawing a circle on the photo, for its object to be found: to start a
+   * new mask (`mode` null), to add to the mask being worked on, or to
+   * `replace` one of its parts. `points` holds the finished circle while
+   * the object is found.
+   */
+  circling: { mode: MaskMode | null; replace?: number; points?: Point[] } | null;
   histogram: Uint32Array | null;
   highlightsClipped: boolean;
   shadowsClipped: boolean;
@@ -161,6 +171,8 @@ const idleEditor: EditorState = {
   maskId: null,
   partIndex: null,
   showMask: true,
+  finding: null,
+  circling: null,
   histogram: null,
   highlightsClipped: false,
   shadowsClipped: false,
@@ -236,10 +248,19 @@ interface State {
 
   /** Replaces the open photo's masks, live; with a label the change is also a step in the history. */
   setMasks: (masks: Mask[], label?: string) => void;
-  /** Starts a mask holding one part of this kind, and works on it. */
-  addMask: (kind: Shape["kind"]) => void;
-  /** Adds a part to the mask being worked on. */
-  addMaskPart: (kind: Shape["kind"], mode: MaskMode) => void;
+  /**
+   * Starts a mask holding one part of this kind (or the background), and
+   * works on it. An object needs a circle drawn first: without one
+   * (`drawn`), drawing it begins.
+   */
+  addMask: (start: MaskStart, drawn?: Shape) => void;
+  /** Adds a part to the mask being worked on; an object, as `addMask`. */
+  addMaskPart: (kind: Shape["kind"], mode: MaskMode, drawn?: Shape) => void;
+  /** Begins drawing a circle on the photo, for its object to be found. */
+  startCircle: (circling: NonNullable<EditorState["circling"]>) => void;
+  cancelCircle: () => void;
+  /** Takes the circle drawn (points on the photo file) and finds the object in it. */
+  finishCircle: (points: Point[]) => void;
   /** Changes a mask; with a label the change is also a step in the history. */
   updateMask: (id: number, change: Partial<Mask>, label?: string) => void;
   /** Changes one part of the mask being worked on. */
@@ -463,6 +484,29 @@ export const useStore = create<State>((set, get) => {
 
   const setEditor = (change: Partial<EditorState>) => set((s) => ({ editor: { ...s.editor, ...change } }));
 
+  /**
+   * Runs `then` straight away, or when it needs found parts (the subject,
+   * the sky, a circled object), once the backend has found them in the open
+   * photo: a second or two each the first time.
+   */
+  const foundFirst = async (shapes: Shape[], then: () => void) => {
+    if (shapes.length === 0) return then();
+    const { photoId, ready, finding } = get().editor;
+    if (!ready || photoId === null || finding) return;
+    const kinds = new Set(shapes.map((shape) => shape.kind));
+    const what = kinds.size > 1 ? "the masks’ parts" : kinds.has("sky") ? "the sky" : kinds.has("object") ? "the object" : "the subject";
+    setEditor({ finding: what });
+    try {
+      await during(`Finding ${what}`, () => api.findParts(photoId, shapes));
+      if (get().editor.photoId === photoId) then();
+    } catch (error) {
+      get().toast({ text: `Couldn’t find ${what}: ${error}`, tone: "error" });
+    } finally {
+      // Opening another photo meanwhile has already reset the editor.
+      if (get().editor.photoId === photoId) setEditor({ finding: null, circling: null });
+    }
+  };
+
   /** Takes in a history the library just returned for the open photo. */
   const noteHistory = (photoId: number, history: History, checkOut: boolean) => {
     if (get().editor.photoId !== photoId) return;
@@ -632,22 +676,61 @@ export const useStore = create<State>((set, get) => {
       if (label) get().commitAdjust(label);
     },
 
-    addMask(kind) {
-      const { ready, size, adjustments } = get().editor;
-      const { masks } = adjustments;
-      if (!ready || !size || masks.length >= MAX_MASKS || !canAdd(masks, kind)) return;
-      const mask = newMask(masks, kind, size, adjustments);
-      setEditor({ maskId: mask.id, partIndex: 0 });
-      get().setMasks([...masks, mask], `New mask: ${SHAPE_NAMES[kind].toLowerCase()}`);
+    addMask(start, drawn) {
+      const kind = startKind(start);
+      if (kind === "object" && !drawn) return get().startCircle({ mode: null });
+      const { size, adjustments } = get().editor;
+      if (!size) return;
+      const shape = drawn ?? newShape(kind, size, adjustments);
+      void foundFirst(isFound(shape) ? [shape] : [], () => {
+        const { ready, size, adjustments } = get().editor;
+        const { masks } = adjustments;
+        if (!ready || !size || masks.length >= MAX_MASKS || !canAdd(masks, kind)) return;
+        const mask = newMask(masks, start, size, adjustments, shape);
+        setEditor({ maskId: mask.id, partIndex: 0 });
+        const name = start === "background" ? "background" : SHAPE_NAMES[kind].toLowerCase();
+        get().setMasks([...masks, mask], `New mask: ${name}`);
+      });
     },
 
-    addMaskPart(kind, mode) {
-      const { ready, size, adjustments, maskId } = get().editor;
-      const mask = adjustments.masks.find((m) => m.id === maskId);
-      if (!ready || !size || !mask || !canAdd(adjustments.masks, kind)) return;
-      const parts = [...mask.parts, { mode, shape: newShape(kind, size, adjustments) }];
-      setEditor({ partIndex: parts.length - 1 });
-      get().updateMask(mask.id, { parts }, `${mask.name}: ${mode} ${SHAPE_NAMES[kind].toLowerCase()}`);
+    addMaskPart(kind, mode, drawn) {
+      if (kind === "object" && !drawn) return get().startCircle({ mode });
+      const { size, adjustments } = get().editor;
+      if (!size) return;
+      const shape = drawn ?? newShape(kind, size, adjustments);
+      void foundFirst(isFound(shape) ? [shape] : [], () => {
+        const { ready, adjustments, maskId } = get().editor;
+        const mask = adjustments.masks.find((m) => m.id === maskId);
+        if (!ready || !mask || !canAdd(adjustments.masks, kind)) return;
+        const parts = [...mask.parts, { mode, shape }];
+        setEditor({ partIndex: parts.length - 1 });
+        get().updateMask(mask.id, { parts }, `${mask.name}: ${mode} ${SHAPE_NAMES[kind].toLowerCase()}`);
+      });
+    },
+
+    startCircle(circling) {
+      const { ready, photoId } = get().editor;
+      if (!ready || photoId === null) return;
+      setEditor({ circling });
+      // The object model's first look at a photo takes a few seconds: start it while the circle is drawn.
+      api.prepareCircles(photoId).catch(() => {});
+    },
+
+    cancelCircle: () => setEditor({ circling: null }),
+
+    finishCircle(points) {
+      const { circling, adjustments, maskId } = get().editor;
+      if (!circling || circling.points) return;
+      const shape = circleShape(points);
+      setEditor({ circling: { ...circling, points } });
+      if (circling.replace !== undefined) {
+        const mask = adjustments.masks.find((m) => m.id === maskId);
+        const part = mask?.parts[circling.replace];
+        if (!mask || !part) return setEditor({ circling: null });
+        const index = circling.replace;
+        void foundFirst([shape], () => get().updateMaskPart(index, { ...part, shape }, `${mask.name}: circle again`));
+      } else if (circling.mode === null) get().addMask("object", shape);
+      else get().addMaskPart("object", circling.mode, shape);
     },
 
     updateMask(id, change, label) {
@@ -807,11 +890,13 @@ export const useStore = create<State>((set, get) => {
       if (!clipboard || ids.length === 0) return;
       if (ids.length === 1 && ids[0] === editor.photoId && editor.ready) {
         // In the editor a paste is an ordinary step in the history. The
-        // crop is left alone: it belongs to this photo's framing.
-        const own = Object.fromEntries(GEOMETRY.map((key) => [key, editor.adjustments[key]]));
-        get().adjust({ ...clipboard, ...own });
-        get().commitAdjust("Paste edits");
-        return;
+        // crop is left alone: it belongs to this photo's framing. Masks of
+        // the subject wait for this photo's to be found, so the edits land whole.
+        return foundFirst(foundShapes(clipboard.masks), () => {
+          const own = Object.fromEntries(GEOMETRY.map((key) => [key, get().editor.adjustments[key]]));
+          get().adjust({ ...clipboard, ...own });
+          get().commitAdjust("Paste edits");
+        });
       }
       try {
         const { done, versionOf, cancelled } = await applyToMany("Pasting edits", ids, () =>

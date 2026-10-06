@@ -7,19 +7,22 @@ use bytemuck::{Pod, Zeroable};
 use half::f16;
 use rayon::prelude::*;
 
-use std::sync::Mutex;
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 
 use crate::develop::LinearImage;
 use crate::edit::{curve_table, Adjustments, Stroke};
 use crate::geometry;
-use crate::masks::{self, Coverage, COVERAGE_EDGE, MAX_BRUSHES, MAX_MASKS, MAX_PARTS};
+use crate::masks::{self, Coverage, COVERAGE_EDGE, MAX_BRUSHES, MAX_FOUND, MAX_MASKS, MAX_PARTS};
+use crate::segment::{self, Found};
 
 const WORKING_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 const OUTPUT_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 /// What 16-bit exports are drawn into: the same picture before it is rounded
 /// to 256 levels.
 const DEEP_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba32Float;
-/// Brush coverage: 256 levels is far finer than any slider step it scales.
+/// Brush and found coverage: 256 levels is far finer than any slider step it scales.
 const COVERAGE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R8Unorm;
 
 /// Long edge and blur width (in their own pixels) of the two blurred copies.
@@ -110,10 +113,46 @@ pub struct Session {
     params: wgpu::Buffer,
     curves: wgpu::Texture,
     views: Views,
-    brushes: Mutex<Brushes>,
+    coverages: Mutex<Coverages>,
+    /// The photo as the models see it, kept to find its subject, sky and
+    /// circled objects in (`segment::guide`).
+    picture: Arc<segment::Picture>,
+    /// Where the photo's found mattes are kept between sessions, if anywhere:
+    /// the start of their file names, which end in each matte's key.
+    pub matte_files: Option<PathBuf>,
+    /// The mattes found so far, by key.
+    mattes: Mutex<HashMap<String, Arc<image::GrayImage>>>,
+    /// Held while a matte is being found, so each is found only once.
+    finding: Mutex<()>,
 }
 
-/// What the develop shader reads, apart from the brush coverage.
+impl Session {
+    /// The photo as the models see it, to find parts in.
+    pub fn picture(&self) -> Arc<segment::Picture> {
+        self.picture.clone()
+    }
+
+    /// Whether this part has been found (or set) for this session.
+    pub fn has_matte(&self, found: &Found) -> bool {
+        self.mattes.lock().unwrap().contains_key(&found.key())
+    }
+
+    /// Uses `matte` for this found part: white where it is. Any size; it is
+    /// stretched over the whole photo.
+    pub fn set_matte(&self, found: &Found, matte: image::GrayImage) {
+        self.mattes.lock().unwrap().insert(found.key(), Arc::new(matte));
+    }
+
+    /// Where this part's matte is kept between sessions, if anywhere.
+    pub fn matte_path(&self, found: &Found) -> Option<PathBuf> {
+        let start = self.matte_files.as_ref()?;
+        let mut name = start.file_name()?.to_os_string();
+        name.push(format!("{}.png", found.key()));
+        Some(start.with_file_name(name))
+    }
+}
+
+/// What the develop shader reads, apart from the mask coverage.
 struct Views {
     source: wgpu::TextureView,
     blur_medium: wgpu::TextureView,
@@ -121,12 +160,17 @@ struct Views {
     curves: wgpu::TextureView,
 }
 
-/// The coverage maps of the photo's brush parts, and the bindings that
-/// include them. Made on the first brush stroke; until then a blank
-/// stand-in is bound.
-struct Brushes {
-    texture: Option<wgpu::Texture>,
+/// The coverage maps of the photo's brush parts and found parts, and the
+/// bindings that include them. Each stack is made when first needed (the
+/// brushes on the first stroke); until then a blank stand-in is bound.
+struct Coverages {
+    brushes: Option<wgpu::Texture>,
+    brush_view: wgpu::TextureView,
     maps: Vec<Coverage>,
+    found: Option<wgpu::Texture>,
+    found_view: wgpu::TextureView,
+    /// The key of the matte in each layer of `found`.
+    found_layers: Vec<Option<String>>,
     bind_group: wgpu::BindGroup,
     /// The same bindings for the deep pipeline; a bind group belongs to one pipeline's layout.
     deep_bind_group: wgpu::BindGroup,
@@ -148,7 +192,7 @@ pub fn picture_size(width: u32, height: u32, adjustments: &Adjustments, long_edg
     fit_within(w, h, long_edge.min(w.max(h)))
 }
 
-fn fit_within(width: u32, height: u32, long_edge: u32) -> (u32, u32) {
+pub(crate) fn fit_within(width: u32, height: u32, long_edge: u32) -> (u32, u32) {
     let scale = long_edge as f32 / width.max(height) as f32;
     (((width as f32 * scale).round() as u32).max(1), ((height as f32 * scale).round() as u32).max(1))
 }
@@ -294,6 +338,7 @@ impl Gpu {
     pub fn open(&self, image: LinearImage) -> Result<Session> {
         let image = shrink_to_fit(image, self.max_texture_size);
         let (width, height) = (image.width, image.height);
+        let picture = Arc::new(segment::Picture::new(segment::guide(&image)));
 
         // Half-float is plenty for photographic range at half the memory of f32.
         let mut texels = vec![f16::ONE; image.pixels.len() * 4];
@@ -339,14 +384,31 @@ impl Gpu {
             mapped_at_creation: false,
         });
         let views = Views { source: source_view, blur_medium, blur_large, curves: curves.create_view(&Default::default()) };
-        let (_, blank) = self.coverage_maps(1, 1, 1);
-        let brushes = Brushes {
-            bind_group: self.develop_bindings(&self.develop, &views, &params, &blank),
-            deep_bind_group: self.develop_bindings(&self.develop_deep, &views, &params, &blank),
-            texture: None,
+        let (_, brush_view) = self.coverage_maps(1, 1, 1);
+        let (_, found_view) = self.coverage_maps(1, 1, 1);
+        let coverages = Coverages {
+            bind_group: self.develop_bindings(&self.develop, &views, &params, &brush_view, &found_view),
+            deep_bind_group: self.develop_bindings(&self.develop_deep, &views, &params, &brush_view, &found_view),
+            brushes: None,
+            brush_view,
             maps: Vec::new(),
+            found: None,
+            found_view,
+            found_layers: vec![None; MAX_FOUND],
         };
-        Ok(Session { width, height, scene_referred: image.scene_referred, params, curves, views, brushes: Mutex::new(brushes) })
+        Ok(Session {
+            width,
+            height,
+            scene_referred: image.scene_referred,
+            params,
+            curves,
+            views,
+            coverages: Mutex::new(coverages),
+            picture,
+            matte_files: None,
+            mattes: Mutex::new(HashMap::new()),
+            finding: Mutex::new(()),
+        })
     }
 
     /// A stack of `layers` coverage maps, as the shader reads them.
@@ -374,6 +436,7 @@ impl Gpu {
         views: &Views,
         params: &wgpu::Buffer,
         brushes: &wgpu::TextureView,
+        found: &wgpu::TextureView,
     ) -> wgpu::BindGroup {
         self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("develop"),
@@ -386,27 +449,95 @@ impl Gpu {
                 wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::Sampler(&self.sampler) },
                 wgpu::BindGroupEntry { binding: 5, resource: params.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(brushes) },
+                wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::TextureView(found) },
             ],
         })
     }
 
+    /// Points both pipelines' bindings at the session's current coverage maps.
+    fn rebind(&self, session: &Session, coverages: &mut Coverages) {
+        let (brushes, found) = (&coverages.brush_view, &coverages.found_view);
+        coverages.bind_group = self.develop_bindings(&self.develop, &session.views, &session.params, brushes, found);
+        coverages.deep_bind_group =
+            self.develop_bindings(&self.develop_deep, &session.views, &session.params, brushes, found);
+    }
+
+    /// Makes sure these found parts' mattes are ready for the shader: read
+    /// from the cache, or found by a model, which takes a second or two each.
+    pub fn ensure_found(&self, session: &Session, found: &[Found]) -> Result<()> {
+        for part in found {
+            if session.has_matte(part) {
+                continue;
+            }
+            let _finding = session.finding.lock().unwrap();
+            // Another thread may have found it while this one waited.
+            if session.has_matte(part) {
+                continue;
+            }
+            let matte = part.find_cached(&session.picture, session.matte_path(part).as_deref())?;
+            session.set_matte(part, matte);
+        }
+        Ok(())
+    }
+
+    /// Puts the mattes of `found` into the layers the shader reads them from,
+    /// in order, uploading only those that changed. They must be ready (`ensure_found`).
+    fn upload_found(&self, session: &Session, coverages: &mut Coverages, found: &[Found]) {
+        let (width, height) = session.picture.guide.dimensions();
+        if coverages.found.is_none() {
+            let (texture, view) = self.coverage_maps(width, height, MAX_FOUND as u32);
+            coverages.found = Some(texture);
+            coverages.found_view = view;
+            self.rebind(session, coverages);
+        }
+        let texture = coverages.found.as_ref().expect("just made");
+        let mattes = session.mattes.lock().unwrap();
+        for (layer, part) in found.iter().enumerate() {
+            let key = part.key();
+            if coverages.found_layers[layer].as_ref() == Some(&key) {
+                continue;
+            }
+            let Some(matte) = mattes.get(&key) else { continue };
+            // A matte kept from a session with another texture limit may be another size.
+            let resized;
+            let matte = if matte.dimensions() == (width, height) {
+                matte.as_ref()
+            } else {
+                resized = image::imageops::resize(matte.as_ref(), width, height, image::imageops::FilterType::Triangle);
+                &resized
+            };
+            self.queue.write_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d { x: 0, y: 0, z: layer as u32 },
+                    aspect: wgpu::TextureAspect::All,
+                },
+                matte.as_raw(),
+                wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(width), rows_per_image: Some(height) },
+                wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+            );
+            coverages.found_layers[layer] = Some(key);
+        }
+    }
+
     /// Brings the coverage maps up to date with the brush parts' strokes,
     /// uploading only the rows that changed.
-    fn paint_brushes(&self, session: &Session, brushes: &mut Brushes, strokes: &[&[Stroke]]) {
+    fn paint_brushes(&self, session: &Session, coverages: &mut Coverages, strokes: &[&[Stroke]]) {
         let (width, height) =
             fit_within(session.width, session.height, COVERAGE_EDGE.min(session.width.max(session.height)));
-        if brushes.texture.is_none() {
+        if coverages.brushes.is_none() {
             let (texture, view) = self.coverage_maps(width, height, MAX_BRUSHES as u32);
-            brushes.bind_group = self.develop_bindings(&self.develop, &session.views, &session.params, &view);
-            brushes.deep_bind_group = self.develop_bindings(&self.develop_deep, &session.views, &session.params, &view);
-            brushes.texture = Some(texture);
+            coverages.brushes = Some(texture);
+            coverages.brush_view = view;
+            self.rebind(session, coverages);
         }
-        let texture = brushes.texture.as_ref().expect("just made");
+        let texture = coverages.brushes.as_ref().expect("just made");
         for (layer, strokes) in strokes.iter().enumerate() {
-            if brushes.maps.len() <= layer {
-                brushes.maps.push(Coverage::new(width, height));
+            if coverages.maps.len() <= layer {
+                coverages.maps.push(Coverage::new(width, height));
             }
-            let map = &mut brushes.maps[layer];
+            let map = &mut coverages.maps[layer];
             let Some(rows) = map.update(strokes) else { continue };
             let span = rows.start as usize * width as usize..rows.end as usize * width as usize;
             let levels: Vec<u8> = map.values[span].iter().map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8).collect();
@@ -465,10 +596,14 @@ impl Gpu {
         let unit = |value: f32| (value / 100.0).clamp(-1.0, 1.0);
         let frame = geometry::frame(session.width, session.height, adjustments, uncropped);
         let to_source = geometry::frame_to_source(session.width, session.height, adjustments, &frame).0;
-        let (packed, strokes) = masks::pack(&a.masks, session.width, session.height, mask_overlay);
-        let mut brushes = session.brushes.lock().unwrap();
+        let (packed, strokes, found) = masks::pack(&a.masks, session.width, session.height, mask_overlay);
+        self.ensure_found(session, &found)?;
+        let mut coverages = session.coverages.lock().unwrap();
         if !strokes.is_empty() {
-            self.paint_brushes(session, &mut brushes, &strokes);
+            self.paint_brushes(session, &mut coverages, &strokes);
+        }
+        if !found.is_empty() {
+            self.upload_found(session, &mut coverages, &found);
         }
         let source_pixels_per_output_pixel = (region.width * frame.size[0] as f32 / width as f32)
             .max(region.height * frame.size[1] as f32 / height as f32);
@@ -506,8 +641,8 @@ impl Gpu {
         );
 
         let (format, pipeline, bindings, pixel_bytes) = match deep {
-            false => (OUTPUT_FORMAT, &self.develop, &brushes.bind_group, 4),
-            true => (DEEP_FORMAT, &self.develop_deep, &brushes.deep_bind_group, 16),
+            false => (OUTPUT_FORMAT, &self.develop, &coverages.bind_group, 4),
+            true => (DEEP_FORMAT, &self.develop_deep, &coverages.deep_bind_group, 16),
         };
         let target = self.texture("frame", width, height, 1, format);
         // Rows in a readback buffer must be padded to a multiple of 256 bytes.

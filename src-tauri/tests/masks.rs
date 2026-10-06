@@ -4,6 +4,7 @@
 use tonality_lib::develop::LinearImage;
 use tonality_lib::edit::{Adjustments, LocalAdjustments, Mask, MaskPart, Mode, Shape, Stroke};
 use tonality_lib::gpu::{self, Gpu, Guides, Region, Session};
+use tonality_lib::segment::Found;
 
 fn gpu() -> Option<&'static Gpu> {
     gpu::shared().inspect_err(|error| eprintln!("skipping: {error:#}")).ok()
@@ -168,4 +169,108 @@ fn a_hidden_mask_does_nothing_but_can_still_be_shown() {
     let level = |x: usize, y: usize| matte[(y * 120 + x) * 4];
     assert!(level(60, 40) > 240, "{}", level(60, 40));
     assert_eq!(level(2, 2), 0);
+}
+
+/// A matte whose left half is the subject, as if the model had found it.
+fn left_half() -> image::GrayImage {
+    image::GrayImage::from_fn(60, 40, |x, _| image::Luma([if x < 30 { 255 } else { 0 }]))
+}
+
+#[test]
+fn the_subject_and_the_background_cover_what_the_matte_says() {
+    let Some(gpu) = gpu() else { return };
+    let session = photo(gpu, false);
+    session.set_matte(&Found::Subject, left_half());
+    let plain = draw(gpu, &session, &Adjustments::default())(0.5, 0.5);
+
+    let subject = draw(gpu, &session, &with(vec![brighter(vec![add(Shape::Subject)])]));
+    assert!(subject(0.2, 0.5) > plain + 30);
+    assert_eq!(subject(0.8, 0.5), plain);
+
+    // The background is the subject, inverted.
+    let background = Mask { invert: true, ..brighter(vec![add(Shape::Subject)]) };
+    let background = draw(gpu, &session, &with(vec![background]));
+    assert_eq!(background(0.2, 0.5), plain);
+    assert!(background(0.8, 0.5) > plain + 30);
+
+    // A circle across the middle, kept only where it is on the subject.
+    let circle = Shape::Radial { center: [0.5, 0.5], radius: [0.3, 0.3], angle: 0.0, feather: 0.05 };
+    let both = brighter(vec![add(circle), MaskPart { mode: Mode::Intersect, shape: Shape::Subject }]);
+    let both = draw(gpu, &session, &with(vec![both]));
+    assert!(both(0.4, 0.5) > plain + 30);
+    assert_eq!(both(0.6, 0.5), plain);
+    assert_eq!(both(0.05, 0.5), plain, "on the subject but outside the circle");
+}
+
+#[test]
+fn the_subject_stays_on_the_photo_when_it_is_turned() {
+    let Some(gpu) = gpu() else { return };
+    let session = photo(gpu, false);
+    session.set_matte(&Found::Subject, left_half());
+    let plain = draw(gpu, &session, &Adjustments::default())(0.5, 0.5);
+    // Turned a quarter clockwise, the left of the photo is at the top.
+    let turned = Adjustments { rotation: 1, masks: vec![brighter(vec![add(Shape::Subject)])], ..Default::default() };
+    let turned = draw(gpu, &session, &turned);
+    assert!(turned(0.5, 0.2) > plain + 30);
+    assert_eq!(turned(0.5, 0.8), plain);
+}
+
+#[test]
+fn the_subject_is_found_when_first_drawn_and_then_kept() {
+    let Some(gpu) = gpu() else { return };
+    // A bright disc on a dim background.
+    let disc = || {
+        let (width, height) = (240u32, 160u32);
+        let pixels = (0..width * height)
+            .map(|i| {
+                let (x, y) = ((i % width) as f32, (i / width) as f32);
+                if (x - 120.0).hypot(y - 80.0) < 40.0 { [0.7, 0.15, 0.1] } else { [0.08, 0.1, 0.12] }
+            })
+            .collect();
+        gpu.open(LinearImage { width, height, pixels, scene_referred: false }).unwrap()
+    };
+    let folder = tempfile::tempdir().unwrap();
+    let start = folder.path().join("mattes/1-");
+    let recipe = with(vec![brighter(vec![add(Shape::Subject)])]);
+
+    let mut session = disc();
+    session.matte_files = Some(start.clone());
+    let cache = session.matte_path(&Found::Subject).unwrap();
+    let plain = draw(gpu, &session, &Adjustments::default());
+    let lit = draw(gpu, &session, &recipe);
+    assert!(lit(0.5, 0.5) > plain(0.5, 0.5) + 20, "the disc is the subject");
+    assert!(lit(0.03, 0.05) <= plain(0.03, 0.05) + 2, "the background is not");
+    assert!(cache.exists(), "and the matte was kept");
+
+    // Another session reads the kept matte instead of finding it again.
+    image::GrayImage::new(8, 8).save(&cache).unwrap();
+    let mut session = disc();
+    session.matte_files = Some(start);
+    assert_eq!(draw(gpu, &session, &recipe)(0.5, 0.5), plain(0.5, 0.5));
+}
+
+#[test]
+fn the_sky_and_circled_objects_each_read_their_own_matte() {
+    let Some(gpu) = gpu() else { return };
+    let session = photo(gpu, false);
+    let top_half = image::GrayImage::from_fn(60, 40, |_, y| image::Luma([if y < 20 { 255 } else { 0 }]));
+    let corner = vec![[0.6, 0.6], [0.95, 0.6], [0.95, 0.95], [0.6, 0.95]];
+    let bottom_right = image::GrayImage::from_fn(60, 40, |x, y| image::Luma([if x >= 40 && y >= 28 { 255 } else { 0 }]));
+    session.set_matte(&Found::Subject, left_half());
+    session.set_matte(&Found::Sky, top_half);
+    session.set_matte(&Found::Object(corner.clone()), bottom_right);
+    let plain = draw(gpu, &session, &Adjustments::default())(0.5, 0.5);
+
+    let sky = draw(gpu, &session, &with(vec![brighter(vec![add(Shape::Sky)])]));
+    assert!(sky(0.8, 0.2) > plain + 30);
+    assert_eq!(sky(0.8, 0.8), plain);
+
+    // The sky, less the subject, in one mask; the circled object in another.
+    let sky_only = brighter(vec![add(Shape::Sky), MaskPart { mode: Mode::Subtract, shape: Shape::Subject }]);
+    let object = Mask { id: 2, ..brighter(vec![add(Shape::Object { points: corner })]) };
+    let both = draw(gpu, &session, &with(vec![sky_only, object]));
+    assert!(both(0.8, 0.2) > plain + 30, "sky off the subject");
+    assert_eq!(both(0.2, 0.2), plain, "sky on the subject");
+    assert!(both(0.85, 0.85) > plain + 30, "the object");
+    assert_eq!(both(0.5, 0.85), plain);
 }

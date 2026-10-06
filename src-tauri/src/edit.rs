@@ -109,6 +109,14 @@ pub enum Shape {
     /// The parts of the photo within a range of brightness (0 black, 1 white),
     /// fading out over `smoothness` either side.
     Luminance { low: f32, high: f32, smoothness: f32 },
+    /// The photo's main subject, found by a segmentation model. Nothing is
+    /// stored: each photo's own subject is found, so a pasted mask fits it.
+    Subject,
+    /// The photo's sky, found the same way.
+    Sky,
+    /// The object inside a circle drawn on the photo (`points`, a closed
+    /// outline), found by the subject model looking only there.
+    Object { points: Vec<[f32; 2]> },
 }
 
 /// How a part combines with the parts before it.

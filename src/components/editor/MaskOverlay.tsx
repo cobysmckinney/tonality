@@ -33,6 +33,7 @@ export function MaskOverlay({ photo, region, width, height }: Props) {
   const maskId = useStore((s) => s.editor.maskId);
   const partIndex = useStore((s) => s.editor.partIndex);
   const brush = useStore((s) => s.brush);
+  const circling = useStore((s) => s.editor.circling);
   const svg = useRef<SVGSVGElement>(null);
   const drag = useRef<{ index: number; move: Drag; label: string } | null>(null);
   const painting = useRef<{ index: number; erase: boolean; last: Point } | null>(null);
@@ -51,6 +52,7 @@ export function MaskOverlay({ photo, region, width, height }: Props) {
     [photo, crop, straighten, rotation, flipHorizontal, flipVertical, region, width, height],
   );
 
+  if (circling) return <CircleDrawing map={map} width={width} height={height} finished={circling.points} />;
   const mask = adjustments.masks.find((m) => m.id === maskId);
   if (!mask) return null;
   const selected = partIndex !== null ? mask.parts[partIndex] : undefined;
@@ -147,6 +149,69 @@ export function MaskOverlay({ photo, region, width, height }: Props) {
           <circle cx={pointer.at[0]} cy={pointer.at[1]} r={radius} />
           {brush.feather > 0 && <circle className="inner" cx={pointer.at[0]} cy={pointer.at[1]} r={radius * (1 - brush.feather / 100)} />}
         </g>
+      )}
+    </svg>
+  );
+}
+
+/** An outline through screen points, closed. */
+const outline = (points: Point[]) => (points.length ? `M${points.map((p) => `${p[0]} ${p[1]}`).join("L")}Z` : "");
+
+/**
+ * Drawing a loop around something on the photo, for its object to be found.
+ * Once `finished` (points on the file), the loop stays drawn while the
+ * object is found.
+ */
+function CircleDrawing({ map, width, height, finished }: { map: ScreenMap; width: number; height: number; finished?: Point[] }) {
+  // The points as drawn, kept apart from the render so the last moves are never missed.
+  const points = useRef<Point[] | null>(null);
+  const [drawn, setDrawn] = useState<Point[]>([]);
+  const local = (event: React.PointerEvent<SVGElement>): Point => {
+    const box = event.currentTarget.closest("svg")!.getBoundingClientRect();
+    return [event.clientX - box.left, event.clientY - box.top];
+  };
+  const shown = finished ? finished.map((p) => map.toScreen(p)) : drawn;
+  return (
+    <svg className={`mask-overlay circling ${finished ? "finding" : ""}`} width={width} height={height}>
+      <rect
+        className="mask-paint"
+        width={width}
+        height={height}
+        onPointerDown={(event) => {
+          if (event.button !== 0 || finished) return;
+          event.stopPropagation();
+          event.currentTarget.setPointerCapture(event.pointerId);
+          points.current = [local(event)];
+          setDrawn(points.current);
+        }}
+        onPointerMove={(event) => {
+          const loop = points.current;
+          if (!loop) return;
+          const at = local(event);
+          const last = loop[loop.length - 1];
+          if (Math.hypot(at[0] - last[0], at[1] - last[1]) < 3) return;
+          points.current = [...loop, at];
+          setDrawn(points.current);
+        }}
+        onPointerUp={() => {
+          const loop = points.current;
+          if (!loop) return;
+          points.current = null;
+          // A dab, or a stroke too small to hold anything, is let go.
+          const xs = loop.map((p) => p[0]);
+          const ys = loop.map((p) => p[1]);
+          if (loop.length < 3 || Math.max(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys)) < 12) {
+            setDrawn([]);
+            return;
+          }
+          useStore.getState().finishCircle(loop.map((p) => map.toPhoto(p)));
+        }}
+      />
+      {shown.length > 1 && (
+        <>
+          <path className="circle-shade" d={`M0 0H${width}V${height}H0Z${outline(shown)}`} fillRule="evenodd" />
+          <path className={`mask-line ${finished ? "dashed" : ""}`} d={finished ? outline(shown) : outline(shown).slice(0, -1)} />
+        </>
       )}
     </svg>
   );
@@ -256,6 +321,15 @@ function PartHandles(props: { part: MaskPart; map: ScreenMap; active: boolean; b
         <Knob at={sub(center, second)} onPointerDown={begin(resize(1))} />
         <Knob at={knob} turn onPointerDown={begin(rotate)} />
         <Knob at={center} pin onPointerDown={begin(moveCenter)} />
+      </g>
+    );
+  }
+
+  if (shape.kind === "object") {
+    // The loop it was found in; drawing another is in the Masks panel.
+    return (
+      <g className={className}>
+        <path className="mask-line dashed" d={outline(shape.points.map((p) => map.toScreen(p)))} />
       </g>
     );
   }

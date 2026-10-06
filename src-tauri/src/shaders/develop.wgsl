@@ -64,6 +64,9 @@ struct Params {
 @group(0) @binding(5) var<uniform> p: Params;
 // One layer per brush part: how much its strokes cover, laid over the photo file.
 @group(0) @binding(6) var brushes: texture_2d_array<f32>;
+// One layer per found part (subject, sky, circled object): its matte, as a
+// segmentation model found it, laid over the photo file.
+@group(0) @binding(7) var found: texture_2d_array<f32>;
 
 struct VertexOutput {
     @builtin(position) position: vec4f,
@@ -228,6 +231,8 @@ fn mask_coverage(uv: vec2f, c: vec3f, scene_referred: bool) -> array<f32, 8> {
         } else if (kind == 4) {
             let soft = max(part.a.z, 0.001);
             v = smoothstep(part.a.x - soft, part.a.x, lightness) * (1.0 - smoothstep(part.a.y, part.a.y + soft, lightness));
+        } else if (kind == 5) {
+            v = textureSampleLevel(found, linear_sampler, uv, i32(part.info.w), 0.0).r;
         }
         let index = i32(part.info.z);
         let mode = i32(part.info.y);

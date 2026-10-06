@@ -48,14 +48,24 @@ A preset is a named look to lay over a photo's edits. Each one *covers* some set
 
 Masks change one part of the photo. Each mask is an area, built from parts, with its own sliders (light, color, clarity, dehaze, sharpening, noise reduction) that add to the photo's own wherever it covers.
 
-- **The Masks tool** (`M`) starts a mask from a brush, a linear gradient, a radial gradient or a brightness range, each described in a line.
+- **The Masks tool** (`M`) starts a mask from the subject, the background, the sky, a selected object, a brush, a linear gradient, a radial gradient or a brightness range, each described in a line.
+- **Subject, background and sky**: small models find the photo's main subject (a person, an animal, a building) and its sky; the background is everything but the subject. Each takes a second or two the first time; after that it is kept in the library. They are parts like any other, so they can be added, subtracted or intersected ("the sky, less the subject"), and a pasted mask finds each photo's own.
+- **Select object**: draw a rough loop around something on the photo and its outline is found. The first loop on a photo takes a few seconds while the model looks the photo over (it starts as soon as you choose to draw); after that each loop takes a moment. **Draw again** replaces the loop; Esc cancels one being drawn.
 - **Layers**: while the tool is open, the photo's masks float as layers over its corner, each with a black-and-white thumbnail of what it covers. The eye hides a mask's effect without removing it; **…** (or a right-click) renames, inverts or deletes it, and **+** starts another. The side column holds the chosen mask's sliders.
 - **Parts**: the chosen layer opens to list its parts. **Add**, **Subtract** and **Intersect** put another one on: it adds to the area, takes from it, or keeps only what both cover ("the sky, but only its bright part"). The mark in front of a part changes how it combines.
 - **On the photo**: a gradient's ends and a radial's edges, centre and turning knob are dragged into place. With a brush part chosen, dragging paints; Alt erases, `[` and `]` change the size. `O` tints the mask red.
 - **They stay on the photo**: parts are kept on the file itself, so they follow crops, turns and flips. Presets never include masks; pasting edits does.
-- **Limits**: 8 masks, 32 parts and 8 brush parts a photo.
+- **Limits**: 8 masks, 32 parts, 8 brush parts and 8 found parts (subject, sky, objects) a photo.
 
 Gradients and brightness ranges are worked out per pixel in the shader. Brush strokes are painted into a coverage map per brush part (`src-tauri/src/masks.rs`); while you paint only the newest length of the stroke is painted again. `tests/masks.rs` checks each kind on the GPU; `src/masks.ts` places them on screen.
+
+Found parts come from three small models bundled in the app (`src-tauri/models`, about 50 MB together), run on the CPU by tract, which is pure Rust, so mobile builds need no native runtime (`src-tauri/src/segment.rs`):
+
+- the subject from U²-Netp (Apache 2.0), a salient-object model that sees the photo at 320 x 320;
+- the sky from a U²-Netp trained on skies (MIT), converted from ncnn to ONNX, at 384 x 384;
+- an object from EfficientSAM-Ti (Apache 2.0), given the loop's box as a prompt. Its encoder looks the whole photo over once, in a few seconds, and is kept for the session; each loop then costs a fraction of a second.
+
+A guided filter then fits each answer to the photo's own edges at up to 3072 pixels. Mattes are worked out from the file before any edits, so they follow crops and turns, and are kept in `.tonality/mattes`, so each is found once per photo (an object's is named after its loop).
 
 ### History and branches
 
@@ -108,4 +118,4 @@ TONALITY_SAMPLES=/path/to/raws TONALITY_OUT=/tmp/out cargo test preset_sheet -- 
 - `TONALITY_FAKE_VOLUMES=/some/folder` (debug builds) treats a folder containing `DCIM` as a camera card.
 - `TONALITY_EVAL=/some/folder` (debug builds) runs each `.js` file put in the folder inside the window, then deletes it: a way to script pointer drags when checking the mask tools.
 
-Layout: `src-tauri/src` is the backend (`library.rs` database, `import.rs` scan and copy, `media.rs` decoding and metadata, `thumbs.rs` generated images, `volumes.rs` card detection, `develop.rs` RAW to linear light, `geometry.rs` crop and rotation arithmetic, `gpu.rs` the GPU pipeline, `edit.rs` the edit recipe, `history.rs` steps and branches, `presets.rs` presets, `masks.rs` mask packing and brush coverage, `export.rs` writing pictures out, `commands.rs` the interface's API). `src` is the React interface, with all state in `store.ts` and the editor under `components/editor`. The GPU tests skip themselves on a machine without a graphics adapter.
+Layout: `src-tauri/src` is the backend (`library.rs` database, `import.rs` scan and copy, `media.rs` decoding and metadata, `thumbs.rs` generated images, `volumes.rs` card detection, `develop.rs` RAW to linear light, `geometry.rs` crop and rotation arithmetic, `gpu.rs` the GPU pipeline, `edit.rs` the edit recipe, `history.rs` steps and branches, `presets.rs` presets, `masks.rs` mask packing and brush coverage, `segment.rs` finding the subject, `export.rs` writing pictures out, `commands.rs` the interface's API). `src` is the React interface, with all state in `store.ts` and the editor under `components/editor`. The GPU tests skip themselves on a machine without a graphics adapter.

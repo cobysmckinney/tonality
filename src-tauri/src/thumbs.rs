@@ -51,7 +51,9 @@ fn render_photo(library: &Library, id: i64, dest: PathBuf, edge: u32, quality: u
 pub fn open_session(library: &Library, id: i64) -> Result<Session> {
     let files = library.photo_files(id)?;
     let image = crate::develop::load(&files.path, files.is_raw)?;
-    gpu::shared()?.open(image)
+    let mut session = gpu::shared()?.open(image)?;
+    session.matte_files = Some(library.matte_files(id));
+    Ok(session)
 }
 
 /// A photo's thumbnail and preview, drawn with its edits but not yet saved.

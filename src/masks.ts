@@ -146,7 +146,19 @@ export const SHAPE_NAMES: Record<Shape["kind"], string> = {
   linear: "Linear gradient",
   radial: "Radial gradient",
   luminance: "Brightness range",
+  subject: "Subject",
+  sky: "Sky",
+  object: "Object",
 };
+
+/** What a new mask can start from: a kind of part, or the background (the subject, inverted). */
+export type MaskStart = Shape["kind"] | "background";
+
+/** Whether a part is found by a model (from the photo, or inside a circle) rather than drawn. */
+export const isFound = (shape: Shape) => shape.kind === "subject" || shape.kind === "sky" || shape.kind === "object";
+
+/** The found parts among these masks' parts. */
+export const foundShapes = (masks: Mask[]) => masks.flatMap((mask) => mask.parts.map((part) => part.shape)).filter(isFound);
 
 export const MODE_NAMES: Record<MaskMode, string> = { add: "Add", subtract: "Subtract", intersect: "Intersect" };
 
@@ -154,6 +166,8 @@ export const MODE_NAMES: Record<MaskMode, string> = { add: "Add", subtract: "Sub
 export const MAX_MASKS = 8;
 export const MAX_PARTS = 32;
 export const MAX_BRUSHES = 8;
+/** Different found parts: the same subject twice counts once. */
+export const MAX_FOUND = 8;
 
 /** Keeps stored positions short: a hundred-thousandth of the photo is finer than a pixel. */
 export const tidy = (value: number) => Math.round(value * 1e5) / 1e5;
@@ -180,22 +194,41 @@ export function newShape(kind: Shape["kind"], photo: Size, adjustments: Adjustme
     }
     case "luminance":
       return { kind, low: 0, high: 0.35, smoothness: 0.15 };
+    case "subject":
+    case "sky":
+      return { kind };
+    case "object":
+      // Its outline comes from the circle drawn on the photo (`circleShape`).
+      return { kind, points: [] };
   }
 }
 
-/** A new mask holding one part, with an id and a name no other mask has. */
-export function newMask(masks: Mask[], kind: Shape["kind"], photo: Size, adjustments: Adjustments): Mask {
+/** Keeps a circle short: a point every so often along it, tidied, at most `limit` of them. */
+export function circleShape(points: Point[], limit = 160): Shape {
+  const step = Math.max(1, Math.ceil(points.length / limit));
+  return { kind: "object", points: points.filter((_, i) => i % step === 0).map((p) => p.map(tidy) as Point) };
+}
+
+/** The kind of part a new mask starts with. */
+export const startKind = (start: MaskStart): Shape["kind"] => (start === "background" ? "subject" : start);
+
+/**
+ * A new mask holding one part, with an id and a name no other mask has:
+ * "Mask 1", or for the subject and background, "Subject" and "Background".
+ */
+export function newMask(masks: Mask[], start: MaskStart, photo: Size, adjustments: Adjustments, shape?: Shape): Mask {
   const id = Math.max(0, ...masks.map((mask) => mask.id)) + 1;
   const names = new Set(masks.map((mask) => mask.name));
-  let n = 1;
-  while (names.has(`Mask ${n}`)) n++;
+  const base = start === "background" ? "Background" : start === "subject" || start === "sky" || start === "object" ? SHAPE_NAMES[start] : null;
+  let name = base ?? "Mask 1";
+  for (let n = 2; names.has(name); n++) name = base ? `${base} ${n}` : `Mask ${n}`;
   return {
     id,
-    name: `Mask ${n}`,
+    name,
     visible: true,
-    invert: false,
+    invert: start === "background",
     // A brightness range on its own covers the range; it intersects only once something comes before it.
-    parts: [{ mode: "add", shape: newShape(kind, photo, adjustments) }],
+    parts: [{ mode: "add", shape: shape ?? newShape(startKind(start), photo, adjustments) }],
     adjustments: noLocalAdjustments(),
   };
 }
@@ -220,7 +253,16 @@ export const brushCount = (masks: Mask[]) =>
 
 export const partCount = (masks: Mask[]) => masks.reduce((n, mask) => n + mask.parts.length, 0);
 
+/** How many different found parts there are across all masks. */
+export const foundCount = (masks: Mask[]) => new Set(foundShapes(masks).map((shape) => JSON.stringify(shape))).size;
+
 /** Whether another part of this kind still fits in what the editor draws. */
 export function canAdd(masks: Mask[], kind: Shape["kind"]): boolean {
-  return partCount(masks) < MAX_PARTS && (kind !== "brush" || brushCount(masks) < MAX_BRUSHES);
+  if (partCount(masks) >= MAX_PARTS) return false;
+  if (kind === "brush") return brushCount(masks) < MAX_BRUSHES;
+  // The subject or sky may already be among them, and so not count again.
+  if (kind === "object" || ((kind === "subject" || kind === "sky") && !foundShapes(masks).some((s) => s.kind === kind))) {
+    return foundCount(masks) < MAX_FOUND;
+  }
+  return true;
 }
