@@ -31,7 +31,6 @@ import { AdjustPanel } from "./AdjustPanel";
 import { CropOverlay } from "./CropOverlay";
 import { CropPanel } from "./CropPanel";
 import { Histogram } from "./Histogram";
-import { MaskLayers } from "./MaskLayers";
 import { MaskOverlay } from "./MaskOverlay";
 import { MasksPanel } from "./MasksPanel";
 import { HistoryPanel } from "./HistoryPanel";
@@ -238,6 +237,7 @@ function Stage({ photo, onZoomChange }: { photo: Photo; onZoomChange: (label: st
   const showClipping = useStore((s) => s.editor.showClipping && !s.editor.showOriginal);
   const uncropped = useStore((s) => s.sidePanel === "crop" && !s.editor.showOriginal);
   const masking = useStore((s) => s.sidePanel === "masks" && !s.editor.showOriginal);
+  const circling = useStore((s) => s.sidePanel === "masks" && s.editor.circling !== null && s.editor.finding === null);
   const maskOverlay = useStore((s) =>
     s.sidePanel === "masks" && s.editor.showMask && !s.editor.showOriginal ? s.editor.maskId : null,
   );
@@ -432,6 +432,7 @@ function Stage({ photo, onZoomChange }: { photo: Photo; onZoomChange: (label: st
         )}
       </div>
       {!ready && <span className="stage-note">Preparing photo…</span>}
+      {ready && circling && <span className="stage-note centered">Draw a loop around what you want · Esc cancels</span>}
     </div>
   );
 }
@@ -496,7 +497,6 @@ export function Editor({ photo, inert }: { photo: Photo; inert: boolean }) {
   const edited = useStore((s) => s.editor.ready && !isAsShot(s.editor.adjustments));
   const showOriginal = useStore((s) => s.editor.showOriginal);
   const hasClipboard = useStore((s) => s.clipboard !== null);
-  const masking = useStore((s) => s.sidePanel === "masks");
   const [zoomLabel, setZoomLabel] = useState("Fit");
   const s = useStore.getState();
   const ids = [photo.id];
@@ -535,9 +535,10 @@ export function Editor({ photo, inert }: { photo: Photo; inert: boolean }) {
         const next = list[list.findIndex((p) => p.id === open) + (key === "ArrowLeft" ? -1 : 1)];
         if (next) state.openPhoto(next.id);
       } else if (key === "Escape" || (key === "Enter" && state.sidePanel === "crop" && !target.closest("button"))) {
-        // Escape backs out one level at a time: off a slider, out of a circle being drawn, out of the crop or mask tools, out of the photo.
+        // Escape backs out one level at a time: off a slider, out of a circle being drawn, off the chosen mask, out of the crop or mask tools, out of the photo.
         if (onSlider) target.blur();
         else if (state.editor.circling && !state.editor.finding) state.cancelCircle();
+        else if (state.sidePanel === "masks" && state.editor.maskId !== null) state.selectMask(null);
         else if (state.sidePanel === "crop" || state.sidePanel === "masks") state.setSidePanel("adjust");
         else state.closePhoto();
       } else if (key === "\\") state.setShowOriginal(true);
@@ -627,7 +628,6 @@ export function Editor({ photo, inert }: { photo: Photo; inert: boolean }) {
           </div>
         </header>
         <Stage photo={photo} onZoomChange={setZoomLabel} />
-        {masking && <MaskLayers />}
       </section>
       <div className="panel side-column">
         <Histogram />

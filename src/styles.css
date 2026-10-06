@@ -276,6 +276,10 @@ button {
   background: var(--raised);
   color: var(--text);
 }
+.button.quiet.engaged {
+  background: var(--accent-wash);
+  color: var(--text);
+}
 .button.danger.solid {
   background: var(--reject);
   color: #210806;
@@ -1119,6 +1123,14 @@ button {
   color: var(--muted);
   font-size: 12px;
 }
+.stage-note.centered {
+  left: 50%;
+  bottom: 12px;
+  transform: translateX(-50%);
+  color: var(--text);
+  white-space: nowrap;
+  pointer-events: none;
+}
 
 .filmstrip {
   grid-column: 1;
@@ -1797,197 +1809,67 @@ button {
 
 /* ---- masks ---- */
 
-.masks {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-}
 .masks.waiting {
   opacity: 0.4;
 }
 
-/* Starting a mask: one row for each way of picking out part of the photo. */
-.mask-create {
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-  padding: 6px 16px 16px;
-  overflow-y: auto;
+/* The photo's masks, flush in the column; the chosen one opens to show its parts. */
+.mask-list {
+  margin: 4px 0 6px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--line);
 }
-.create-list {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-.create-kind {
-  display: flex;
-  align-items: flex-start;
-  gap: 12px;
-  padding: 12px;
-  border-radius: var(--r-control);
-  background: var(--well);
-  text-align: left;
-}
-.create-kind:hover {
-  background: var(--raised);
-}
-.create-kind:disabled {
-  opacity: 0.4;
-  pointer-events: none;
-}
-.create-kind svg {
-  flex: none;
-  margin-top: 1px;
-  color: var(--muted);
-}
-/* In place of the icon while the subject is found; the same 18px box. */
-.create-kind .spinner {
-  margin: 4px 3px 0;
-}
-.create-kind[aria-busy="true"] {
-  opacity: 1;
-}
-.create-kind > span {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-.create-kind strong {
-  font-weight: 500;
-}
-.create-kind span span {
-  color: var(--muted);
-  font-size: 12px;
-  line-height: 1.4;
-}
-
-/* The chosen mask's settings in the side column. */
-.mask-heading {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  height: 34px;
-  padding-right: 10px;
-}
-.mask-heading h3 {
-  min-width: 0;
-  overflow: hidden;
-  font-size: 13px;
-  font-weight: 500;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.toggle {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  color: var(--muted);
-  font-size: 12px;
-}
-.toggle:hover {
-  color: var(--text);
-}
-.toggle input {
-  width: 14px;
-  height: 14px;
+.mask-list ul {
   margin: 0;
-  accent-color: var(--accent);
-}
-.part-footer {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-}
-.part-footer .button {
-  flex: none;
-  height: 26px;
-  padding: 0 9px;
-}
-
-/* The masks as layers, floating over the photo's corner. */
-.stage {
-  position: relative;
-}
-.mask-layers {
-  position: absolute;
-  right: 16px;
-  bottom: 16px;
-  z-index: 5;
-  display: flex;
-  flex-direction: column;
-  width: 252px;
-  max-height: calc(100% - 82px);
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  background: var(--panel);
-  box-shadow: 0 12px 32px rgb(0 0 0 / 0.4);
-}
-.mask-layers header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex: none;
-  height: 36px;
-  padding: 0 8px 0 6px;
-}
-.layers-title {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  height: 26px;
-  padding: 0 6px;
-  border-radius: 6px;
-  font-weight: 500;
-}
-.layers-title svg {
-  color: var(--faint);
-  transition: transform 0.12s;
-}
-.layers-title[aria-expanded="false"] svg {
-  transform: rotate(-90deg);
-}
-.layer-list {
-  flex: 1;
-  min-height: 0;
-  margin: 0;
-  padding: 0 6px 4px;
-  overflow-y: auto;
+  padding: 0;
   list-style: none;
 }
-.layer {
-  border-radius: 8px;
+.mask-row {
+  border-radius: var(--r-control);
 }
-.layer.selected {
-  background: var(--raised);
+.mask-row.selected {
+  background: var(--accent-wash);
 }
-.layer-row {
+.mask-row-head {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto auto;
   align-items: center;
   gap: 2px;
-  padding-right: 4px;
+  padding-right: 6px;
 }
-.layer-row > .branch-name {
+.mask-row-head > .branch-name {
   margin: 4px;
 }
-.layer-main {
+.mask-row-main {
   display: flex;
   align-items: center;
   gap: 10px;
   min-width: 0;
-  padding: 5px;
-  border-radius: 8px;
+  padding: 5px 6px;
+  border-radius: var(--r-control);
   text-align: left;
 }
-.layer:not(.selected) .layer-main:hover {
+.mask-row:not(.selected) .mask-row-main:hover {
   background: var(--raised);
 }
-.layer.hidden .layer-name,
-.layer.hidden .matte {
+.mask-row.selected .layer-name {
+  font-weight: 600;
+}
+.mask-row.hidden .layer-name,
+.mask-row.hidden .matte {
   opacity: 0.45;
+}
+/* Row buttons that only matter up close show on hover, on the chosen mask, and when focused. */
+.mask-row .reveal,
+.mask-part-row .reveal {
+  opacity: 0;
+}
+.mask-row:hover .reveal,
+.mask-row.selected > .mask-row-head .reveal,
+.mask-part-row:hover .reveal,
+.mask-part-row.selected .reveal,
+.mask-list .reveal:focus-visible {
+  opacity: 1;
 }
 .layer-name {
   flex: 1;
@@ -2000,41 +1882,28 @@ button {
   display: grid;
   place-items: center;
   flex: none;
-  width: 36px;
-  height: 36px;
+  width: 32px;
+  height: 32px;
   overflow: hidden;
-  border-radius: 4px;
+  border-radius: var(--r-thumb);
   background: #000;
   box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.08);
 }
 .matte canvas {
   display: block;
 }
-.layer-parts {
-  margin: 0;
-  padding: 2px 4px 0 10px;
-  list-style: none;
+
+/* Under the chosen mask: its parts, and what can be done to it. */
+.mask-parts {
+  padding: 0 6px 6px 48px;
 }
-.layer-part {
+.mask-part-row {
   display: grid;
-  grid-template-columns: 22px minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) auto auto;
   align-items: center;
   gap: 2px;
 }
-.mode-mark {
-  display: grid;
-  place-items: center;
-  width: 20px;
-  height: 22px;
-  border-radius: 5px;
-  color: var(--faint);
-  font-size: 13px;
-}
-button.mode-mark:hover {
-  background: var(--hover);
-  color: var(--text);
-}
-.layer-part-main {
+.mask-part-main {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -2046,41 +1915,122 @@ button.mode-mark:hover {
   font-size: 12px;
   text-align: left;
 }
-.layer-part-main:hover {
+.mask-part-main svg {
+  flex: none;
+}
+.mask-part-main:hover {
   color: var(--text);
 }
-.layer-part.selected .layer-part-main {
+.mask-part-row.selected .mask-part-main {
   background: var(--hover);
   color: var(--text);
 }
-.layer-actions {
+.mode-mark {
+  color: var(--faint);
+}
+.mask-part-actions {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 2px;
-  padding: 4px 6px 6px 30px;
+  margin: 4px 0 0 -4px;
 }
-.layer-actions .spinner {
+.mask-part-actions .button,
+.mask-list-footer .button {
+  gap: 5px;
+  height: 24px;
+  padding: 0 7px;
+  font-size: 12px;
+}
+.mask-part-actions .spinner {
   margin-left: 6px;
 }
 .layer-note {
-  padding: 0 8px;
+  padding: 0 4px;
   color: var(--muted);
   font-size: 12px;
 }
-.layer-actions .button {
-  height: 24px;
-  padding: 0 8px;
-  font-size: 12px;
+.mask-list-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 6px;
 }
-.overlay-toggle {
-  flex: none;
-  height: 36px;
-  padding: 0 12px;
-  border-top: 1px solid var(--line);
-}
-.overlay-toggle .key {
+.mask-part-actions .invert {
   margin-left: auto;
-  color: var(--faint);
+}
+
+/* Starting a mask: a tile for each way of picking out part of the photo. */
+.new-mask {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 6px 12px 16px 0;
+}
+.new-mask h3 {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+.new-mask-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+}
+.new-mask-tile {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-width: 0;
+  height: 64px;
+  border-radius: var(--r-control);
+  background: var(--well);
+  color: var(--muted);
+  font-size: 11px;
+}
+.new-mask-tile span:not(.spinner) {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.new-mask-tile:hover {
+  background: var(--raised);
+  color: var(--text);
+}
+.new-mask-tile.engaged,
+.new-mask-tile[aria-pressed="true"] {
+  background: var(--accent-wash);
+  color: var(--text);
+}
+.new-mask-tile:disabled {
+  opacity: 0.35;
+  pointer-events: none;
+}
+.new-mask-tile[aria-busy="true"] {
+  opacity: 1;
+}
+/* In place of the icon while the part is found; the same 18px box. */
+.new-mask-tile .spinner {
+  margin: 2px;
+}
+
+/* The chosen part's settings and the mask's sliders, under the list. */
+.part-hint {
+  padding: 4px 12px 6px 0;
+}
+.part-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.part-footer .button {
+  flex: none;
+  height: 26px;
+  padding: 0 9px;
 }
 
 .info {
