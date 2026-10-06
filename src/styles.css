@@ -848,7 +848,14 @@ button {
   position: absolute;
   visibility: hidden;
 }
-.canvas-box canvas {
+.canvas-clip {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+}
+.canvas-clip canvas {
+  position: absolute;
+  inset: 0;
   display: block;
   width: 100%;
   height: 100%;

@@ -224,8 +224,8 @@ function Stage({ photo, onZoomChange }: { photo: Photo; onZoomChange: (label: st
   const canvas = useRef<HTMLCanvasElement>(null);
   const [area, setArea] = useState({ width: 0, height: 0 });
   const [view, setView] = useState<View>(FIT);
-  /** What is on the canvas: which photo, and whether it is the crop tool's uncropped view. */
-  const [painted, setPainted] = useState<{ id: number; uncropped: boolean } | null>(null);
+  /** What is on the canvas: which photo, which part of it, and whether it is the crop tool's uncropped view. */
+  const [painted, setPainted] = useState<{ id: number; region: Region; uncropped: boolean } | null>(null);
 
   const ready = useStore((s) => s.editor.ready && s.editor.photoId === photo.id);
   const photoSize = useStore((s) => s.editor.size);
@@ -315,7 +315,7 @@ function Stage({ photo, onZoomChange }: { photo: Photo; onZoomChange: (label: st
           }
           target.getContext("2d")!.putImageData(rendered.pixels, 0, 0);
           useStore.getState().noteFrame(rendered);
-          setPainted({ id: request.id, uncropped: request.uncropped });
+          setPainted({ id: request.id, region: request.region, uncropped: request.uncropped });
         }
       } catch {
         // The photo was closed or swapped while this frame was on its way.
@@ -335,7 +335,8 @@ function Stage({ photo, onZoomChange }: { photo: Photo; onZoomChange: (label: st
   const zoomAt = useCallback(
     (zoom: number | null, clientX: number, clientY: number) => {
       if (!geometry || !frame || uncropped) return;
-      const shown = canvas.current!.getBoundingClientRect();
+      // The box, not the canvas: a waiting frame may sit off it.
+      const shown = canvas.current!.closest(".canvas-box")!.getBoundingClientRect();
       const stage = box.current!.getBoundingClientRect();
       // The point of the picture under the pointer…
       const u = geometry.region.x + clamp((clientX - shown.left) / shown.width, 0, 1) * geometry.region.width;
@@ -400,6 +401,17 @@ function Stage({ photo, onZoomChange }: { photo: Photo; onZoomChange: (label: st
 
   const live = painted?.id === photo.id && geometry !== null;
   const shown = geometry && { width: geometry.width / geometry.ratio, height: geometry.height / geometry.ratio };
+  // While a zoom or pan waits for its frame, the last one is scaled and moved
+  // to where its part of the picture now sits, rather than stretched to fit.
+  const placed =
+    live && shown && painted.uncropped === uncropped
+      ? {
+          left: ((painted.region.x - geometry.region.x) / geometry.region.width) * shown.width,
+          top: ((painted.region.y - geometry.region.y) / geometry.region.height) * shown.height,
+          width: (painted.region.width / geometry.region.width) * shown.width,
+          height: (painted.region.height / geometry.region.height) * shown.height,
+        }
+      : undefined;
   return (
     <div
       ref={box}
@@ -422,7 +434,9 @@ function Stage({ photo, onZoomChange }: { photo: Photo; onZoomChange: (label: st
         </>
       )}
       <div className={`canvas-box ${live ? "" : "pending"}`} style={shown ?? undefined}>
-        <canvas ref={canvas} />
+        <div className="canvas-clip">
+          <canvas ref={canvas} style={placed} />
+        </div>
         {/* The frame goes on only once the canvas really shows the uncropped photo underneath it. */}
         {live && uncropped && painted?.uncropped && shown && frame && photoSize && (
           <CropOverlay photo={photoSize} scale={shown.width / frame.width} width={shown.width} height={shown.height} />
