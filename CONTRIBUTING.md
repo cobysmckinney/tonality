@@ -103,7 +103,7 @@ A few rules that aren't obvious from the code:
 - **Style**: match the code around you. Neither side has a formatter set up yet, so don't reformat files you aren't otherwise changing.
 - **Dependencies** must be compatible with GPL-3.0-or-later. Don't commit sample photos or other large files.
 
-PRs are squash-merged, so tidy commit history inside a PR doesn't matter. The PR title becomes the commit message.
+PRs are squash-merged, so tidy commit history inside a PR doesn't matter. The PR title becomes the commit message. Your branch is deleted once it's merged.
 
 Using AI tools to help write a contribution is fine. Every PR is judged on the same terms: does it work, is it tested, and is it the right change.
 

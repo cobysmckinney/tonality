@@ -18,7 +18,8 @@ A "one size fits all" editor: a lot of power behind an interface someone can use
 ## Workflow
 
 - `develop` is the default branch and holds the latest work; it isn't guaranteed stable, and nightly builds will come from it. `main` is stable: full releases ship from it, and it only moves when `develop` is brought over for a release.
-- Every change goes through a branch and a pull request into `develop`, squash-merged. Never commit to or push `develop` or `main`.
+- Every change goes through a branch and a pull request into `develop`, squash-merged. Never commit to or push `develop` or `main` (GitHub rules block it anyway).
+- A release is a pull request from `develop` into `main`, merged with a merge commit (not squashed) so the two branches share history. An urgent fix goes into `develop` like anything else and then out in a release; there are no hotfix branches off `main`.
 - Branch from an up-to-date `develop`, named after the change (`fix-mask-part-target`, `crop-zoom`).
 - Claude may commit, push the branch and open the PR once the change is tested. Merging is the maintainer's call; never merge, and never force-push a branch someone else is working on.
 - The PR body says what changed for the user and why, how it was checked, and `Closes #N` for each issue it fixes.
