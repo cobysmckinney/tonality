@@ -98,7 +98,7 @@ A few rules that aren't obvious from the code:
 - Work on a branch, one change per PR. Small PRs get reviewed faster.
 - **Title**: one sentence describing the result for the user, in sentence case: "Zooming no longer stretches the photo while the next frame renders". No `feat:` or `fix:` prefixes.
 - **Description**: what changed and why, how you checked it, and `Closes #123` for the issues it fixes. Add a screenshot or short clip for anything visible.
-- **Checks**: `bun test`, `bunx tsc --noEmit` and `cargo test` pass. Changes to the shader or GPU pipeline come with a GPU test.
+- **Checks**: `bun test`, `bunx tsc --noEmit` and `cargo test` pass. Changes to the shader or GPU pipeline come with a GPU test. GitHub runs these, and `cargo clippy`, on every PR; a PR can't be merged until they pass.
 - **Docs**: if users would notice the change, update the [user guide](docs/guide.md) in the same PR.
 - **Style**: match the code around you. Neither side has a formatter set up yet, so don't reformat files you aren't otherwise changing.
 - **Dependencies** must be compatible with GPL-3.0-or-later. Don't commit sample photos or other large files.
