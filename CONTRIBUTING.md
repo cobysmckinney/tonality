@@ -95,7 +95,7 @@ A few rules that aren't obvious from the code:
 
 ## Pull requests
 
-- Work on a branch, one change per PR. Small PRs get reviewed faster.
+- Branch from `develop` and open the PR against it, one change per PR. Small PRs get reviewed faster. `develop` has the latest work and isn't always stable; `main` is stable, and releases are made from it.
 - **Title**: one sentence describing the result for the user, in sentence case: "Zooming no longer stretches the photo while the next frame renders". No `feat:` or `fix:` prefixes.
 - **Description**: what changed and why, how you checked it, and `Closes #123` for the issues it fixes. Add a screenshot or short clip for anything visible.
 - **Checks**: `bun test`, `bunx tsc --noEmit` and `cargo test` pass. Changes to the shader or GPU pipeline come with a GPU test. GitHub runs these, and `cargo clippy`, on every PR; a PR can't be merged until they pass.
@@ -103,7 +103,7 @@ A few rules that aren't obvious from the code:
 - **Style**: match the code around you. Neither side has a formatter set up yet, so don't reformat files you aren't otherwise changing.
 - **Dependencies** must be compatible with GPL-3.0-or-later. Don't commit sample photos or other large files.
 
-PRs are squash-merged, so tidy commit history inside a PR doesn't matter. The PR title becomes the commit message.
+PRs are squash-merged, so tidy commit history inside a PR doesn't matter. The PR title becomes the commit message. Your branch is deleted once it's merged.
 
 Using AI tools to help write a contribution is fine. Every PR is judged on the same terms: does it work, is it tested, and is it the right change.
 
