@@ -11,7 +11,8 @@ use anyhow::{anyhow, bail, Context, Result};
 use chrono::NaiveDateTime;
 use image::metadata::Orientation;
 use image::{DynamicImage, ImageDecoder, ImageReader, RgbImage};
-use rawler::decoders::RawDecodeParams;
+use rawler::decoders::{Decoder, RawDecodeParams};
+use rawler::RawImage;
 use rawler::imgop::develop::RawDevelop;
 use rawler::rawsource::RawSource;
 
@@ -180,7 +181,7 @@ pub fn read_meta(path: &Path, kind: Kind) -> Meta {
 }
 
 fn raw_meta(path: &Path) -> Result<Meta> {
-    let source = RawSource::new(path)?;
+    let source = open_raw(path)?;
     let decoder = rawler::get_decoder(&source).map_err(|e| anyhow!("{e}"))?;
     let params = RawDecodeParams::default();
     let md = decoder.raw_metadata(&source, &params).map_err(|e| anyhow!("{e}"))?;
@@ -268,6 +269,134 @@ fn image_meta(path: &Path) -> Meta {
     meta
 }
 
+/// Opens a RAW file for rawler.
+///
+/// Some converters write DNGs whose tiles are 8-bit JPEGs, usually lossless
+/// ones with a linearization table restoring the full range. rawler 0.8
+/// refuses lossless JPEG below 10 bits, so for such a file this decodes the
+/// tiles itself and returns an in-memory copy that stores them uncompressed,
+/// which rawler reads like any other DNG.
+pub(crate) fn open_raw(path: &Path) -> Result<RawSource> {
+    let source = RawSource::new(path)?;
+    let uncompressed = uncompress_jpeg_tiles(&source).with_context(|| format!("decoding the JPEG tiles of {}", path.display()))?;
+    Ok(uncompressed.unwrap_or(source))
+}
+
+/// Reads the sensor data of a RAW file, filling in colour information rawler
+/// 0.8 leaves out of some DNGs.
+///
+/// DNGs written by converters such as Lightroom often carry one colour
+/// matrix with no illuminant, which the DNG spec says applies to any light,
+/// and give the white point as a chromaticity instead of a camera neutral.
+/// rawler only looks for matrices of named illuminants and only reads the
+/// neutral, so it would treat the pixels as XYZ with no white balance.
+pub(crate) fn raw_image(decoder: &dyn Decoder, source: &RawSource, params: &RawDecodeParams) -> Result<RawImage> {
+    use rawler::decoders::WellKnownIFD;
+    use rawler::imgop::xyz::Illuminant;
+    use rawler::tags::DngTag;
+
+    let mut raw = decoder.raw_image(source, params, false).map_err(|e| anyhow!("{e}"))?;
+    if raw.color_matrix.len() == 1 {
+        if let Some(matrix) = raw.color_matrix.remove(&Illuminant::Unknown) {
+            raw.color_matrix.insert(Illuminant::D65, matrix);
+        }
+    }
+
+    let white_xy = decoder
+        .ifd(WellKnownIFD::Root)
+        .ok()
+        .flatten()
+        .and_then(|root| root.get_entry(DngTag::AsShotWhiteXY).map(|entry| [entry.force_f32(0), entry.force_f32(1)]));
+    let matrix = raw.color_matrix.get(&Illuminant::D65).or_else(|| raw.color_matrix.values().next());
+    if let (true, Some([x, y]), Some(matrix)) = (raw.wb_coeffs[0].is_nan(), white_xy, matrix) {
+        // The camera's response to the white point, from XYZ to camera space.
+        let xyz = [x / y, 1.0, (1.0 - x - y) / y];
+        let neutral: Vec<f32> = matrix.as_chunks::<3>().0.iter().map(|row| row.iter().zip(xyz).map(|(m, v)| m * v).sum()).collect();
+        if neutral.len() == 3 && neutral.iter().all(|v| v.is_finite() && *v > 0.0) {
+            raw.wb_coeffs = [neutral[1] / neutral[0], 1.0, neutral[1] / neutral[2], f32::NAN];
+        }
+    }
+    Ok(raw)
+}
+
+fn uncompress_jpeg_tiles(source: &RawSource) -> Result<Option<RawSource>> {
+    use rawler::bits::Endian;
+    use rawler::decoders::{FormatHint, WellKnownIFD};
+    use rawler::formats::tiff::{Entry, Value};
+    use rawler::tags::TiffCommonTag;
+    use rayon::prelude::*;
+
+    let Ok(decoder) = rawler::get_decoder(source) else { return Ok(None) };
+    if decoder.format_hint() != FormatHint::DNG {
+        return Ok(None);
+    }
+    let Some(raw) = decoder.ifd(WellKnownIFD::Raw).ok().flatten() else { return Ok(None) };
+    let number = |tag| raw.get_entry(tag).map(|entry: &Entry| entry.force_u32(0));
+    let eight_bit = matches!(
+        raw.get_entry(TiffCommonTag::BitsPerSample),
+        Some(Entry { value: Value::Short(bits), .. }) if bits.iter().all(|&bits| bits == 8)
+    );
+    let (Some(7), true, Some(offsets), Some(counts)) = (
+        number(TiffCommonTag::Compression),
+        eight_bit,
+        raw.get_entry(TiffCommonTag::TileOffsets),
+        raw.get_entry(TiffCommonTag::TileByteCounts),
+    ) else {
+        return Ok(None);
+    };
+    let tile_width = number(TiffCommonTag::TileWidth).context("no tile width")?;
+    let tile_height = number(TiffCommonTag::TileLength).context("no tile height")?;
+    let channels = number(TiffCommonTag::SamplesPerPixel).unwrap_or(1) as usize;
+
+    let tiles: Vec<Vec<u8>> = raw
+        .tile_data(source)
+        .map_err(|e| anyhow!("{e}"))?
+        .par_iter()
+        .map(|tile| {
+            let mut decoder = jpeg_decoder::Decoder::new(*tile);
+            let pixels = decoder.decode()?;
+            let info = decoder.info().context("a tile has no JPEG header")?;
+            let expected = (tile_width * tile_height) as usize * channels;
+            if (info.width as u32, info.height as u32) != (tile_width, tile_height) || pixels.len() != expected {
+                bail!("a tile does not match the size or channels its DNG declares");
+            }
+            Ok(pixels)
+        })
+        .collect::<Result<_>>()?;
+
+    // Append the decoded tiles and point the raw image at them.
+    let mut bytes = source.buf().to_vec();
+    let mut new_offsets = Vec::with_capacity(tiles.len());
+    for tile in &tiles {
+        new_offsets.push(u32::try_from(bytes.len()).context("the DNG is too big to rewrite")?);
+        bytes.extend_from_slice(tile);
+    }
+    let base = raw.base as usize;
+    let mut put = |entry: &Entry, index: usize, value: u32| -> Result<()> {
+        let at = base + entry.embedded.context("tag position unknown")? as usize;
+        let (at, encoded) = match entry.value {
+            Value::Short(_) => {
+                let value = u16::try_from(value)?;
+                let encoded = if raw.endian == Endian::Big { value.to_be_bytes() } else { value.to_le_bytes() };
+                (at + index * 2, encoded.to_vec())
+            }
+            Value::Long(_) => {
+                let encoded = if raw.endian == Endian::Big { value.to_be_bytes() } else { value.to_le_bytes() };
+                (at + index * 4, encoded.to_vec())
+            }
+            _ => bail!("unexpected type for tag {:#x}", entry.tag),
+        };
+        bytes.get_mut(at..at + encoded.len()).context("tag outside the file")?.copy_from_slice(&encoded);
+        Ok(())
+    };
+    put(raw.get_entry(TiffCommonTag::Compression).context("no compression tag")?, 0, 1)?;
+    for (index, (offset, tile)) in new_offsets.iter().zip(&tiles).enumerate() {
+        put(offsets, index, *offset)?;
+        put(counts, index, tile.len() as u32)?;
+    }
+    Ok(Some(RawSource::new_from_shared_vec(std::sync::Arc::new(bytes))))
+}
+
 fn long_edge(image: &DynamicImage) -> u32 {
     image.width().max(image.height())
 }
@@ -287,7 +416,7 @@ pub(crate) fn decode_image(path: &Path) -> Result<Decoded> {
 /// when it is big enough for `edge`, otherwise a basic develop of the sensor
 /// data.
 fn decode_raw(path: &Path, edge: u32) -> Result<Decoded> {
-    let source = RawSource::new(path)?;
+    let source = open_raw(path)?;
     let decoder = rawler::get_decoder(&source).map_err(|e| anyhow!("{e}"))?;
     let params = RawDecodeParams::default();
     let orientation = decoder
@@ -310,10 +439,9 @@ fn decode_raw(path: &Path, edge: u32) -> Result<Decoded> {
     let image = match embedded {
         Some(image) if big_enough(&image) => image,
         fallback => {
-            let developed = decoder
-                .raw_image(&source, &params, false)
-                .and_then(|raw| RawDevelop::default().develop_intermediate(&raw))
+            let developed = raw_image(decoder.as_ref(), &source, &params)
                 .ok()
+                .and_then(|raw| RawDevelop::default().develop_intermediate(&raw).ok())
                 .and_then(|intermediate| intermediate.to_dynamic_image());
             match developed.or(fallback) {
                 Some(image) => image,

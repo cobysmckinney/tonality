@@ -41,6 +41,7 @@ bytemuck = { version = "1.25.2", features = ["derive"] }
 # The subject model runs on the CPU in pure Rust, so mobile builds need no native runtime.
 tract-onnx = "0.23.8"
 tract-linalg = { version = "0.23.8", features = ["multithread-mm"] }
+jpeg-decoder = { version = "0.3.2", default-features = false }
 
 
 [features]

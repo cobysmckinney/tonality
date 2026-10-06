@@ -7,7 +7,6 @@ use anyhow::{anyhow, bail, Context, Result};
 use image::metadata::Orientation;
 use rawler::decoders::RawDecodeParams;
 use rawler::imgop::develop::{Intermediate, ProcessingStep, RawDevelop};
-use rawler::rawsource::RawSource;
 
 use crate::media;
 
@@ -28,10 +27,10 @@ pub fn load(path: &Path, is_raw: bool) -> Result<LinearImage> {
 }
 
 fn load_raw(path: &Path) -> Result<LinearImage> {
-    let source = RawSource::new(path)?;
+    let source = media::open_raw(path)?;
     let decoder = rawler::get_decoder(&source).map_err(|e| anyhow!("{e}"))?;
     let params = RawDecodeParams::default();
-    let raw = decoder.raw_image(&source, &params, false).map_err(|e| anyhow!("{e}"))?;
+    let raw = media::raw_image(decoder.as_ref(), &source, &params)?;
     let orientation = decoder
         .raw_metadata(&source, &params)
         .ok()
