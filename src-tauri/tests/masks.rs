@@ -274,3 +274,45 @@ fn the_sky_and_circled_objects_each_read_their_own_matte() {
     assert!(both(0.85, 0.85) > plain + 30, "the object");
     assert_eq!(both(0.5, 0.85), plain);
 }
+
+/// A loop of a few pixels: too small to find anything in, so finding it fails.
+fn tiny_loop() -> Vec<[f32; 2]> {
+    vec![[0.5, 0.5], [0.52, 0.5], [0.52, 0.52]]
+}
+
+#[test]
+fn a_part_that_cant_be_found_draws_as_empty() {
+    let Some(gpu) = gpu() else { return };
+    let folder = tempfile::tempdir().unwrap();
+    let mut session = photo(gpu, false);
+    session.matte_files = Some(folder.path().join("1-"));
+    let object = Found::Object(tiny_loop());
+    let plain = draw(gpu, &session, &Adjustments::default());
+    let recipe = with(vec![brighter(vec![add(Shape::Object { points: tiny_loop() })])]);
+
+    let shade = draw(gpu, &session, &recipe);
+    assert_eq!(shade(0.51, 0.51), plain(0.51, 0.51));
+    assert_eq!(shade(0.1, 0.1), plain(0.1, 0.1));
+    assert!(!session.matte_path(&object).unwrap().exists(), "an empty part isn't kept, so it's tried again next time");
+    // It's tried once, not on every frame.
+    assert!(gpu.ensure_found(&session, std::slice::from_ref(&object)).is_empty());
+
+    // Found after all (circled again from the editor), it draws.
+    session.set_matte(&object, image::GrayImage::from_pixel(60, 40, image::Luma([255])));
+    assert!(draw(gpu, &session, &recipe)(0.1, 0.1) > plain(0.1, 0.1) + 30);
+}
+
+#[test]
+fn a_part_that_cant_be_found_doesnt_show_another_parts_matte() {
+    let Some(gpu) = gpu() else { return };
+    let session = photo(gpu, false);
+    session.set_matte(&Found::Subject, left_half());
+    let plain = draw(gpu, &session, &Adjustments::default())(0.5, 0.5);
+    // The subject is drawn first, into the layer the object will use next.
+    let subject = draw(gpu, &session, &with(vec![brighter(vec![add(Shape::Subject)])]));
+    assert!(subject(0.2, 0.5) > plain + 30);
+
+    let object = draw(gpu, &session, &with(vec![brighter(vec![add(Shape::Object { points: tiny_loop() })])]));
+    assert_eq!(object(0.2, 0.5), plain);
+    assert_eq!(object(0.8, 0.5), plain);
+}

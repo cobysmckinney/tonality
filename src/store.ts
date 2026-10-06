@@ -446,6 +446,10 @@ export const useStore = create<State>((set, get) => {
         return run();
       });
       const done = ids.slice(0, result.versions.length);
+      if (result.failed.length > 0) {
+        const which = result.failed.length === 1 ? "one thumbnail" : `${result.failed.length} thumbnails`;
+        get().toast({ text: `Couldn’t redraw ${which}: ${result.failed[0]}`, tone: "error" });
+      }
       return { done, versionOf: new Map(done.map((photo, i) => [photo, result.versions[i]])), cancelled: result.cancelled };
     } finally {
       editsActivity = null;
@@ -791,6 +795,9 @@ export const useStore = create<State>((set, get) => {
             adjustments: photo.history.adjustments,
             committed: photo.history.adjustments,
           });
+          for (const what of new Set(photo.missing)) {
+            get().toast({ text: `Couldn’t find ${what} in this photo, so that part of its mask is empty`, tone: "error" });
+          }
         } catch (error) {
           get().toast({ text: String(error), tone: "error" });
         }

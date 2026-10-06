@@ -7,7 +7,7 @@ use bytemuck::{Pod, Zeroable};
 use half::f16;
 use rayon::prelude::*;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
@@ -124,6 +124,10 @@ pub struct Session {
     mattes: Mutex<HashMap<String, Arc<image::GrayImage>>>,
     /// Held while a matte is being found, so each is found only once.
     finding: Mutex<()>,
+    /// Keys of parts that couldn't be found this session. They draw as
+    /// empty and aren't tried again until asked for (`find_parts`) or the
+    /// photo is opened again.
+    missing: Mutex<HashSet<String>>,
 }
 
 impl Session {
@@ -140,7 +144,9 @@ impl Session {
     /// Uses `matte` for this found part: white where it is. Any size; it is
     /// stretched over the whole photo.
     pub fn set_matte(&self, found: &Found, matte: image::GrayImage) {
-        self.mattes.lock().unwrap().insert(found.key(), Arc::new(matte));
+        let key = found.key();
+        self.missing.lock().unwrap().remove(&key);
+        self.mattes.lock().unwrap().insert(key, Arc::new(matte));
     }
 
     /// Where this part's matte is kept between sessions, if anywhere.
@@ -408,6 +414,7 @@ impl Gpu {
             matte_files: None,
             mattes: Mutex::new(HashMap::new()),
             finding: Mutex::new(()),
+            missing: Mutex::new(HashSet::new()),
         })
     }
 
@@ -464,20 +471,29 @@ impl Gpu {
 
     /// Makes sure these found parts' mattes are ready for the shader: read
     /// from the cache, or found by a model, which takes a second or two each.
-    pub fn ensure_found(&self, session: &Session, found: &[Found]) -> Result<()> {
+    /// A part that can't be found draws as empty rather than stopping the
+    /// photo drawing; those found missing by this call are returned.
+    pub fn ensure_found(&self, session: &Session, found: &[Found]) -> Vec<(Found, anyhow::Error)> {
+        let mut missing = Vec::new();
         for part in found {
-            if session.has_matte(part) {
+            let ready = || session.has_matte(part) || session.missing.lock().unwrap().contains(&part.key());
+            if ready() {
                 continue;
             }
             let _finding = session.finding.lock().unwrap();
             // Another thread may have found it while this one waited.
-            if session.has_matte(part) {
+            if ready() {
                 continue;
             }
-            let matte = part.find_cached(&session.picture, session.matte_path(part).as_deref())?;
-            session.set_matte(part, matte);
+            match part.find_cached(&session.picture, session.matte_path(part).as_deref()) {
+                Ok(matte) => session.set_matte(part, matte),
+                Err(error) => {
+                    session.missing.lock().unwrap().insert(part.key());
+                    missing.push((part.clone(), error));
+                }
+            }
         }
-        Ok(())
+        missing
     }
 
     /// Puts the mattes of `found` into the layers the shader reads them from,
@@ -494,17 +510,25 @@ impl Gpu {
         let mattes = session.mattes.lock().unwrap();
         for (layer, part) in found.iter().enumerate() {
             let key = part.key();
-            if coverages.found_layers[layer].as_ref() == Some(&key) {
+            let matte = mattes.get(&key);
+            // An empty layer is labelled apart from the part, so the matte replaces it once found.
+            let label = if matte.is_some() { key } else { format!("missing {key}") };
+            if coverages.found_layers[layer].as_ref() == Some(&label) {
                 continue;
             }
-            let Some(matte) = mattes.get(&key) else { continue };
             // A matte kept from a session with another texture limit may be another size.
             let resized;
-            let matte = if matte.dimensions() == (width, height) {
-                matte.as_ref()
-            } else {
-                resized = image::imageops::resize(matte.as_ref(), width, height, image::imageops::FilterType::Triangle);
-                &resized
+            let matte = match matte {
+                Some(matte) if matte.dimensions() == (width, height) => matte.as_ref(),
+                Some(matte) => {
+                    resized =
+                        image::imageops::resize(matte.as_ref(), width, height, image::imageops::FilterType::Triangle);
+                    &resized
+                }
+                None => {
+                    resized = image::GrayImage::new(width, height);
+                    &resized
+                }
             };
             self.queue.write_texture(
                 wgpu::TexelCopyTextureInfo {
@@ -517,7 +541,7 @@ impl Gpu {
                 wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(width), rows_per_image: Some(height) },
                 wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
             );
-            coverages.found_layers[layer] = Some(key);
+            coverages.found_layers[layer] = Some(label);
         }
     }
 
@@ -597,7 +621,9 @@ impl Gpu {
         let frame = geometry::frame(session.width, session.height, adjustments, uncropped);
         let to_source = geometry::frame_to_source(session.width, session.height, adjustments, &frame).0;
         let (packed, strokes, found) = masks::pack(&a.masks, session.width, session.height, mask_overlay);
-        self.ensure_found(session, &found)?;
+        for (part, error) in self.ensure_found(session, &found) {
+            eprintln!("couldn't find {}, drawing it as empty: {error:#}", part.name());
+        }
         let mut coverages = session.coverages.lock().unwrap();
         if !strokes.is_empty() {
             self.paint_brushes(session, &mut coverages, &strokes);

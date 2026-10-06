@@ -142,6 +142,8 @@ export interface EditorPhoto {
   width: number;
   height: number;
   history: History;
+  /** Found parts of its masks that couldn't be found in this photo ("the object"); they are left empty. */
+  missing: string[];
 }
 
 export interface Frame {
@@ -237,6 +239,8 @@ export interface AppliedEdits {
   versions: number[];
   /** True if it was stopped before reaching every photo. */
   cancelled: boolean;
+  /** Why thumbnails couldn't be redrawn, one per photo it happened to. Their edits were still applied. */
+  failed: string[];
 }
 
 /** What reading preset files came to. */
