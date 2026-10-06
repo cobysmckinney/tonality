@@ -1,0 +1,39 @@
+name: Bug report
+description: Something works wrong, crashes, or a photo looks wrong
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+      placeholder: |
+        1. Opened a photo, chose Add → Subject on a mask
+        2. Clicked another mask while it was being found
+        3. The subject was added to the other mask
+    validations:
+      required: true
+  - type: input
+    id: system
+    attributes:
+      label: System
+      description: Operating system, desktop, and graphics card.
+      placeholder: Arch Linux, Hyprland, AMD Radeon RX 7800 XT
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Tonality version or commit
+      placeholder: 0.1.0, or the output of `git rev-parse --short HEAD`
+  - type: input
+    id: camera
+    attributes:
+      label: Camera and file type
+      description: If it's about a particular photo.
+      placeholder: Sony A7 IV, .ARW
+  - type: textarea
+    id: sample
+    attributes:
+      label: Sample file, screenshots, logs
+      description: A link to a file that shows the problem helps the most. Paste any error text from the terminal you started Tonality from.
