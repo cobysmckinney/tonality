@@ -239,6 +239,15 @@ impl Found {
         }
     }
 
+    /// What this part is, in words: "the subject".
+    pub fn name(&self) -> &'static str {
+        match self {
+            Found::Subject => "the subject",
+            Found::Sky => "the sky",
+            Found::Object(_) => "the object",
+        }
+    }
+
     /// Names this matte among the photo's: its cache file is named after it.
     pub fn key(&self) -> String {
         match self {

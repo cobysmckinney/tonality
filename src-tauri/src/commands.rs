@@ -214,6 +214,9 @@ pub struct EditorPhoto {
     width: u32,
     height: u32,
     history: History,
+    /// Found parts of its masks that couldn't be found in this photo, such
+    /// as "the object"; they are left empty.
+    missing: Vec<String>,
 }
 
 #[derive(serde::Deserialize)]
@@ -231,6 +234,7 @@ pub async fn open_editor(app: AppHandle, id: i64) -> CommandResult<EditorPhoto> 
         let state = app.state::<AppState>();
         let history = state.library.history(id).map_err(message)?;
         let mut editing = state.editing();
+        let mut missing = Vec::new();
         if !matches!(&*editing, Some((open, _)) if *open == id) {
             // Let go of the previous photo first; two at once is a lot of memory.
             *editing = None;
@@ -238,11 +242,13 @@ pub async fn open_editor(app: AppHandle, id: i64) -> CommandResult<EditorPhoto> 
             // Have found parts ready before the first frame needs them; usually a quick read of the cache.
             let adjustments = Adjustments::from_json(state.library.edits(id).map_err(message)?.as_deref());
             let found = crate::masks::found(&adjustments.masks);
-            gpu::shared().map_err(message)?.ensure_found(&session, &found).map_err(message)?;
+            for (part, _) in gpu::shared().map_err(message)?.ensure_found(&session, &found) {
+                missing.push(part.name().to_string());
+            }
             *editing = Some((id, session));
         }
         let (_, session) = editing.as_ref().expect("just opened");
-        Ok(EditorPhoto { width: session.width, height: session.height, history })
+        Ok(EditorPhoto { width: session.width, height: session.height, history, missing })
     })
     .await
     .map_err(|e| e.to_string())?
@@ -475,6 +481,9 @@ pub struct AppliedEdits {
     versions: Vec<i64>,
     /// True if it was stopped before reaching every photo.
     cancelled: bool,
+    /// Why thumbnails couldn't be redrawn, one entry per photo it happened to.
+    /// Their edits were still applied.
+    failed: Vec<String>,
 }
 
 /// Changes several photos' recipes, as a step in each one's history.
@@ -492,16 +501,26 @@ fn edit_each(
     let state = app.state::<AppState>();
     state.cancel_edits.store(false, Ordering::Relaxed);
     let mut versions = Vec::with_capacity(ids.len());
+    let mut failed = Vec::new();
     for &id in ids {
         if state.cancel_edits.load(Ordering::Relaxed) {
-            return Ok(AppliedEdits { versions, cancelled: true });
+            return Ok(AppliedEdits { versions, cancelled: true, failed });
         }
         let own = Adjustments::from_json(state.library.edits(id).map_err(message)?.as_deref());
         state.library.history_commit(id, &change(&own), label).map_err(message)?;
-        versions.extend(redraw(&state, &[id]).map_err(message)?);
+        // The edit is in; a thumbnail that can't be drawn shouldn't stop the rest.
+        match redraw(&state, &[id]) {
+            Ok(version) => versions.extend(version),
+            Err(error) => {
+                failed.push(message(error));
+                // Don't leave the old thumbnail standing in for the new edit.
+                thumbs::clear_rendered(&state.library, id);
+                versions.push(state.library.bump_version(id).map_err(message)?);
+            }
+        }
         let _ = app.emit("edits-progress", Progress { done: versions.len(), total: ids.len() });
     }
-    Ok(AppliedEdits { versions, cancelled: false })
+    Ok(AppliedEdits { versions, cancelled: false, failed })
 }
 
 /// Applies one recipe to several photos (pasting edits, or reverting to the
