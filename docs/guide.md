@@ -98,7 +98,7 @@ Exports are sRGB and carry the capture date, camera, lens and exposure.
 | Grid | `Ctrl+A` | Select all |
 | Grid | Enter, double-click | Open the photo |
 | Grid, editor | `F` / `P` / `X` / `U` | Favorite / pick / reject / unflag |
-| Grid, editor | `Delete` | Move to Recently Deleted (kept 30 days) |
+| Grid, editor | `Delete` | Move to Recently Deleted (kept 30 days). In the editor, not while a button or slider has focus: click the photo first |
 | Grid, editor | `Ctrl+C` / `Ctrl+V` | Copy / paste edits (in the grid, onto every selected photo) |
 | Grid, editor | `Ctrl+E` | Export |
 | Editor | `Esc` | Back to the grid |

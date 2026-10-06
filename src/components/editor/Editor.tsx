@@ -571,7 +571,11 @@ export function Editor({ photo, inert }: { photo: Photo; inert: boolean }) {
       else if (key === "p") void state.toggleFlag([open], 1);
       else if (key === "x") void state.toggleFlag([open], -1);
       else if (key === "u") void state.toggleFlag([open], 0);
-      else if ((key === "Delete" || key === "Backspace") && !onSlider) void state.trash([open]);
+      else if (key === "Delete" || key === "Backspace") {
+        // Only from the photo itself: with a tool's button or slider focused, a stray Backspace
+        // shouldn't throw the photo away. The filmstrip counts as the photo.
+        if (!target.closest("button:not(.strip-item), select, input")) void state.trash([open]);
+      }
     };
     const onKeyUp = (event: KeyboardEvent) => {
       if (event.key === "\\") useStore.getState().setShowOriginal(false);
