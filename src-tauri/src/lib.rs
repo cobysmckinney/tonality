@@ -96,7 +96,17 @@ pub fn run() {
             let path = request.uri().path().to_string();
             let worker = app.clone();
             app.state::<AppState>().renderers.spawn(move || {
-                responder.respond(image_response(&worker.state::<AppState>(), &path));
+                // A panic on this pool would abort the app, so it fails just this request.
+                let response = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    image_response(&worker.state::<AppState>(), &path)
+                }))
+                .unwrap_or_else(|_| {
+                    Response::builder()
+                        .status(StatusCode::INTERNAL_SERVER_ERROR)
+                        .body(b"drawing this image crashed".to_vec())
+                        .expect("static headers are valid")
+                });
+                responder.respond(response);
             });
         })
         .setup(|app| {

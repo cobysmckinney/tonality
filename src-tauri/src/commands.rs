@@ -3,7 +3,7 @@
 use std::cell::RefCell;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -34,9 +34,25 @@ pub struct AppState {
 }
 
 impl AppState {
+    /// The photo open in the editor. If a panic left the lock poisoned, the
+    /// half-known session is dropped so the next `open_editor` starts clean.
+    pub fn editing(&self) -> MutexGuard<'_, Option<(i64, Session)>> {
+        recover(&self.editing)
+    }
+
     pub fn current_scan(&self, session_id: u64) -> Option<Arc<ScanSession>> {
         self.scan.lock().unwrap().clone().filter(|session| session.id == session_id)
     }
+}
+
+/// Locks `lock`, emptying it if a panic poisoned it.
+fn recover<T>(lock: &Mutex<Option<T>>) -> MutexGuard<'_, Option<T>> {
+    lock.lock().unwrap_or_else(|poisoned| {
+        lock.clear_poison();
+        let mut guard = poisoned.into_inner();
+        *guard = None;
+        guard
+    })
 }
 
 type CommandResult<T> = Result<T, String>;
@@ -214,7 +230,7 @@ pub async fn open_editor(app: AppHandle, id: i64) -> CommandResult<EditorPhoto> 
     tauri::async_runtime::spawn_blocking(move || {
         let state = app.state::<AppState>();
         let history = state.library.history(id).map_err(message)?;
-        let mut editing = state.editing.lock().unwrap();
+        let mut editing = state.editing();
         if !matches!(&*editing, Some((open, _)) if *open == id) {
             // Let go of the previous photo first; two at once is a lot of memory.
             *editing = None;
@@ -239,7 +255,7 @@ pub async fn prepare_circles(app: AppHandle, id: i64) -> CommandResult<()> {
     tauri::async_runtime::spawn_blocking(move || {
         let state = app.state::<AppState>();
         let picture = {
-            let editing = state.editing.lock().unwrap();
+            let editing = state.editing();
             let (_, session) = editing.as_ref().filter(|(open, _)| *open == id).ok_or("This photo is no longer open in the editor.")?;
             session.picture()
         };
@@ -259,7 +275,7 @@ pub async fn find_parts(app: AppHandle, id: i64, shapes: Vec<Shape>) -> CommandR
         let closed = || "This photo is no longer open in the editor.".to_string();
         // The models run without holding the editor, so frames keep coming meanwhile.
         let (picture, wanted) = {
-            let editing = state.editing.lock().unwrap();
+            let editing = state.editing();
             let (_, session) = editing.as_ref().filter(|(open, _)| *open == id).ok_or_else(closed)?;
             let wanted: Vec<_> = shapes
                 .iter()
@@ -280,7 +296,7 @@ pub async fn find_parts(app: AppHandle, id: i64, shapes: Vec<Shape>) -> CommandR
             .map(|(found, path)| Ok((found.find_cached(&picture, path.as_deref())?, found)))
             .collect::<anyhow::Result<Vec<_>>>()
             .map_err(message)?;
-        let editing = state.editing.lock().unwrap();
+        let editing = state.editing();
         let (_, session) = editing.as_ref().filter(|(open, _)| *open == id).ok_or_else(closed)?;
         for (matte, found) in mattes {
             session.set_matte(&found, matte);
@@ -293,7 +309,7 @@ pub async fn find_parts(app: AppHandle, id: i64, shapes: Vec<Shape>) -> CommandR
 
 #[tauri::command(async)]
 pub fn close_editor(state: State<AppState>) {
-    *state.editing.lock().unwrap() = None;
+    *state.editing() = None;
 }
 
 /// Draws the open photo with a recipe applied.
@@ -314,7 +330,7 @@ pub fn render_frame(
     uncropped: bool,
     mask_overlay: Option<u32>,
 ) -> Result<tauri::ipc::Response, String> {
-    let editing = state.editing.lock().unwrap();
+    let editing = state.editing();
     let Some((_, session)) = editing.as_ref().filter(|(open, _)| *open == id) else {
         return Err("This photo is no longer open in the editor.".into());
     };
@@ -365,7 +381,7 @@ pub fn mask_mattes(
     adjustments: Adjustments,
     long_edge: u32,
 ) -> Result<tauri::ipc::Response, String> {
-    let editing = state.editing.lock().unwrap();
+    let editing = state.editing();
     let Some((_, session)) = editing.as_ref().filter(|(open, _)| *open == id) else {
         return Err("This photo is no longer open in the editor.".into());
     };
@@ -395,7 +411,7 @@ pub fn preset_previews(
     long_edge: u32,
 ) -> Result<tauri::ipc::Response, String> {
     let presets = state.library.presets().map_err(message)?;
-    let editing = state.editing.lock().unwrap();
+    let editing = state.editing();
     let Some((_, session)) = editing.as_ref().filter(|(open, _)| *open == id) else {
         return Err("This photo is no longer open in the editor.".into());
     };
@@ -426,7 +442,7 @@ fn redraw(state: &AppState, ids: &[i64]) -> anyhow::Result<Vec<i64>> {
             thumbs::clear_rendered(&state.library, id);
         } else {
             // Draw under the lock, encode after it: a redraw must not stall the sliders.
-            let on_screen = match state.editing.lock().unwrap().as_ref() {
+            let on_screen = match state.editing().as_ref() {
                 Some((open, session)) if *open == id => Some(thumbs::EditedImages::draw(session, &adjustments)?),
                 _ => None,
             };
@@ -652,7 +668,7 @@ pub async fn run_export(app: AppHandle, job: export::Job, settings: export::Sett
                 })
             };
             // The photo in the editor is on the GPU already.
-            let on_screen = match state.editing.lock().unwrap().as_ref() {
+            let on_screen = match state.editing().as_ref() {
                 Some((open, session)) if *open == id => Some(render(session)?),
                 _ => None,
             };
@@ -679,4 +695,23 @@ pub async fn run_export(app: AppHandle, job: export::Job, settings: export::Sett
 #[tauri::command]
 pub fn cancel_export(state: State<AppState>) {
     state.cancel_export.store(true, Ordering::Relaxed);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_poisoned_lock_comes_back_empty() {
+        let lock = Mutex::new(Some(1));
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = lock.lock().unwrap();
+            panic!("decoder crashed");
+        }));
+        assert!(lock.is_poisoned());
+        assert_eq!(*recover(&lock), None);
+        assert!(!lock.is_poisoned());
+        *recover(&lock) = Some(2);
+        assert_eq!(*recover(&lock), Some(2));
+    }
 }

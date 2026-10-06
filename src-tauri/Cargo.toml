@@ -61,6 +61,8 @@ opt-level = 3
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
 [profile.release]
+# No `panic = "abort"`: RAW decoders can panic on damaged files, and
+# media::decoder_guard relies on unwinding to turn that into an error.
 codegen-units = 1
 lto = true
 opt-level = 3

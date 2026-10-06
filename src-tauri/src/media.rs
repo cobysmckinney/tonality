@@ -471,14 +471,20 @@ pub fn render(path: &Path, is_raw: bool, jpeg: Option<&Path>, edge: u32) -> Resu
             decode_image(path)
         }
     };
-    // RAW decoders index into untrusted files and can panic on damaged ones.
-    let (image, orientation) = match catch_unwind(AssertUnwindSafe(decode)) {
-        Ok(decoded) => decoded.with_context(|| format!("decoding {}", path.display()))?,
-        Err(_) => bail!("the decoder crashed on {}", path.display()),
-    };
+    let (image, orientation) = decoder_guard(decode).with_context(|| format!("decoding {}", path.display()))?;
     let mut image = DynamicImage::ImageRgb8(shrink(image.into_rgb8(), edge)?);
     image.apply_orientation(orientation);
     Ok(image.into_rgb8())
+}
+
+/// Runs a decoder, turning a panic into an ordinary error. RAW
+/// decoders index into untrusted files and can panic on damaged ones. This
+/// only works while release builds unwind (no `panic = "abort"`).
+pub fn decoder_guard<T>(decode: impl FnOnce() -> Result<T>) -> Result<T> {
+    match catch_unwind(AssertUnwindSafe(decode)) {
+        Ok(decoded) => decoded,
+        Err(_) => bail!("the decoder crashed"),
+    }
 }
 
 /// Scales `image` down so its long edge is at most `edge`.
