@@ -95,7 +95,7 @@ A few rules that aren't obvious from the code:
 
 ## Pull requests
 
-- Work on a branch, one change per PR. Small PRs get reviewed faster.
+- Branch from `develop` and open the PR against it, one change per PR. Small PRs get reviewed faster. `develop` has the latest work and isn't always stable; `main` is stable, and releases are made from it.
 - **Title**: one sentence describing the result for the user, in sentence case: "Zooming no longer stretches the photo while the next frame renders". No `feat:` or `fix:` prefixes.
 - **Description**: what changed and why, how you checked it, and `Closes #123` for the issues it fixes. Add a screenshot or short clip for anything visible.
 - **Checks**: `bun test`, `bunx tsc --noEmit` and `cargo test` pass. Changes to the shader or GPU pipeline come with a GPU test.
