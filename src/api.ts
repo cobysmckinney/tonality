@@ -31,6 +31,8 @@ export interface Photo {
   version: number;
   /** How many branches of edits the photo has; the grid shows the current one. */
   branches: number;
+  /** The original is no longer in the library folder: moved or deleted outside the app. */
+  missing: boolean;
 }
 
 export interface PhotoInfo {

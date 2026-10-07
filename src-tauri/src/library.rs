@@ -14,7 +14,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
+use rayon::prelude::*;
 use rusqlite::{params, Connection, OptionalExtension, Row};
 use serde::{Deserialize, Serialize};
 
@@ -122,6 +123,8 @@ pub struct PhotoItem {
     pub version: i64,
     /// How many branches of edits the photo has; the grid shows the current one.
     pub branches: u32,
+    /// The original is no longer in the library folder: moved or deleted outside the app.
+    pub missing: bool,
 }
 
 /// Everything the info panel shows about one photo.
@@ -333,7 +336,7 @@ impl Library {
     pub fn list_photos(&self, view: View) -> Result<Vec<PhotoItem>> {
         const COLUMNS: &str = "p.id, p.file_name, p.kind, p.jpeg_path IS NOT NULL, p.taken_at, \
              p.width, p.height, p.favorite, p.flag, p.import_id, p.deleted_at, p.edits IS NOT NULL, p.version, \
-             (SELECT COUNT(*) FROM edit_branches b WHERE b.photo_id = p.id)";
+             (SELECT COUNT(*) FROM edit_branches b WHERE b.photo_id = p.id), p.path";
         let (rest, album) = match view {
             View::Library => ("WHERE p.deleted_at IS NULL ORDER BY p.taken_at DESC, p.id DESC", None),
             View::Favorites => (
@@ -354,7 +357,7 @@ impl Library {
         let db = self.db();
         let mut stmt = db.prepare(&format!("SELECT {COLUMNS} FROM photos p {rest}"))?;
         let map = |r: &Row| {
-            Ok(PhotoItem {
+            let item = PhotoItem {
                 id: r.get(0)?,
                 file_name: r.get(1)?,
                 kind: r.get(2)?,
@@ -369,13 +372,24 @@ impl Library {
                 edited: r.get(11)?,
                 version: r.get(12)?,
                 branches: r.get(13)?,
-            })
+                missing: false,
+            };
+            Ok((item, r.get::<_, String>(14)?))
         };
-        let rows = match album {
+        let rows: Vec<(PhotoItem, String)> = match album {
             Some(id) => stmt.query_map([id], map)?.collect::<rusqlite::Result<_>>()?,
             None => stmt.query_map([], map)?.collect::<rusqlite::Result<_>>()?,
         };
-        Ok(rows)
+        drop(stmt);
+        drop(db);
+        // A quick look at each file, in parallel, so a large library still lists promptly.
+        Ok(rows
+            .into_par_iter()
+            .map(|(mut item, path)| {
+                item.missing = !self.root.join(path).exists();
+                item
+            })
+            .collect())
     }
 
     pub fn photo_info(&self, id: i64) -> Result<PhotoInfo> {
@@ -414,16 +428,27 @@ impl Library {
         .with_context(|| format!("photo {id} is not in the library"))
     }
 
+    /// Fails with a plain message when the original has gone from the library folder.
     pub fn photo_files(&self, id: i64) -> Result<PhotoFiles> {
-        self.db()
+        let (relative, files) = self
+            .db()
             .query_row("SELECT path, jpeg_path, kind FROM photos WHERE id = ?1", [id], |r| {
-                Ok(PhotoFiles {
-                    path: self.root.join(r.get::<_, String>(0)?),
+                let relative: String = r.get(0)?;
+                let files = PhotoFiles {
+                    path: self.root.join(&relative),
                     jpeg_path: r.get::<_, Option<String>>(1)?.map(|p| self.root.join(p)),
                     is_raw: r.get::<_, String>(2)? == "raw",
-                })
+                };
+                Ok((relative, files))
             })
-            .with_context(|| format!("photo {id} is not in the library"))
+            .with_context(|| format!("photo {id} is not in the library"))?;
+        if !files.path.exists() {
+            bail!(
+                "The original file is missing from the library folder ({relative}). \
+                 Put it back there to edit or export this photo."
+            );
+        }
+        Ok(files)
     }
 
     /// Every fingerprint in the library, mapped to its photo and whether that
@@ -542,31 +567,32 @@ impl Library {
         self.for_each_id("UPDATE photos SET deleted_at = NULL WHERE id = ?1", ids, None)
     }
 
-    /// Removes photos for good: database rows, originals and generated images.
+    /// Removes photos for good: originals, generated images and database rows.
     /// Only photos already in Recently Deleted are touched.
+    ///
+    /// The files go first and the row only once they are gone, so a file that
+    /// can't be deleted is never left behind untracked: its photo stays in
+    /// Recently Deleted and the error names it.
     pub fn purge(&self, ids: &[i64]) -> Result<u32> {
-        let mut doomed = Vec::new();
-        {
-            let mut db = self.db();
-            let tx = db.transaction()?;
-            for &id in ids {
-                let files: Option<(String, Option<String>)> = tx
-                    .query_row(
-                        "DELETE FROM photos WHERE id = ?1 AND deleted_at IS NOT NULL RETURNING path, jpeg_path",
-                        [id],
-                        |r| Ok((r.get(0)?, r.get(1)?)),
-                    )
-                    .optional()?;
-                if let Some(files) = files {
-                    doomed.push((id, files));
-                }
-            }
-            tx.commit()?;
-        }
-        for (id, (path, jpeg_path)) in &doomed {
-            for relative in std::iter::once(path).chain(jpeg_path) {
+        let mut purged = 0;
+        let mut failed = Vec::new();
+        for &id in ids {
+            let files: Option<(String, String, Option<String>)> = self
+                .db()
+                .query_row(
+                    "SELECT file_name, path, jpeg_path FROM photos WHERE id = ?1 AND deleted_at IS NOT NULL",
+                    [id],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                )
+                .optional()?;
+            let Some((file_name, path, jpeg_path)) = files else { continue };
+            let removed = std::iter::once(&path).chain(&jpeg_path).try_for_each(|relative| {
                 let file = self.root.join(relative);
-                let _ = fs::remove_file(&file);
+                match fs::remove_file(&file) {
+                    // Already gone, perhaps by an earlier purge that was interrupted.
+                    Err(error) if error.kind() != std::io::ErrorKind::NotFound => return Err(error),
+                    _ => {}
+                }
                 // Tidy up date folders that are now empty; `remove_dir` refuses otherwise.
                 if let Some(day) = file.parent() {
                     if fs::remove_dir(day).is_ok() {
@@ -575,10 +601,17 @@ impl Library {
                         }
                     }
                 }
+                Ok(())
+            });
+            if let Err(error) = removed {
+                failed.push(format!("{file_name} ({error})"));
+                continue;
             }
-            let _ = fs::remove_file(self.thumb_path(*id));
-            let _ = fs::remove_file(self.preview_path(*id));
-            let start = self.matte_files(*id);
+            self.db().execute("DELETE FROM photos WHERE id = ?1", [id])?;
+            purged += 1;
+            let _ = fs::remove_file(self.thumb_path(id));
+            let _ = fs::remove_file(self.preview_path(id));
+            let start = self.matte_files(id);
             if let (Some(dir), Some(prefix)) = (start.parent(), start.file_name().and_then(|n| n.to_str())) {
                 for file in fs::read_dir(dir).into_iter().flatten().flatten() {
                     if file.file_name().to_str().is_some_and(|name| name.starts_with(prefix)) {
@@ -587,7 +620,15 @@ impl Library {
                 }
             }
         }
-        Ok(doomed.len() as u32)
+        if !failed.is_empty() {
+            bail!(
+                "Couldn’t delete {}, so {} in Recently Deleted: {}",
+                if failed.len() == 1 { "1 photo".to_string() } else { format!("{} photos", failed.len()) },
+                if failed.len() == 1 { "it stays" } else { "they stay" },
+                failed.join(", ")
+            );
+        }
+        Ok(purged)
     }
 
     /// Purges photos that have sat in Recently Deleted past the retention period.
