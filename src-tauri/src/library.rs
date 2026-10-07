@@ -217,7 +217,8 @@ impl Library {
             fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
         }
         let db = Connection::open(data.join("library.db")).context("opening library database")?;
-        db.pragma_update(None, "journal_mode", "WAL")?;
+        // The first statement is where a locked or damaged database shows itself.
+        db.pragma_update(None, "journal_mode", "WAL").context("opening library database")?;
         db.pragma_update(None, "foreign_keys", "ON")?;
         let version: i64 = db.query_row("PRAGMA user_version", [], |r| r.get(0))?;
         if version == 0 {

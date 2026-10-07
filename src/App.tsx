@@ -3,6 +3,7 @@ import { ExportSheet } from "./components/ExportSheet";
 import { ImportSheet } from "./components/ImportSheet";
 import { Overlays } from "./components/Overlays";
 import { PhotoGrid } from "./components/PhotoGrid";
+import { LibraryProblemScreen } from "./components/Problems";
 import { Sidebar } from "./components/Sidebar";
 import { TitleBar } from "./components/TitleBar";
 import { Toolbar } from "./components/Toolbar";
@@ -70,6 +71,7 @@ function EmptyState() {
 }
 
 export default function App() {
+  const libraryProblem = useStore((s) => s.libraryProblem);
   const loaded = useStore((s) => s.loaded);
   const empty = useStore((s) => visiblePhotos(s).length === 0);
   const openPhoto = useStore((s) => (s.openId === null ? undefined : s.photos.find((p) => p.id === s.openId)));
@@ -82,6 +84,16 @@ export default function App() {
     window.addEventListener("contextmenu", block);
     return () => window.removeEventListener("contextmenu", block);
   }, []);
+
+  if (libraryProblem) {
+    return (
+      <>
+        <TitleBar />
+        <LibraryProblemScreen problem={libraryProblem} />
+        <Overlays />
+      </>
+    );
+  }
 
   return (
     <>
