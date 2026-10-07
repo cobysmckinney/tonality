@@ -21,9 +21,10 @@ use std::sync::{Arc, Mutex};
 use anyhow::{bail, Context, Result};
 use tauri::http::{header, Response, StatusCode};
 use tauri::{Emitter, Manager};
+use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
 
 use commands::AppState;
-use library::Library;
+use library::{Library, LibraryInUse};
 
 /// Resolves a `photo://` request to the image file that answers it:
 /// `thumb/<id>`, `preview/<id>`, or `scan/<session>/<index>` for a photo
@@ -88,14 +89,37 @@ fn run_scripts_from(app: tauri::AppHandle, folder: PathBuf) {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     media::init();
-    tauri::Builder::default()
+    let mut builder = tauri::Builder::default();
+    // Opening Tonality again brings the open window forward instead of
+    // starting a second copy. A library chosen with TONALITY_LIBRARY runs on
+    // its own, so a scratch library can be open next to the real one; the
+    // lock in Library::open still keeps each library to one copy.
+    if std::env::var_os("TONALITY_LIBRARY").is_none() {
+        builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            if let Some(window) = app.webview_windows().into_values().next() {
+                let _ = window.unminimize();
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+        }));
+    }
+    builder
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .register_asynchronous_uri_scheme_protocol("photo", |ctx, request, responder| {
             let app = ctx.app_handle().clone();
             let path = request.uri().path().to_string();
             let worker = app.clone();
-            app.state::<AppState>().renderers.spawn(move || {
+            // There is no state when the library was already open elsewhere.
+            let Some(state) = app.try_state::<AppState>() else {
+                return responder.respond(
+                    Response::builder()
+                        .status(StatusCode::SERVICE_UNAVAILABLE)
+                        .body(b"no library is open".to_vec())
+                        .expect("static headers are valid"),
+                );
+            };
+            state.renderers.spawn(move || {
                 // A panic on this pool would abort the app, so it fails just this request.
                 let response = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     image_response(&worker.state::<AppState>(), &path)
@@ -110,7 +134,23 @@ pub fn run() {
             });
         })
         .setup(|app| {
-            let library = Arc::new(Library::open(&library_root(app)?)?);
+            let library = match Library::open(&library_root(app)?) {
+                Ok(library) => Arc::new(library),
+                Err(error) if error.is::<LibraryInUse>() => {
+                    // Another copy has this library open and couldn't be brought forward.
+                    for window in app.webview_windows().into_values() {
+                        let _ = window.hide();
+                    }
+                    let handle = app.handle().clone();
+                    app.dialog()
+                        .message("Tonality is already open with this library. Switch to that window to keep working.")
+                        .title("Tonality is already open")
+                        .kind(MessageDialogKind::Info)
+                        .show(move |_| handle.exit(0));
+                    return Ok(());
+                }
+                Err(error) => return Err(error.into()),
+            };
             library.purge_expired()?;
             app.manage(AppState {
                 library,

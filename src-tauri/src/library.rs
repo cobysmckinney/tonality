@@ -5,7 +5,7 @@
 //! Tonality/
 //!   Originals/2026/2026-10-04/IMG_0001.CR3
 //!   Exports/IMG_0001.jpg                      (unless another folder is chosen)
-//!   .tonality/library.db
+//!   .tonality/library.db   .tonality/lock
 //!   .tonality/thumbs/…   .tonality/previews/…   .tonality/mattes/…
 //! ```
 
@@ -203,7 +203,22 @@ pub struct PhotoFiles {
 pub struct Library {
     root: PathBuf,
     db: Mutex<Connection>,
+    /// Held for as long as the library is open, so a second copy of the app
+    /// can't open it too.
+    _lock: fs::File,
 }
+
+/// The library is already open in another copy of the app.
+#[derive(Debug)]
+pub struct LibraryInUse;
+
+impl std::fmt::Display for LibraryInUse {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("this library is already open in another copy of Tonality")
+    }
+}
+
+impl std::error::Error for LibraryInUse {}
 
 fn now() -> i64 {
     chrono::Utc::now().timestamp()
@@ -211,10 +226,23 @@ fn now() -> i64 {
 
 impl Library {
     /// Opens the library at `root`, creating it if it does not exist yet.
+    /// Fails with [`LibraryInUse`] while another process has it open.
     pub fn open(root: &Path) -> Result<Self> {
         let data = root.join(".tonality");
         for dir in [root.join("Originals"), data.join("thumbs"), data.join("previews")] {
             fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
+        }
+        let lock = fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(data.join("lock"))
+            .context("opening library lock")?;
+        // The operating system lets go of the lock when the process ends, even if it crashes.
+        match lock.try_lock() {
+            Ok(()) => {}
+            Err(fs::TryLockError::WouldBlock) => return Err(LibraryInUse.into()),
+            Err(fs::TryLockError::Error(error)) => return Err(error).context("locking library"),
         }
         let db = Connection::open(data.join("library.db")).context("opening library database")?;
         db.pragma_update(None, "journal_mode", "WAL")?;
@@ -244,7 +272,7 @@ impl Library {
             db.execute_batch(&format!("BEGIN; {} PRAGMA user_version = 6; COMMIT;", crate::presets::FAVORITES_SCHEMA))
                 .context("upgrading library to hold favorite presets")?;
         }
-        let library = Self { root: root.to_path_buf(), db: Mutex::new(db) };
+        let library = Self { root: root.to_path_buf(), db: Mutex::new(db), _lock: lock };
         // Leftovers from an import or review that was interrupted.
         let _ = fs::remove_dir_all(library.incoming_dir());
         let _ = fs::remove_dir_all(library.scan_cache_dir());

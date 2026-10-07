@@ -22,6 +22,7 @@ Tonality keeps one managed library, like Apple Photos. Importing copies photos i
   .tonality/thumbs, previews               generated images, safe to delete
 ```
 
+- **One window.** Opening Tonality while it's already running brings up the open window rather than starting a second copy.
 - **Library, Favorites, Imports, Recently Deleted, Albums** in the sidebar. Deleted photos are kept for 30 days.
 - **Import** from files, folders, drag and drop, or a camera card (any mounted volume with a `DCIM` folder). You review what was found before anything is copied, grouped by the day it was taken: a day's heading selects or clears the whole day, so one shoot can be imported and the rest of the card left. Photos already in the library are marked and skipped.
 - **RAW + JPEG pairs** shot together are one photo.
