@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { defaultAdjustments } from "./adjustments";
-import { dragged, fits, flipped, frameSize, largest, quarterTurn, Rect, shrinkToFit, straightened, toFrame, toPhoto, withAspect } from "./crop";
+import { dragged, fits, flipped, frameSize, heldAspect, largest, quarterTurn, Rect, shrinkToFit, straightened, toCrop, toFrame, toPhoto, toRect, withAspect } from "./crop";
 
 const photo = { width: 600, height: 400 };
 const whole: Rect = { x: 300, y: 200, width: 600, height: 400 };
@@ -184,5 +184,37 @@ describe("turning and flipping", () => {
     const back = flipped({ ...base, ...flippedAcross }, true);
     expect(back.crop.x).toBeCloseTo(0.25);
     expect(back.straighten).toBe(6);
+  });
+});
+
+describe("a chosen shape holds only while the crop has it", () => {
+  /** The crop as it comes back from the library: through 0..1 and single precision. */
+  const stored = (rect: Rect): Rect => {
+    const crop = toCrop(rect, photo);
+    const f32 = (n: number) => Math.fround(n);
+    return toRect({ x: f32(crop.x), y: f32(crop.y), width: f32(crop.width), height: f32(crop.height) }, photo);
+  };
+
+  test("a 3:2 crop doesn't hold a square shape, but holds 3:2", () => {
+    expect(heldAspect(whole, 1)).toBeNull();
+    expect(heldAspect(whole, 1.5)).toBe(1.5);
+    expect(heldAspect(whole, null)).toBeNull();
+  });
+
+  test("a crop made to a shape still holds it once stored", () => {
+    const square = withAspect(whole, 1, 7, photo);
+    expect(heldAspect(stored(square), 1)).toBe(1);
+    const resized = dragged({ x: 300, y: 200, width: 400, height: 300 }, { x: 1, y: 1 }, [-37, 11], 0, photo, 4 / 3);
+    expect(heldAspect(stored(resized), 4 / 3)).toBe(4 / 3);
+    const tilted = straightened(withAspect(whole, 16 / 9, 0, photo), 0, -12, photo);
+    expect(heldAspect(stored(tilted), 16 / 9)).toBe(16 / 9);
+  });
+
+  test("a shape holds the way up the crop is now", () => {
+    // Undoing a swap to portrait leaves a tall crop with the wide shape chosen.
+    const tall = withAspect(whole, 2 / 3, 0, photo);
+    expect(heldAspect(tall, 3 / 2)).toBe(2 / 3);
+    expect(heldAspect(tall, 2 / 3)).toBe(2 / 3);
+    expect(heldAspect(tall, 4 / 3)).toBeNull();
   });
 });
