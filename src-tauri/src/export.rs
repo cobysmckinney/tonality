@@ -185,6 +185,9 @@ pub struct PlannedFile {
     /// The picture's size in pixels, where the library knows the photo's.
     pub width: Option<u32>,
     pub height: Option<u32>,
+    /// True when the photo is larger than the graphics card can hold, so the
+    /// picture comes out smaller than asked for.
+    pub shrunk: bool,
 }
 
 /// What an export would do, worked out without writing anything.
@@ -350,9 +353,12 @@ impl Source {
         format!("{stem}.{}", format.extension())
     }
 
-    /// The exported picture's size in pixels, if the library knows the photo's.
-    fn output_size(&self, settings: &Settings) -> Option<(u32, u32)> {
+    /// The exported picture's size in pixels, if the library knows the
+    /// photo's, drawn from the photo as a graphics card that holds `largest`
+    /// pixels a side has it.
+    fn output_size(&self, settings: &Settings, largest: u32) -> Option<(u32, u32)> {
         let (width, height) = self.size?;
+        let (width, height) = gpu::held_size(width, height, largest);
         Some(gpu::picture_size(width, height, &self.recipe, settings.long_edge.unwrap_or(u32::MAX)))
     }
 }
@@ -541,8 +547,9 @@ fn folder_of(library: &Library, settings: &Settings) -> PathBuf {
 
 /// Works out what a job would write: the folder, each file's name and size,
 /// and the branch it comes from. Nothing is written or changed. Without
-/// `settings`, the ones used last time apply.
-pub fn plan(library: &Library, job: &Job, settings: Option<&Settings>) -> Result<Plan> {
+/// `settings`, the ones used last time apply. `largest` is the longest side
+/// of a photo the graphics card can hold (`Gpu::largest_picture`).
+pub fn plan(library: &Library, job: &Job, settings: Option<&Settings>, largest: u32) -> Result<Plan> {
     let settings = match settings {
         Some(settings) => settings.tidied(),
         None => library.export_settings()?,
@@ -563,7 +570,7 @@ pub fn plan(library: &Library, job: &Job, settings: Option<&Settings>) -> Result
             .find(|name| !taken.contains(name) && fs::symlink_metadata(folder.join(name)).is_err())
             .expect("there is always another number");
         taken.insert(name.clone());
-        let size = source.output_size(&settings);
+        let size = source.output_size(&settings, largest);
         files.push(PlannedFile {
             photo_id: id,
             branch_id: source.branch.as_ref().map(|branch| branch.id),
@@ -572,6 +579,7 @@ pub fn plan(library: &Library, job: &Job, settings: Option<&Settings>) -> Result
             name,
             width: size.map(|(width, _)| width),
             height: size.map(|(_, height)| height),
+            shrunk: size != source.output_size(&settings, u32::MAX),
         });
         current = source.current_branch;
         several_branches |= source.branches > 1;
@@ -751,7 +759,7 @@ mod tests {
     #[test]
     fn the_planned_size_follows_the_crop_and_the_longest_side_asked_for() {
         let mut photo = source("IMG_0462.CR2", "Main", 1);
-        let size = |photo: &Source, long_edge| photo.output_size(&Settings { long_edge, ..Default::default() });
+        let size = |photo: &Source, long_edge| photo.output_size(&Settings { long_edge, ..Default::default() }, u32::MAX);
         assert_eq!(size(&photo, None), Some((6000, 4000)));
         assert_eq!(size(&photo, Some(3000)), Some((3000, 2000)));
         assert_eq!(size(&photo, Some(9000)), Some((6000, 4000)), "never enlarged");
@@ -760,6 +768,17 @@ mod tests {
         assert_eq!(size(&photo, None), Some((2000, 6000)));
         photo.size = None;
         assert_eq!(size(&photo, None), None);
+    }
+
+    #[test]
+    fn the_planned_size_is_what_the_graphics_card_can_hold() {
+        let mut panorama = source("PANO.CR2", "Main", 1);
+        panorama.size = Some((20000, 5000));
+        let size = |photo: &Source, long_edge| photo.output_size(&Settings { long_edge, ..Default::default() }, 16384);
+        assert_eq!(size(&panorama, None), Some((16384, 4096)), "scaled to fit, not halved to 10000");
+        assert_eq!(size(&panorama, Some(8000)), Some((8000, 2000)));
+        panorama.recipe.crop.width = 0.5;
+        assert_eq!(size(&panorama, None), Some((8192, 4096)), "the crop is of the photo as held");
     }
 
     #[test]

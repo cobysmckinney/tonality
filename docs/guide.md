@@ -23,14 +23,16 @@ Tonality keeps one managed library, like Apple Photos. Importing copies photos i
 ```
 
 - **One window.** Opening Tonality while it's already running brings up the open window rather than starting a second copy.
-- **Library, Favorites, Imports, Recently Deleted, Albums** in the sidebar. Deleted photos are kept for 30 days.
-- **Import** from files, folders, drag and drop, or a camera card (any mounted volume with a `DCIM` folder). You review what was found before anything is copied, grouped by the day it was taken: a day's heading selects or clears the whole day, so one shoot can be imported and the rest of the card left. Photos already in the library are marked and skipped.
+- **Library, Favorites, Imports, Recently Deleted, Albums** in the sidebar. Deleted photos are kept for 30 days. If a file can't be deleted at the end of that (it's open in another program, say), its photo stays in Recently Deleted until it can be.
+- **Import** from files, folders, drag and drop, or a camera card (any mounted volume with a `DCIM` folder). You review what was found before anything is copied, grouped by the day it was taken: a day's heading selects or clears the whole day, so one shoot can be imported and the rest of the card left. Photos already in the library are marked and skipped. Each copy is read back and checked against the original before the photo is added, so a failing card shows up as an error, not a damaged photo.
+- **Moving or deleting files in `Originals` yourself**: a photo whose original is gone keeps its thumbnail but gets a crossed-out file mark in the grid, and can't be edited or exported until the file is put back where it was.
 - **RAW + JPEG pairs** shot together are one photo.
 - **Culling**: `F` favorite, `P` pick, `X` reject, `U` unflag, `Delete` to delete. Arrows move, Shift extends, Enter opens, Escape goes back.
+- **If the library can't open** (say the folder can't be changed), the window says why. Fix the problem and choose Try again.
 
 ## The editor
 
-Opening a photo (double-click or Enter) loads it at full resolution onto the graphics card, and every slider change redraws it straight away. Editing never touches the original: your edits are stored in the library, and the photo's thumbnail is redrawn with them so the grid matches.
+Opening a photo (double-click or Enter) loads it at full resolution onto the graphics card, and every slider change redraws it straight away. A photo larger than the graphics card can hold (16,384 pixels a side on most, 8,192 on some) is scaled down just enough to fit, and that is the largest it can be exported at. Editing never touches the original: your edits are stored in the library, and the photo's thumbnail is redrawn with them so the grid matches.
 
 - **Adjust**: light (exposure, contrast, highlights, shadows, whites, blacks), color (temperature, tint, vibrance, saturation), tone curve with per-channel curves, an eight-band color mixer, detail (sharpening, noise reduction, clarity, dehaze), effects (vignette, grain).
 - **Crop** (`C`): the photo is shown whole with an upright crop frame over it. Shapes (free, original, 1:1, 5:4, 4:3, 3:2, 16:9), a straighten slider that turns the photo under the frame and keeps the frame on the photo, quarter-turns and flips. Pasting edits onto another photo leaves that photo's own crop alone.
@@ -85,7 +87,7 @@ History works like a small git repository per photo, and takes the place of "vir
 - **Where**: the folder is shown in full. It starts as `Exports` inside the library; **Change…** picks another, and the choice is remembered along with the format, quality and size.
 - **Which edits**: what you see, unless you say otherwise. A photo is exported from the branch it is on, at the step that branch is on. For one photo, tick any of its branches to get a file for each; for several photos, choose between the branch each is on and all branches.
 - **Format**: JPEG with a quality from 1 to 100, PNG, or TIFF. TIFF is 16 bits a channel, drawn at that depth rather than widened from 8, and uncompressed.
-- **Size**: full size, or a longest side in pixels (a few presets, or any number). The sheet shows the pixel size each file will have.
+- **Size**: full size, or a longest side in pixels (a few presets, or any number). The sheet shows the pixel size each file will have, and says so when a photo is too large for the graphics card and comes out smaller.
 - **Nothing is replaced**: a name that is taken, in the folder or by another file in the same export, gets a number (`IMG_0462-2.jpg`), and the sheet shows the exact name beforehand.
 - **Afterwards**: the step that was exported is marked in the History tab with the file it became; click the mark to show the file.
 
@@ -99,7 +101,7 @@ Exports are sRGB and carry the capture date, camera, lens and exposure.
 | Grid | `Ctrl+A` | Select all |
 | Grid | Enter, double-click | Open the photo |
 | Grid, editor | `F` / `P` / `X` / `U` | Favorite / pick / reject / unflag |
-| Grid, editor | `Delete` | Move to Recently Deleted (kept 30 days) |
+| Grid, editor | `Delete` | Move to Recently Deleted (kept 30 days). In the editor, not while a button or slider has focus: click the photo first |
 | Grid, editor | `Ctrl+C` / `Ctrl+V` | Copy / paste edits (in the grid, onto every selected photo) |
 | Grid, editor | `Ctrl+E` | Export |
 | Editor | `Esc` | Back to the grid |

@@ -31,6 +31,8 @@ export interface Photo {
   version: number;
   /** How many branches of edits the photo has; the grid shows the current one. */
   branches: number;
+  /** The original is no longer in the library folder: moved or deleted outside the app. */
+  missing: boolean;
 }
 
 export interface PhotoInfo {
@@ -208,6 +210,8 @@ export interface ExportPlan {
     /** The picture's size in pixels, where the library knows the photo's. */
     width: number | null;
     height: number | null;
+    /** True when the photo is larger than the graphics card can hold, so the picture comes out smaller than asked for. */
+    shrunk: boolean;
   }[];
   /** For a single photo, its branches to choose between and the one it is on. */
   branches: Branch[];
@@ -254,7 +258,16 @@ export interface Progress {
   total: number;
 }
 
+/** Why the library couldn't open when the app started. */
+export interface LibraryProblem {
+  /** The library folder, if it could be worked out. */
+  path: string | null;
+  message: string;
+}
+
 export const api = {
+  libraryProblem: () => invoke<LibraryProblem | null>("library_problem"),
+  retryLibrary: () => invoke<void>("retry_library"),
   getOverview: () => invoke<Overview>("get_overview"),
   listPhotos: (view: View) => invoke<Photo[]>("list_photos", { view }),
   getPhotoInfo: (id: number) => invoke<PhotoInfo>("get_photo_info", { id }),

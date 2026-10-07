@@ -4,6 +4,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::fs;
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Mutex;
@@ -282,17 +283,51 @@ pub fn run(
     Ok(summary)
 }
 
-/// Copies `from` to `to`, keeping the modification time, and checks the size.
+/// Copies `from` to `to`, keeping the modification time. The copy is written
+/// through to the disk, then read back and compared with what was read from
+/// `from`, so a card or disk that garbles data fails the import instead of
+/// leaving a damaged original.
 fn copy_file(from: &Path, to: &Path) -> Result<()> {
-    let copied = fs::copy(from, to).with_context(|| format!("copying {}", from.display()))?;
-    let source = fs::metadata(from)?;
-    if copied != source.len() {
-        bail!("only {copied} of {} bytes were copied", source.len());
+    let mut source = fs::File::open(from).with_context(|| format!("opening {}", from.display()))?;
+    let modified = source.metadata().and_then(|m| m.modified());
+    let mut dest = fs::File::create(to).with_context(|| format!("creating {}", to.display()))?;
+    let mut read = blake3::Hasher::new();
+    io::copy(&mut Hashing { inner: &mut source, hasher: &mut read }, &mut dest)
+        .with_context(|| format!("copying {}", from.display()))?;
+    if let Ok(modified) = modified {
+        let _ = dest.set_modified(modified);
     }
-    if let (Ok(modified), Ok(file)) = (source.modified(), fs::File::options().write(true).open(to)) {
-        let _ = file.set_modified(modified);
+    dest.sync_all().context("writing the copy to disk")?;
+    drop(dest);
+
+    let mut written = blake3::Hasher::new();
+    written.update_reader(fs::File::open(to)?).context("reading the copy back")?;
+    if read.finalize() != written.finalize() {
+        bail!("the copy doesn’t match the original; the card or disk may be failing");
     }
     Ok(())
+}
+
+/// Hashes everything read through it.
+struct Hashing<'a, R> {
+    inner: R,
+    hasher: &'a mut blake3::Hasher,
+}
+
+impl<R: Read> Read for Hashing<'_, R> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let n = self.inner.read(buf)?;
+        self.hasher.update(&buf[..n]);
+        Ok(n)
+    }
+}
+
+/// Makes the names just placed in `dir` survive a power cut. Directories can
+/// only be synced this way on Unix; elsewhere this does nothing.
+fn sync_dir(dir: &Path) {
+    if let Ok(dir) = fs::File::open(dir) {
+        let _ = dir.sync_all();
+    }
 }
 
 /// Picks names in `dir` that are free for the photo and its paired JPEG,
@@ -375,6 +410,7 @@ fn import_one(
             cleanup(&[Some(&holding), holding_jpeg.as_deref(), Some(&dest), dest_jpeg.as_deref()]);
             return Err(error).context("moving into the library");
         }
+        sync_dir(&day);
         (dest, dest_jpeg)
     };
 

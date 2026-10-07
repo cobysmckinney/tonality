@@ -128,10 +128,11 @@ function Info({ photo }: { photo: Photo }) {
   // What an export at full size would measure, once the crop is taken into account.
   const cropped = size && frameSize(size, adjustments, false);
   const croppedSize = cropped && { width: Math.round(cropped.width), height: Math.round(cropped.height) };
+  // Against the size the photo is held at, which is smaller than its own if the graphics card can't hold it whole.
   const isCropped =
-    croppedSize && photo.width !== null && photo.height !== null
-      ? !(croppedSize.width === photo.width && croppedSize.height === photo.height) &&
-        !(croppedSize.width === photo.height && croppedSize.height === photo.width)
+    croppedSize && size
+      ? !(croppedSize.width === size.width && croppedSize.height === size.height) &&
+        !(croppedSize.width === size.height && croppedSize.height === size.width)
       : false;
 
   return (
@@ -571,7 +572,11 @@ export function Editor({ photo, inert }: { photo: Photo; inert: boolean }) {
       else if (key === "p") void state.toggleFlag([open], 1);
       else if (key === "x") void state.toggleFlag([open], -1);
       else if (key === "u") void state.toggleFlag([open], 0);
-      else if ((key === "Delete" || key === "Backspace") && !onSlider) void state.trash([open]);
+      else if (key === "Delete" || key === "Backspace") {
+        // Only from the photo itself: with a tool's button or slider focused, a stray Backspace
+        // shouldn't throw the photo away. The filmstrip counts as the photo.
+        if (!target.closest("button:not(.strip-item), select, input")) void state.trash([open]);
+      }
     };
     const onKeyUp = (event: KeyboardEvent) => {
       if (event.key === "\\") useStore.getState().setShowOriginal(false);

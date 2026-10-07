@@ -1,5 +1,5 @@
 import { memo, useEffect, useMemo, useRef, useState } from "react";
-import { Check, GitBranch, Heart, ImageOff, SlidersHorizontal, X } from "lucide-react";
+import { Check, FileX, GitBranch, Heart, ImageOff, SlidersHorizontal, X } from "lucide-react";
 import { Photo, thumbUrl } from "../api";
 import { count, dayHeading, daysLeft, longDateTime, plural } from "../format";
 import { photoMenu } from "../menus";
@@ -31,7 +31,7 @@ const PhotoCell = memo(function PhotoCell(props: {
   return (
     <div
       className={classes.filter(Boolean).join(" ")}
-      title={photo.fileName}
+      title={photo.missing ? `${photo.fileName}: the original file is missing from the library folder` : photo.fileName}
       onClick={(event) => {
         useStore.getState().click(photo.id, { range: event.shiftKey, toggle: event.ctrlKey || event.metaKey });
       }}
@@ -63,6 +63,11 @@ const PhotoCell = memo(function PhotoCell(props: {
         </span>
       )}
       <span className="badge marks">
+        {photo.missing && (
+          <span className="mark" aria-label="Original missing">
+            <FileX size={11} strokeWidth={2.5} />
+          </span>
+        )}
         {photo.branches > 1 && (
           <span className="mark" title={`${photo.branches} branches of edits; showing the current one`}>
             <GitBranch size={11} strokeWidth={2.5} />

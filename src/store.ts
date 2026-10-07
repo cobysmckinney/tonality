@@ -26,6 +26,7 @@ import {
   Frame,
   History,
   ImportSummary,
+  LibraryProblem,
   Overview,
   Photo,
   Progress,
@@ -198,6 +199,8 @@ export interface MenuItem {
 export type MenuEntry = MenuItem | "separator";
 
 interface State {
+  /** Set when the library couldn't open; the app shows why instead of the grid. */
+  libraryProblem: LibraryProblem | null;
   overview: Overview | null;
   view: View;
   /** Every photo in the current view, before the flag filter. */
@@ -237,6 +240,7 @@ interface State {
   menu: { x: number; y: number; entries: MenuEntry[] } | null;
 
   init: () => Promise<void>;
+  retryLibrary: () => Promise<void>;
   reload: () => Promise<void>;
   setView: (view: View) => Promise<void>;
   setFilter: (filter: Filter) => void;
@@ -613,8 +617,12 @@ export const useStore = create<State>((set, get) => {
     confirmRequest: null,
     renamingAlbum: null,
     menu: null,
+    libraryProblem: null,
 
     async init() {
+      const libraryProblem = await api.libraryProblem();
+      set({ libraryProblem });
+      if (libraryProblem) return;
       await get().reload();
       const [volumes, presets, favoritePresets] = await Promise.all([
         api.listVolumes(),
@@ -646,6 +654,16 @@ export const useStore = create<State>((set, get) => {
       void listen<Progress>("export-progress", ({ payload }) => {
         if (get().exportState?.phase === "exporting") set({ exportState: { phase: "exporting", progress: payload } });
       });
+    },
+
+    async retryLibrary() {
+      try {
+        await api.retryLibrary();
+      } catch {
+        set({ libraryProblem: await api.libraryProblem() });
+        return;
+      }
+      await get().init();
     },
 
     async reload() {

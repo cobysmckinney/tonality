@@ -204,6 +204,12 @@ pub(crate) fn fit_within(width: u32, height: u32, long_edge: u32) -> (u32, u32) 
 }
 
 impl Gpu {
+    /// The longest side, in pixels, of a photo this device can hold at full
+    /// size. Larger ones are scaled down to fit when opened.
+    pub fn largest_picture(&self) -> u32 {
+        self.max_texture_size
+    }
+
     pub fn new() -> Result<Self> {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
@@ -754,22 +760,54 @@ impl Gpu {
     }
 }
 
-/// Halves an image until it fits the largest texture the device supports.
-fn shrink_to_fit(mut image: LinearImage, max_size: u32) -> LinearImage {
-    while image.width.max(image.height) > max_size {
-        let (width, height) = ((image.width / 2) as usize, (image.height / 2) as usize);
-        let stride = image.width as usize;
-        let mut pixels = Vec::with_capacity(width * height);
-        for y in 0..height {
-            for x in 0..width {
-                let at = |dx: usize, dy: usize| image.pixels[(y * 2 + dy) * stride + x * 2 + dx];
-                let (a, b, c, d) = (at(0, 0), at(1, 0), at(0, 1), at(1, 1));
-                pixels.push(std::array::from_fn(|i| (a[i] + b[i] + c[i] + d[i]) * 0.25));
-            }
-        }
-        image = LinearImage { width: width as u32, height: height as u32, pixels, ..image };
+/// The size a `width` x `height` photo is held at on a device whose largest
+/// texture is `largest` pixels a side: its own, or scaled down to fit.
+pub fn held_size(width: u32, height: u32, largest: u32) -> (u32, u32) {
+    match width.max(height) > largest {
+        true => fit_within(width, height, largest),
+        false => (width, height),
     }
-    image
+}
+
+/// Scales an image down to fit the largest texture the device supports,
+/// each new pixel the average of the old ones it covers.
+fn shrink_to_fit(image: LinearImage, max_size: u32) -> LinearImage {
+    let (width, height) = held_size(image.width, image.height, max_size);
+    if (width, height) == (image.width, image.height) {
+        return image;
+    }
+    let (columns, rows) = (spans(image.width, width), spans(image.height, height));
+    let average = |pixels: &mut dyn Iterator<Item = ([f32; 3], f32)>| {
+        pixels.fold([0.0; 3], |sum, (pixel, weight)| std::array::from_fn(|i| sum[i] + pixel[i] * weight))
+    };
+    // Across each row first, then down each column of that.
+    let mut across = vec![[0.0; 3]; width as usize * image.height as usize];
+    across.par_chunks_mut(width as usize).zip(image.pixels.par_chunks(image.width as usize)).for_each(|(out, row)| {
+        for (pixel, span) in out.iter_mut().zip(&columns) {
+            *pixel = average(&mut span.iter().map(|&(x, weight)| (row[x], weight)));
+        }
+    });
+    let mut pixels = vec![[0.0; 3]; width as usize * height as usize];
+    pixels.par_chunks_mut(width as usize).zip(rows.par_iter()).for_each(|(out, span)| {
+        for (x, pixel) in out.iter_mut().enumerate() {
+            *pixel = average(&mut span.iter().map(|&(y, weight)| (across[y * width as usize + x], weight)));
+        }
+    });
+    LinearImage { width, height, pixels, ..image }
+}
+
+/// For each of `to` pixels along a side `from` pixels long, the old pixels
+/// it covers and how much each counts towards it.
+fn spans(from: u32, to: u32) -> Vec<Vec<(usize, f32)>> {
+    let scale = from as f64 / to as f64;
+    (0..to)
+        .map(|i| {
+            let (start, end) = (i as f64 * scale, (i + 1) as f64 * scale);
+            (start.floor() as usize..(end.ceil() as usize).min(from as usize))
+                .map(|j| (j, ((end.min(j as f64 + 1.0) - start.max(j as f64)) / scale) as f32))
+                .collect()
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -823,5 +861,34 @@ mod tests {
         let reds: std::collections::HashSet<u16> = deep.pixels().map(|pixel| pixel.0[0]).collect();
         let coarse: std::collections::HashSet<u8> = plain.pixels().map(|pixel| pixel.0[0]).collect();
         assert!(reds.len() > coarse.len(), "{} levels where 8 bits gave {}", reds.len(), coarse.len());
+    }
+
+    #[test]
+    fn a_photo_too_large_for_the_device_is_scaled_to_fit_not_halved() {
+        // A 250 x 120 photo on a device that holds 100 px: halving would give 62 x 30.
+        let (width, height) = (250u32, 120u32);
+        let pixels = (0..width * height).map(|i| [(i % width) as f32 / width as f32, 0.25, (i / width % 2) as f32]).collect();
+        let held = shrink_to_fit(LinearImage { width, height, pixels, scene_referred: true }, 100);
+        assert_eq!((held.width, held.height), (100, 48));
+        assert_eq!(held_size(width, height, 100), (100, 48));
+        assert!(held.scene_referred);
+        // Averaged, not picked: flat colour stays flat, a ramp stays a ramp
+        // and alternating rows blend to their middle.
+        for (i, pixel) in held.pixels.iter().enumerate() {
+            let x = (i % 100) as f32;
+            assert!((pixel[0] - (x + 0.5) / 100.0).abs() < 0.005, "{pixel:?} at {x}");
+            assert!((pixel[1] - 0.25).abs() < 1e-5);
+            assert!((pixel[2] - 0.5).abs() < 0.11, "{pixel:?}");
+        }
+        let mean = held.pixels.iter().map(|pixel| pixel[2]).sum::<f32>() / held.pixels.len() as f32;
+        assert!((mean - 0.5).abs() < 1e-3);
+    }
+
+    #[test]
+    fn a_photo_that_fits_is_left_alone() {
+        let image = LinearImage { width: 3, height: 2, pixels: vec![[0.5; 3]; 6], scene_referred: false };
+        let held = shrink_to_fit(image, 3);
+        assert_eq!((held.width, held.height, held.pixels.len()), (3, 2, 6));
+        assert_eq!(held_size(3, 2, 3), (3, 2));
     }
 }

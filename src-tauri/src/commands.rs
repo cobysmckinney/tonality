@@ -55,6 +55,17 @@ fn recover<T>(lock: &Mutex<Option<T>>) -> MutexGuard<'_, Option<T>> {
     })
 }
 
+/// Why the library couldn't open, while it can't.
+#[derive(Default)]
+pub struct StartupProblem(pub Mutex<Option<LibraryProblem>>);
+
+#[derive(Clone, Serialize)]
+pub struct LibraryProblem {
+    /// The library folder, if it could be worked out.
+    pub path: Option<PathBuf>,
+    pub message: String,
+}
+
 type CommandResult<T> = Result<T, String>;
 
 fn message(error: anyhow::Error) -> String {
@@ -65,6 +76,20 @@ fn message(error: anyhow::Error) -> String {
 struct Progress {
     done: usize,
     total: usize,
+}
+
+// ---- startup ----
+
+/// Why the library couldn't open, or nothing if it is open.
+#[tauri::command]
+pub fn library_problem(problem: State<StartupProblem>) -> Option<LibraryProblem> {
+    problem.0.lock().unwrap().clone()
+}
+
+/// Tries again to open a library that couldn't open at startup.
+#[tauri::command(async)]
+pub fn retry_library(app: AppHandle) -> CommandResult<()> {
+    crate::start_library(&app).map_err(message)
 }
 
 // ---- browsing ----
@@ -666,7 +691,8 @@ pub fn plan_export(
     job: export::Job,
     settings: Option<export::Settings>,
 ) -> CommandResult<export::Plan> {
-    export::plan(&state.library, &job, settings.as_ref()).map_err(message)
+    let largest = gpu::shared().map_or(u32::MAX, gpu::Gpu::largest_picture);
+    export::plan(&state.library, &job, settings.as_ref(), largest).map_err(message)
 }
 
 /// Writes the job's pictures out as image files, as `plan_export` described.
