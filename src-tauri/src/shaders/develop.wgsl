@@ -319,11 +319,17 @@ fn fragment(in: VertexOutput) -> @location(0) vec4f {
         c = denoise(uv, lod, texel, c, noise_reduction * fine);
     }
 
-    var sharpening = detail.x * 1.6;
-    if (scene_referred) {
-        sharpening += BASE_SHARPENING;
+    // Sharpening pushes each pixel's brightness away from its neighbours';
+    // below zero (only a mask can go there) it pulls it towards them instead.
+    let base_sharpening = select(0.0, BASE_SHARPENING, scene_referred);
+    var sharpening = base_sharpening + detail.x * 1.6;
+    if (detail.x < 0.0) {
+        // -100 lands halfway to the neighbours, in log terms, whatever the
+        // file's own sharpening: a one-pixel blur. Any further would start to
+        // turn the finest detail inside out.
+        sharpening = mix(base_sharpening, -0.5, -detail.x);
     }
-    if (sharpening > 0.0) {
+    if (sharpening != 0.0) {
         let around = (read_source(uv + vec2f(texel.x, 0.0), lod) + read_source(uv - vec2f(texel.x, 0.0), lod)
             + read_source(uv + vec2f(0.0, texel.y), lod) + read_source(uv - vec2f(0.0, texel.y), lod)) * 0.25;
         let ratio = clamp((luma(c) + 0.002) / (luma(around) + 0.002), 0.5, 2.0);

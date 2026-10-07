@@ -55,7 +55,7 @@ A preset is a named look to lay over a photo's edits. Each one *covers* some set
 
 ## Masks
 
-Masks change one part of the photo. Each mask is an area, built from parts, with its own sliders (light, color, clarity, dehaze, sharpening, noise reduction) that add to the photo's own wherever it covers.
+Masks change one part of the photo. Each mask is an area, built from parts, with its own sliders (light, color, clarity, dehaze, sharpening, noise reduction) that add to the photo's own wherever it covers. A mask's sharpening can also go below zero to soften its area slightly, such as skin or a background.
 
 - **The Masks tool** (`M`) is one column: the photo's masks at the top, then a tile for each way to start one (subject, background, sky, object, brush, linear gradient, radial gradient, brightness range; hover a tile for what it picks out), or, once a mask is chosen, its settings and sliders.
 - **Subject, background and sky**: small models find the photo's main subject (a person, an animal, a building) and its sky; the background is everything but the subject. The subject takes about six seconds the first time and the sky about four; after that it is kept in the library. They are parts like any other, so they can be added, subtracted or intersected ("the sky, less the subject"), and a pasted mask finds each photo's own.
