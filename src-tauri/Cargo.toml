@@ -44,6 +44,7 @@ bytemuck = { version = "1.25.2", features = ["derive"] }
 tract-onnx = "0.23.8"
 tract-linalg = { version = "0.23.8", features = ["multithread-mm"] }
 jpeg-decoder = { version = "0.3.2", default-features = false }
+tauri-plugin-single-instance = "2"
 
 
 [features]

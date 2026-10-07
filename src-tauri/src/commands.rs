@@ -89,7 +89,7 @@ pub fn library_problem(problem: State<StartupProblem>) -> Option<LibraryProblem>
 /// Tries again to open a library that couldn't open at startup.
 #[tauri::command(async)]
 pub fn retry_library(app: AppHandle) -> CommandResult<()> {
-    crate::start_library(&app)
+    crate::start_library(&app).map_err(message)
 }
 
 // ---- browsing ----

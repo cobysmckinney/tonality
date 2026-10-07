@@ -8,7 +8,7 @@ use std::time::{Duration, SystemTime};
 use image::{Rgb, RgbImage};
 use tempfile::TempDir;
 use tonality_lib::import::{self, ScanSession};
-use tonality_lib::library::{Library, View};
+use tonality_lib::library::{Library, LibraryInUse, View};
 use tonality_lib::thumbs;
 
 /// 2026-03-14 around midday UTC; far enough from midnight to be the same day in any timezone that matters here.
@@ -321,6 +321,17 @@ fn favorites_flags_and_albums() {
 
     f.library.delete_album(album).unwrap();
     assert_eq!(f.library.list_photos(View::Library).unwrap().len(), 2, "deleting an album keeps its photos");
+}
+
+#[test]
+fn a_library_opens_in_one_copy_at_a_time() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path().join("Tonality");
+    let library = Library::open(&root).unwrap();
+    let error = Library::open(&root).err().expect("a second open is refused while the first is open");
+    assert!(error.is::<LibraryInUse>(), "unexpected error: {error:#}");
+    drop(library);
+    Library::open(&root).expect("the library opens again once the first copy closes");
 }
 
 /// Runs the real decoders over a folder of camera files:
