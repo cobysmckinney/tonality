@@ -238,13 +238,14 @@ function Edits({ job, plan }: { job: ExportJob; plan: ExportPlan }) {
   );
 }
 
-function Size({ longEdge }: { longEdge: number | null }) {
+function Size({ longEdge, files }: { longEdge: number | null; files: ExportPlan["files"] }) {
   const { changeExport } = useStore.getState();
   // "Custom" stays chosen even while its box holds a number that happens to be a preset.
   const [custom, setCustom] = useState(!SIZES.some((size) => size.value === longEdge));
   // What is in the box, which may be half-typed.
   const [typed, setTyped] = useState(String(longEdge ?? ""));
   const set = (value: number | null) => void changeExport({ settings: { longEdge: value } });
+  const shrunk = files.filter((file) => file.shrunk).length;
 
   return (
     <Row label="Size">
@@ -277,6 +278,16 @@ function Size({ longEdge }: { longEdge: number | null }) {
         </label>
       )}
       {longEdge !== null && <span className="export-note">Along the longer side. Smaller pictures are not enlarged.</span>}
+      {shrunk > 0 && (
+        <span className="export-note">
+          {files.length === 1
+            ? "This photo is"
+            : shrunk === files.length
+              ? "These photos are"
+              : plural(shrunk, "of these photos is", "of these photos are")}{" "}
+          larger than this computer’s graphics card can hold, so {shrunk === 1 ? "it comes" : "they come"} out smaller.
+        </span>
+      )}
     </Row>
   );
 }
@@ -320,7 +331,7 @@ function Setup({ job, plan }: Extract<ExportState, { phase: "setup" }>) {
             </label>
           </Row>
         )}
-        <Size longEdge={settings.longEdge} />
+        <Size longEdge={settings.longEdge} files={files} />
       </dl>
 
       <div className="dialog-actions">

@@ -691,7 +691,8 @@ pub fn plan_export(
     job: export::Job,
     settings: Option<export::Settings>,
 ) -> CommandResult<export::Plan> {
-    export::plan(&state.library, &job, settings.as_ref()).map_err(message)
+    let largest = gpu::shared().map_or(u32::MAX, gpu::Gpu::largest_picture);
+    export::plan(&state.library, &job, settings.as_ref(), largest).map_err(message)
 }
 
 /// Writes the job's pictures out as image files, as `plan_export` described.

@@ -128,10 +128,11 @@ function Info({ photo }: { photo: Photo }) {
   // What an export at full size would measure, once the crop is taken into account.
   const cropped = size && frameSize(size, adjustments, false);
   const croppedSize = cropped && { width: Math.round(cropped.width), height: Math.round(cropped.height) };
+  // Against the size the photo is held at, which is smaller than its own if the graphics card can't hold it whole.
   const isCropped =
-    croppedSize && photo.width !== null && photo.height !== null
-      ? !(croppedSize.width === photo.width && croppedSize.height === photo.height) &&
-        !(croppedSize.width === photo.height && croppedSize.height === photo.width)
+    croppedSize && size
+      ? !(croppedSize.width === size.width && croppedSize.height === size.height) &&
+        !(croppedSize.width === size.height && croppedSize.height === size.width)
       : false;
 
   return (
