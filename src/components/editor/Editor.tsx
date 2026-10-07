@@ -547,7 +547,8 @@ export function Editor({ photo, inert }: { photo: Photo; inert: boolean }) {
         if (onSlider) return;
         event.preventDefault();
         const list = visiblePhotos(state);
-        const next = list[list.findIndex((p) => p.id === open) + (key === "ArrowLeft" ? -1 : 1)];
+        const at = list.findIndex((p) => p.id === open);
+        const next = at < 0 ? undefined : list[at + (key === "ArrowLeft" ? -1 : 1)];
         if (next) state.openPhoto(next.id);
       } else if (key === "Escape" || (key === "Enter" && state.sidePanel === "crop" && !target.closest("button"))) {
         // Escape backs out one level at a time: off a slider, out of a circle being drawn, off the chosen mask, out of the crop or mask tools, out of the photo.
