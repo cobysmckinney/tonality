@@ -27,6 +27,7 @@ Tonality keeps one managed library, like Apple Photos. Importing copies photos i
 - **Moving or deleting files in `Originals` yourself**: a photo whose original is gone keeps its thumbnail but gets a crossed-out file mark in the grid, and can't be edited or exported until the file is put back where it was.
 - **RAW + JPEG pairs** shot together are one photo.
 - **Culling**: `F` favorite, `P` pick, `X` reject, `U` unflag, `Delete` to delete. Arrows move, Shift extends, Enter opens, Escape goes back.
+- **If the library can't open** (say the folder can't be changed), the window says why. Fix the problem and choose Try again.
 
 ## The editor
 
@@ -99,7 +100,7 @@ Exports are sRGB and carry the capture date, camera, lens and exposure.
 | Grid | `Ctrl+A` | Select all |
 | Grid | Enter, double-click | Open the photo |
 | Grid, editor | `F` / `P` / `X` / `U` | Favorite / pick / reject / unflag |
-| Grid, editor | `Delete` | Move to Recently Deleted (kept 30 days) |
+| Grid, editor | `Delete` | Move to Recently Deleted (kept 30 days). In the editor, not while a button or slider has focus: click the photo first |
 | Grid, editor | `Ctrl+C` / `Ctrl+V` | Copy / paste edits (in the grid, onto every selected photo) |
 | Grid, editor | `Ctrl+E` | Export |
 | Editor | `Esc` | Back to the grid |

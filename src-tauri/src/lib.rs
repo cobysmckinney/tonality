@@ -57,12 +57,49 @@ fn image_response(state: &AppState, path: &str) -> Response<Vec<u8>> {
     .expect("static headers are valid")
 }
 
-fn library_root(app: &tauri::App) -> Result<PathBuf> {
+fn library_root(app: &tauri::AppHandle) -> Result<PathBuf> {
     // TONALITY_LIBRARY points the app at another library, e.g. a scratch one for development.
     match std::env::var_os("TONALITY_LIBRARY") {
         Some(path) => Ok(PathBuf::from(path)),
         None => Ok(app.path().picture_dir().context("finding the Pictures folder")?.join("Tonality")),
     }
+}
+
+/// Opens the library and everything that works on it.
+fn open_library(app: &tauri::AppHandle) -> Result<AppState> {
+    let root = library_root(app)?;
+    let library = Arc::new(Library::open(&root)?);
+    // A file that can't be deleted stays in Recently Deleted for next time; it mustn't stop the app.
+    if let Err(error) = library.purge_expired() {
+        eprintln!("{error:#}");
+    }
+    Ok(AppState {
+        library,
+        scan: Mutex::new(None),
+        cancel_import: AtomicBool::new(false),
+        cancel_export: AtomicBool::new(false),
+        cancel_edits: AtomicBool::new(false),
+        renderers: rayon::ThreadPoolBuilder::new().build()?,
+        editing: Mutex::new(None),
+    })
+}
+
+/// Opens the library and makes it available to commands. On failure the
+/// reason is kept for the interface to show, and the app stays up so the
+/// person can fix the problem and try again.
+pub(crate) fn start_library(app: &tauri::AppHandle) -> Result<(), String> {
+    if app.try_state::<AppState>().is_some() {
+        return Ok(());
+    }
+    let result = open_library(app).map(|state| {
+        app.manage(state);
+    });
+    let problem = result.as_ref().err().map(|error| commands::LibraryProblem {
+        path: library_root(app).ok(),
+        message: format!("{error:#}"),
+    });
+    *app.state::<commands::StartupProblem>().0.lock().unwrap() = problem;
+    result.map_err(|error| format!("{error:#}"))
 }
 
 /// Development aid: runs each `.js` file that appears in `folder` in the
@@ -95,7 +132,17 @@ pub fn run() {
             let app = ctx.app_handle().clone();
             let path = request.uri().path().to_string();
             let worker = app.clone();
-            app.state::<AppState>().renderers.spawn(move || {
+            let Some(state) = app.try_state::<AppState>() else {
+                // The library didn't open, so there is nothing to draw.
+                responder.respond(
+                    Response::builder()
+                        .status(StatusCode::SERVICE_UNAVAILABLE)
+                        .body(b"the library is not open".to_vec())
+                        .expect("static headers are valid"),
+                );
+                return;
+            };
+            state.renderers.spawn(move || {
                 // A panic on this pool would abort the app, so it fails just this request.
                 let response = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     image_response(&worker.state::<AppState>(), &path)
@@ -110,20 +157,9 @@ pub fn run() {
             });
         })
         .setup(|app| {
-            let library = Arc::new(Library::open(&library_root(app)?)?);
-            // A file that can't be deleted stays in Recently Deleted for next time; it mustn't stop the app.
-            if let Err(error) = library.purge_expired() {
-                eprintln!("{error:#}");
-            }
-            app.manage(AppState {
-                library,
-                scan: Mutex::new(None),
-                cancel_import: AtomicBool::new(false),
-                cancel_export: AtomicBool::new(false),
-                cancel_edits: AtomicBool::new(false),
-                renderers: rayon::ThreadPoolBuilder::new().build()?,
-                editing: Mutex::new(None),
-            });
+            app.manage(commands::StartupProblem::default());
+            // A library that can't open is shown in the window rather than stopping the app.
+            let _ = start_library(app.handle());
             let handle = app.handle().clone();
             volumes::watch(move |cards| {
                 let _ = handle.emit("volumes-changed", cards);
@@ -135,6 +171,8 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            commands::library_problem,
+            commands::retry_library,
             commands::get_overview,
             commands::list_photos,
             commands::get_photo_info,

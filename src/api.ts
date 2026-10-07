@@ -256,7 +256,16 @@ export interface Progress {
   total: number;
 }
 
+/** Why the library couldn't open when the app started. */
+export interface LibraryProblem {
+  /** The library folder, if it could be worked out. */
+  path: string | null;
+  message: string;
+}
+
 export const api = {
+  libraryProblem: () => invoke<LibraryProblem | null>("library_problem"),
+  retryLibrary: () => invoke<void>("retry_library"),
   getOverview: () => invoke<Overview>("get_overview"),
   listPhotos: (view: View) => invoke<Photo[]>("list_photos", { view }),
   getPhotoInfo: (id: number) => invoke<PhotoInfo>("get_photo_info", { id }),

@@ -746,6 +746,22 @@ button {
   margin-top: 8px;
 }
 
+/* When the library won't open or the interface breaks. */
+.problem p {
+  max-width: 52ch;
+}
+.problem-path {
+  color: var(--text);
+  user-select: text;
+  -webkit-user-select: text;
+}
+.problem .problem-detail {
+  font-size: 12px;
+  overflow-wrap: anywhere;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
 /* ---- editor ---- */
 
 /*
