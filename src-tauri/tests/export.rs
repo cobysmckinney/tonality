@@ -73,7 +73,7 @@ impl Fixture {
     }
 
     fn plan(&self, job: &Job, settings: Option<&Settings>) -> Vec<String> {
-        export::plan(&self.library, job, settings).unwrap().files.into_iter().map(|file| file.name).collect()
+        export::plan(&self.library, job, settings, u32::MAX).unwrap().files.into_iter().map(|file| file.name).collect()
     }
 
     fn commit(&self, stops: f32) {
@@ -111,7 +111,7 @@ fn nothing_already_in_the_folder_is_ever_replaced() {
     fs::create_dir_all(f.exports_dir()).unwrap();
     fs::write(f.exports_dir().join("IMG_0462.jpg"), b"somebody else's file").unwrap();
 
-    let plan = export::plan(&f.library, &Job::of(&f.photos[..1]), None).unwrap();
+    let plan = export::plan(&f.library, &Job::of(&f.photos[..1]), None, u32::MAX).unwrap();
     assert_eq!(plan.files[0].name, "IMG_0462-2.jpg");
     assert!(plan.files[0].numbered);
 
@@ -167,7 +167,7 @@ fn the_plan_names_exactly_what_the_export_writes() {
 
     // Both names are now taken, and one photo is listed twice.
     let ids = [f.photos[0], f.photos[1], f.photos[1]];
-    let plan = export::plan(&f.library, &Job::of(&ids), Some(&png())).unwrap();
+    let plan = export::plan(&f.library, &Job::of(&ids), Some(&png()), u32::MAX).unwrap();
     let planned: Vec<&str> = plan.files.iter().map(|file| file.name.as_str()).collect();
     assert_eq!(planned, ["IMG_0462 (B-W)-2.png", "IMG_0463-2.png", "IMG_0463-3.png"]);
     assert_eq!(plan.files[0].branch.as_deref(), Some("B/W"));
@@ -175,12 +175,12 @@ fn the_plan_names_exactly_what_the_export_writes() {
     assert_eq!(names(&f.export(&ids, None, &png())), planned);
 
     // For one photo the plan also lists the branches there are to choose from.
-    let single = export::plan(&f.library, &Job::of(&[photo]), Some(&png())).unwrap();
+    let single = export::plan(&f.library, &Job::of(&[photo]), Some(&png()), u32::MAX).unwrap();
     assert_eq!(single.branches.iter().map(|b| b.name.as_str()).collect::<Vec<_>>(), ["Main", "B/W"]);
     let (main, black_and_white) = (single.branches[0].id, single.branches[1].id);
     assert_eq!((single.files[0].branch_id, single.current_branch_id), (Some(black_and_white), Some(black_and_white)));
     let other = Job { branches: Branches::Chosen(vec![main]), ..Job::of(&[photo]) };
-    let other = export::plan(&f.library, &other, Some(&png())).unwrap();
+    let other = export::plan(&f.library, &other, Some(&png()), u32::MAX).unwrap();
     assert_eq!((other.files[0].branch_id, other.current_branch_id), (Some(main), Some(black_and_white)));
     assert_eq!(other.files[0].name, "IMG_0462 (Main).png");
     assert!(plan.branches.is_empty() && plan.several_branches);
@@ -192,7 +192,7 @@ fn the_plan_names_exactly_what_the_export_writes() {
 fn planning_writes_nothing() {
     let f = fixture();
     for branches in [Branches::Current, Branches::All] {
-        export::plan(&f.library, &Job { branches, ..Job::of(&f.photos) }, None).unwrap();
+        export::plan(&f.library, &Job { branches, ..Job::of(&f.photos) }, None, u32::MAX).unwrap();
     }
     assert!(!f.exports_dir().exists());
     assert_eq!(f.library.list_photos(View::Library).unwrap()[0].branches, 0, "no history is started either");
@@ -241,7 +241,7 @@ fn the_folder_and_settings_are_remembered() {
     assert!(!f.exports_dir().exists());
 
     assert_eq!(f.library.export_settings().unwrap(), settings);
-    let plan = export::plan(&f.library, &Job::of(&f.photos[1..]), None).unwrap();
+    let plan = export::plan(&f.library, &Job::of(&f.photos[1..]), None, u32::MAX).unwrap();
     assert_eq!(Path::new(&plan.folder), elsewhere);
     assert_eq!(plan.files[0].name, "IMG_0463.png");
 }
@@ -351,7 +351,7 @@ fn every_branch_can_be_exported_at_once() {
     let two = Job { branches: Branches::Chosen(vec![cool, warm]), name: Some("{branch} look".into()), ..Job::of(&[photo]) };
     assert_eq!(names(&f.run(&two, &png())), ["Cool look.png", "Warm look.png"]);
     let none = Job { branches: Branches::Chosen(vec![]), ..Job::of(&[photo]) };
-    assert!(export::plan(&f.library, &none, None).is_err());
+    assert!(export::plan(&f.library, &none, None, u32::MAX).is_err());
     let two_photos = Job { branches: Branches::Chosen(vec![warm]), ..Job::of(&f.photos) };
-    assert!(export::plan(&f.library, &two_photos, None).is_err(), "branches are chosen for one photo at a time");
+    assert!(export::plan(&f.library, &two_photos, None, u32::MAX).is_err(), "branches are chosen for one photo at a time");
 }

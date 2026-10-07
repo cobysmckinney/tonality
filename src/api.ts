@@ -208,6 +208,8 @@ export interface ExportPlan {
     /** The picture's size in pixels, where the library knows the photo's. */
     width: number | null;
     height: number | null;
+    /** True when the photo is larger than the graphics card can hold, so the picture comes out smaller than asked for. */
+    shrunk: boolean;
   }[];
   /** For a single photo, its branches to choose between and the one it is on. */
   branches: Branch[];
