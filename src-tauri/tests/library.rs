@@ -228,6 +228,73 @@ fn deleted_photos_can_be_recovered_reimported_or_purged() {
 }
 
 #[test]
+fn originals_moved_or_deleted_outside_the_app_are_noticed() {
+    let f = fixture();
+    import_all(&f.library, &scan(&f.library, std::slice::from_ref(&f.card)));
+    let photos = f.library.list_photos(View::Library).unwrap();
+    assert!(photos.iter().all(|p| !p.missing));
+
+    let gone = photos.iter().find(|p| p.file_name == "IMG_0001.JPG").unwrap().id;
+    let original = f.library.photo_files(gone).unwrap().path;
+    let moved = f.library.root().join("elsewhere.jpg");
+    fs::rename(&original, &moved).unwrap();
+    for photo in f.library.list_photos(View::Library).unwrap() {
+        assert_eq!(photo.missing, photo.id == gone, "{}", photo.file_name);
+    }
+    let error = format!("{:#}", f.library.photo_files(gone).unwrap_err());
+    assert!(error.contains("missing from the library folder"), "{error}");
+    assert!(error.contains("IMG_0001.JPG"), "names the file: {error}");
+
+    // Putting it back is all it takes.
+    fs::rename(&moved, &original).unwrap();
+    assert!(f.library.list_photos(View::Library).unwrap().iter().all(|p| !p.missing));
+    assert!(f.library.photo_files(gone).is_ok());
+}
+
+#[test]
+fn purging_a_photo_whose_original_is_already_gone_finishes_the_job() {
+    let f = fixture();
+    import_all(&f.library, &scan(&f.library, std::slice::from_ref(&f.card)));
+    let id = f.library.list_photos(View::Library).unwrap()[0].id;
+    fs::remove_file(f.library.photo_files(id).unwrap().path).unwrap();
+    f.library.trash(&[id]).unwrap();
+    assert_eq!(f.library.purge(&[id]).unwrap(), 1);
+    assert!(f.library.list_photos(View::Deleted).unwrap().is_empty());
+}
+
+#[cfg(unix)]
+#[test]
+fn a_photo_whose_original_cant_be_deleted_stays_in_recently_deleted() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let f = fixture();
+    import_all(&f.library, &scan(&f.library, std::slice::from_ref(&f.card)));
+    let ids: Vec<i64> = f.library.list_photos(View::Library).unwrap().iter().map(|p| p.id).collect();
+    let day = f.library.originals_dir().join("2026/2026-03-14");
+    let files = fs::read_dir(&day).unwrap().count();
+    fs::set_permissions(&day, fs::Permissions::from_mode(0o555)).unwrap();
+
+    f.library.trash(&ids).unwrap();
+    let result = f.library.purge(&ids);
+    fs::set_permissions(&day, fs::Permissions::from_mode(0o755)).unwrap();
+    if fs::read_dir(&day).unwrap().count() < files {
+        eprintln!("skipping: running as a user that can delete from read-only folders");
+        return;
+    }
+    let error = format!("{:#}", result.unwrap_err());
+    assert!(error.contains("Couldn’t delete 3 photos, so they stay in Recently Deleted"), "{error}");
+    assert!(error.contains("IMG_0001.JPG"), "names the files: {error}");
+    assert_eq!(f.library.list_photos(View::Deleted).unwrap().len(), 3, "still tracked");
+    for id in &ids {
+        assert!(f.library.thumb_path(*id).exists(), "thumbnails kept while the photo is");
+    }
+
+    // Once the files can go, the next purge takes them.
+    assert_eq!(f.library.purge(&ids).unwrap(), 3);
+    assert!(!day.exists());
+}
+
+#[test]
 fn favorites_flags_and_albums() {
     let f = fixture();
     import_all(&f.library, &scan(&f.library, std::slice::from_ref(&f.card)));

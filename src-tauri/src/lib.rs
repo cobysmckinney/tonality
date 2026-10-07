@@ -111,7 +111,10 @@ pub fn run() {
         })
         .setup(|app| {
             let library = Arc::new(Library::open(&library_root(app)?)?);
-            library.purge_expired()?;
+            // A file that can't be deleted stays in Recently Deleted for next time; it mustn't stop the app.
+            if let Err(error) = library.purge_expired() {
+                eprintln!("{error:#}");
+            }
             app.manage(AppState {
                 library,
                 scan: Mutex::new(None),
