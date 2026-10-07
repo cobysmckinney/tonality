@@ -55,6 +55,17 @@ fn recover<T>(lock: &Mutex<Option<T>>) -> MutexGuard<'_, Option<T>> {
     })
 }
 
+/// Why the library couldn't open, while it can't.
+#[derive(Default)]
+pub struct StartupProblem(pub Mutex<Option<LibraryProblem>>);
+
+#[derive(Clone, Serialize)]
+pub struct LibraryProblem {
+    /// The library folder, if it could be worked out.
+    pub path: Option<PathBuf>,
+    pub message: String,
+}
+
 type CommandResult<T> = Result<T, String>;
 
 fn message(error: anyhow::Error) -> String {
@@ -65,6 +76,20 @@ fn message(error: anyhow::Error) -> String {
 struct Progress {
     done: usize,
     total: usize,
+}
+
+// ---- startup ----
+
+/// Why the library couldn't open, or nothing if it is open.
+#[tauri::command]
+pub fn library_problem(problem: State<StartupProblem>) -> Option<LibraryProblem> {
+    problem.0.lock().unwrap().clone()
+}
+
+/// Tries again to open a library that couldn't open at startup.
+#[tauri::command(async)]
+pub fn retry_library(app: AppHandle) -> CommandResult<()> {
+    crate::start_library(&app)
 }
 
 // ---- browsing ----
