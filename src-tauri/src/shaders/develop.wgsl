@@ -29,11 +29,14 @@ struct MaskPart {
 
 struct Params {
     // The part of the frame being drawn: frame = view.xy + uv * view.zw.
-    // The frame is the cropped picture.
+    // The frame is the crop, or in the crop tool the whole tilted photo.
     view: vec4f,
     // Two rows of the matrix taking a frame position to a position in the
     // photo, undoing crop, straightening, flips and quarter-turns.
     to_source: array<vec4f, 2>,
+    // Where the crop sits in the frame (left, top, width, height, 0..1): the
+    // whole frame normally, a part of it in the crop tool.
+    crop: vec4f,
     // width, height, source pixels per output pixel, 1 if scene-referred (RAW).
     image: vec4f,
     // exposure (EV), contrast, highlights, shadows
@@ -421,8 +424,10 @@ fn fragment(in: VertexOutput) -> @location(0) vec4f {
     v = mix(vec3f(gray), v, boost);
 
     // Vignette: darken or lighten towards the corners.
-    // It follows the crop, so it frames the picture you end up with.
-    let from_center = length((frame_uv - 0.5) * 1.41421356);
+    // It follows the crop, so it frames the picture you end up with, even
+    // while the crop tool shows the whole photo around it.
+    let in_crop = (frame_uv - p.crop.xy) / p.crop.zw;
+    let from_center = length((in_crop - 0.5) * 1.41421356);
     let edge = smoothstep(0.25, 1.0, from_center);
     v *= 1.0 + detail.z * 0.85 * edge * edge;
 

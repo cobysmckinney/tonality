@@ -243,11 +243,7 @@ function Stage({ photo, onZoomChange }: { photo: Photo; onZoomChange: (label: st
     s.sidePanel === "masks" && s.editor.showMask && !s.editor.showOriginal ? s.editor.maskId : null,
   );
 
-  // A vignette follows the crop, so it has no meaning on the uncropped view.
-  const adjustments = useMemo(
-    () => (showOriginal ? DEFAULTS : uncropped ? { ...current, vignette: 0 } : current),
-    [current, showOriginal, uncropped],
-  );
+  const adjustments = useMemo(() => (showOriginal ? DEFAULTS : current), [current, showOriginal]);
   /** The size, in photo pixels, of the picture being shown. */
   const frame = useMemo(
     () => (photoSize ? frameSize(photoSize, adjustments, uncropped) : null),
