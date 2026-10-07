@@ -126,6 +126,8 @@ export interface EditorState {
   photoId: number | null;
   /** True once the photo is on the GPU and frames can be drawn. */
   ready: boolean;
+  /** Why the photo couldn't be opened for editing (a missing or damaged original), if it couldn't. */
+  failed: string | null;
   size: { width: number; height: number } | null;
   /** What the sliders show right now, including a drag still in progress. */
   adjustments: Adjustments;
@@ -161,6 +163,7 @@ export interface EditorState {
 const idleEditor: EditorState = {
   photoId: null,
   ready: false,
+  failed: null,
   size: null,
   adjustments: DEFAULTS,
   committed: DEFAULTS,
@@ -817,7 +820,8 @@ export const useStore = create<State>((set, get) => {
             get().toast({ text: `Couldn’t find ${what} in this photo, so that part of its mask is empty`, tone: "error" });
           }
         } catch (error) {
-          get().toast({ text: String(error), tone: "error" });
+          // Said on the stage, where the photo would be, rather than in a toast.
+          if (get().openId === id) setEditor({ failed: String(error) });
         }
       });
     },
