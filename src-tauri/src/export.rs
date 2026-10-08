@@ -425,6 +425,7 @@ fn capture_fields(capture: &Capture) -> Vec<Field> {
     let text = |tag, value: &str| value.is_ascii().then(|| field(tag, Value::Ascii(vec![value.as_bytes().to_vec()])));
     let ratio = |tag, num: u32, denom: u32| field(tag, Value::Rational(vec![exif::Rational { num, denom }]));
     let tenths = |value: f64| (value * 10.0).round() as u32;
+    let hundredths = |value: f64| (value * 100.0).round() as u32;
 
     let mut fields = vec![
         text(Tag::Software, "Tonality"),
@@ -434,7 +435,8 @@ fn capture_fields(capture: &Capture) -> Vec<Field> {
         capture.model.as_deref().and_then(|model| text(Tag::Model, model)),
         capture.lens.as_deref().and_then(|lens| text(Tag::LensModel, lens)),
         capture.iso.map(|iso| field(Tag::PhotographicSensitivity, Value::Short(vec![iso.min(u16::MAX as u32) as u16]))),
-        capture.aperture.map(|f| ratio(Tag::FNumber, tenths(f), 10)),
+        // Hundredths, as cameras write it: f/0.95 lenses exist.
+        capture.aperture.map(|f| ratio(Tag::FNumber, hundredths(f), 100)),
         capture.focal_length.map(|mm| ratio(Tag::FocalLength, tenths(mm), 10)),
         // Fast shutter speeds are fractions of a second: 1/250, not 0.004.
         capture.shutter.map(|seconds| match seconds {
@@ -794,6 +796,11 @@ mod tests {
         assert_eq!(shown(Tag::ExposureTime), "1/250");
         assert_eq!(shown(Tag::FocalLength), "35");
         assert!(read.get_field(Tag::Orientation, In::PRIMARY).is_none());
+
+        let fast = Capture { aperture: Some(0.95), ..capture() };
+        let bytes = write_tiff(&capture_fields(&fast), None, 0).unwrap();
+        let read = exif::Reader::new().read_raw(bytes).unwrap();
+        assert_eq!(read.get_field(Tag::FNumber, In::PRIMARY).unwrap().display_value().to_string(), "0.95", "not rounded to f/1");
     }
 
     #[test]
