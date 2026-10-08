@@ -3,6 +3,7 @@ import { Check, ChevronRight, X } from "lucide-react";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { MenuEntry, useStore } from "../store";
 import { canStartImport } from "../sheets";
+import { focusToRestore } from "../focus";
 
 function MenuList({ entries, x, y }: { entries: MenuEntry[]; x: number; y: number }) {
   const element = useRef<HTMLDivElement>(null);
@@ -57,6 +58,19 @@ function MenuList({ entries, x, y }: { entries: MenuEntry[]; x: number; y: numbe
 
 function Menu() {
   const menu = useStore((s) => s.menu);
+  // What had the focus when the menu opened, to give it back when it closes.
+  // This runs before the effect below moves the focus onto the first item.
+  const opener = useRef<HTMLElement | null>(null);
+  useEffect(() => {
+    if (menu) {
+      opener.current ??= document.activeElement as HTMLElement | null;
+      return;
+    }
+    const back = focusToRestore(opener.current, document.activeElement, document.body);
+    opener.current = null;
+    back?.focus({ preventScroll: true });
+  }, [menu]);
+
   useEffect(() => {
     if (!menu) return;
     const close = () => useStore.getState().closeMenu();
