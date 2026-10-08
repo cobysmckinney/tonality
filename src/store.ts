@@ -1,5 +1,4 @@
 import { create } from "zustand";
-import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import {
   Adjustments,
@@ -91,9 +90,6 @@ export interface BrushSettings {
   /** Erase rather than paint (Alt does the opposite while held). */
   erase: boolean;
 }
-
-/** The extension of a preset written out as a file; `FILE_EXTENSION` in presets.rs. */
-const PRESET_EXTENSION = "tonality-preset";
 
 /** The preset applied last in this sitting, kept so its amount can still be changed. */
 export interface AppliedPreset {
@@ -402,15 +398,21 @@ export function targetOf(state: Pick<State, "selection">, id: number): number[] 
   return state.selection.has(id) ? [...state.selection] : [id];
 }
 
-const IMAGE_EXTENSIONS = ["jpg", "jpeg", "png", "tif", "tiff", "webp", "heic", "heif"];
-// prettier-ignore
-const RAW_EXTENSIONS = ["ari", "arw", "cr2", "cr3", "crm", "crw", "dcr", "dcs", "dng", "erf", "iiq", "kdc", "mef", "mos", "mrw", "nef", "nrw", "orf", "ori", "pef", "raf", "raw", "rw2", "rwl", "srw", "3fr", "fff", "x3f", "qtk"];
-
 let nextToastId = 1;
 /** Counts export plans asked for, so a slow answer never overwrites a newer one. */
 let planRequest = 0;
 
 export const useStore = create<State>((set, get) => {
+  /** Opens one of the backend's dialogs; what was chosen, or null if it failed (and says why). */
+  async function ask<T>(dialog: () => Promise<T>): Promise<T | null> {
+    try {
+      return await dialog();
+    } catch (error) {
+      get().toast({ text: String(error), tone: "error" });
+      return null;
+    }
+  }
+
   /** Runs a backend change; on failure, says so and resyncs with the library. */
   async function attempt(action: () => Promise<unknown>): Promise<boolean> {
     try {
@@ -1092,13 +1094,9 @@ export const useStore = create<State>((set, get) => {
     },
 
     async importPresets() {
-      const picked = await openDialog({
-        multiple: true,
-        title: "Import presets",
-        filters: [{ name: "Tonality presets", extensions: [PRESET_EXTENSION, "json"] }],
-      });
-      if (!picked?.length) return;
       try {
+        const picked = await api.choosePresetFiles();
+        if (picked.length === 0) return;
         const { imported, failed } = await api.importPresets(picked);
         set({ presets: await api.listPresets() });
         if (imported.length > 0) get().toast({ text: `Imported ${plural(imported.length, "preset")}` });
@@ -1109,13 +1107,9 @@ export const useStore = create<State>((set, get) => {
     },
 
     async exportPreset(preset) {
-      const path = await saveDialog({
-        title: "Export preset",
-        defaultPath: `${preset.name.replace(/[/\\:*?"<>|]/g, "-")}.${PRESET_EXTENSION}`,
-        filters: [{ name: "Tonality presets", extensions: [PRESET_EXTENSION] }],
-      });
-      if (!path) return;
       try {
+        const path = await api.choosePresetDestination(preset.name.replace(/[/\\:*?"<>|]/g, "-"));
+        if (!path) return;
         await api.exportPreset(preset.id, path);
         get().toast({ text: `Saved “${preset.name}” as a file`, action: { label: "Show", run: () => void get().reveal(path) } });
       } catch (error) {
@@ -1259,16 +1253,12 @@ export const useStore = create<State>((set, get) => {
     },
 
     async importFiles() {
-      const picked = await openDialog({
-        multiple: true,
-        title: "Import photos",
-        filters: [{ name: "Photos", extensions: [...RAW_EXTENSIONS, ...IMAGE_EXTENSIONS] }],
-      });
+      const picked = await ask(() => api.chooseImport(false));
       if (picked?.length) await get().startImport(picked);
     },
 
     async importFolder() {
-      const picked = await openDialog({ directory: true, multiple: true, title: "Import a folder" });
+      const picked = await ask(() => api.chooseImport(true));
       if (picked?.length) await get().startImport(picked);
     },
 
@@ -1378,7 +1368,7 @@ export const useStore = create<State>((set, get) => {
     async chooseExportFolder() {
       const current = get().exportState;
       if (current?.phase !== "setup") return;
-      const folder = await openDialog({ directory: true, title: "Export to", defaultPath: current.plan.folder });
+      const folder = await ask(() => api.chooseExportFolder(current.plan.folder));
       if (folder) await get().changeExport({ settings: { folder } });
     },
 

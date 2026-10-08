@@ -46,6 +46,12 @@ fn extension(path: &Path) -> Option<String> {
     Some(path.extension()?.to_str()?.to_ascii_lowercase())
 }
 
+/// The extensions of every kind of file the library accepts, in lower case.
+pub fn extensions() -> Vec<String> {
+    let images = IMAGE_EXTENSIONS.iter().chain(HEIF_EXTENSIONS).map(|ext| ext.to_string());
+    images.chain(rawler::decoders::supported_extensions().iter().map(|ext| ext.to_ascii_lowercase())).collect()
+}
+
 /// The kind of photo a file is, or `None` if the library does not accept it.
 pub fn kind_of(path: &Path) -> Option<Kind> {
     let ext = extension(path)?;

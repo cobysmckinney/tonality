@@ -3,6 +3,7 @@ pub mod develop;
 pub mod edit;
 pub mod export;
 pub mod geometry;
+pub mod grants;
 pub mod gpu;
 pub mod history;
 pub mod import;
@@ -169,6 +170,7 @@ pub fn run() {
         })
         .setup(|app| {
             app.manage(commands::StartupProblem::default());
+            app.manage(grants::Grants::default());
             // A library that can't open is shown in the window rather than stopping the app.
             if let Err(error) = start_library(app.handle()) {
                 if error.is::<LibraryInUse>() {
@@ -194,6 +196,12 @@ pub fn run() {
             }
             Ok(())
         })
+        // Whatever is dropped on the window may be imported (see grants.rs).
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) = event {
+                window.state::<grants::Grants>().allow(paths.iter().cloned());
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             commands::library_problem,
             commands::retry_library,
@@ -211,6 +219,10 @@ pub fn run() {
             commands::add_to_album,
             commands::remove_from_album,
             commands::list_volumes,
+            commands::choose_import,
+            commands::choose_preset_files,
+            commands::choose_preset_destination,
+            commands::choose_export_folder,
             commands::scan_import,
             commands::discard_scan,
             commands::run_import,

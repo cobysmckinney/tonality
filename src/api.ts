@@ -286,6 +286,11 @@ export const api = {
   removeFromAlbum: (albumId: number, ids: number[]) => invoke<void>("remove_from_album", { albumId, ids }),
 
   listVolumes: () => invoke<Volume[]>("list_volumes"),
+  // The backend opens the dialogs and only takes paths the person chose there, dropped on the window, or a card.
+  chooseImport: (folders: boolean) => invoke<string[]>("choose_import", { folders }),
+  choosePresetFiles: () => invoke<string[]>("choose_preset_files"),
+  choosePresetDestination: (name: string) => invoke<string | null>("choose_preset_destination", { name }),
+  chooseExportFolder: (current: string | null) => invoke<string | null>("choose_export_folder", { current }),
   scanImport: (paths: string[], source?: string) => invoke<Scan>("scan_import", { paths, source }),
   discardScan: () => invoke<void>("discard_scan"),
   runImport: (sessionId: number, indices: number[]) => invoke<ImportSummary>("run_import", { sessionId, indices }),
