@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { Adjustments, defaultAdjustments, Point } from "./adjustments";
-import { apply, canAdd, circleShape, foundCount, frameToSource, MAX_FOUND, newMask, newShape, screenMap, stillHeld } from "./masks";
+import { apply, canAdd, circleShape, foundCount, frameToSource, fromOriginal, MAX_FOUND, newMask, newShape, onOriginal, screenMap, stillHeld } from "./masks";
 
 const photo = { width: 300, height: 200 };
 const edited = (change: Partial<Adjustments>): Adjustments => ({ ...defaultAdjustments(), ...change });
@@ -23,6 +23,30 @@ describe("from the picture to the photo file", () => {
     const cropped = edited({ crop: { x: 0.75, y: 0.5, width: 0.5, height: 0.5 } });
     near(apply(frameToSource(photo, cropped), [0, 0]), [0.5, 0.25]);
     near(apply(frameToSource(photo, cropped), [1, 1]), [1, 0.75]);
+  });
+});
+
+describe("between the edit and the original", () => {
+  test("the middle of a top-left quarter crop is a quarter of the way into the original", () => {
+    const quarter = edited({ crop: { x: 0.25, y: 0.25, width: 0.5, height: 0.5 } });
+    near(onOriginal(photo, quarter, [0.5, 0.5]), [0.25, 0.25]);
+    near(fromOriginal(photo, quarter, [0.25, 0.25]), [0.5, 0.5]);
+  });
+
+  test("a turned or flipped photo is unturned and unflipped", () => {
+    near(onOriginal(photo, edited({ rotation: 1 }), [0.5, 0.25]), [0.25, 0.5]);
+    near(onOriginal(photo, edited({ flipHorizontal: true }), [0.2, 0.3]), [0.8, 0.3]);
+  });
+
+  test("there and back is the same point, however the photo is framed", () => {
+    const framed = edited({ rotation: 3, flipVertical: true, straighten: -12, crop: { x: 0.45, y: 0.55, width: 0.4, height: 0.5 } });
+    for (const point of [
+      [0, 0],
+      [0.5, 0.5],
+      [0.8, 0.3],
+    ] as Point[]) {
+      near(fromOriginal(photo, framed, onOriginal(photo, framed, point)), point);
+    }
   });
 });
 
