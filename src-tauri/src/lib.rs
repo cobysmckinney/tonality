@@ -70,10 +70,6 @@ fn library_root(app: &tauri::AppHandle) -> Result<PathBuf> {
 fn open_library(app: &tauri::AppHandle) -> Result<AppState> {
     let root = library_root(app)?;
     let library = Arc::new(Library::open(&root)?);
-    // A file that can't be deleted stays in Recently Deleted for next time; it mustn't stop the app.
-    if let Err(error) = library.purge_expired() {
-        eprintln!("{error:#}");
-    }
     Ok(AppState {
         library,
         scan: Mutex::new(None),

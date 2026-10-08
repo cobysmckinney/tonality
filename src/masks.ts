@@ -94,6 +94,17 @@ export function frameToSource(photo: Size, a: Adjustments): Affine {
   return then(then(then(onTurned, scale(1 / w, 1 / h)), flip), unturn);
 }
 
+/**
+ * Where a point of the edited picture (0..1 across and down) is on the
+ * original. The original is shown uncropped and unturned, so it is the photo
+ * file itself.
+ */
+export const onOriginal = (photo: Size, a: Adjustments, point: Point): Point => apply(frameToSource(photo, a), point);
+
+/** The point of the edited picture over a point of the original: `onOriginal` the other way. */
+export const fromOriginal = (photo: Size, a: Adjustments, point: Point): Point =>
+  apply(invert(frameToSource(photo, a)), point);
+
 /** What the screen shows: which part of the cropped picture, at what size in CSS pixels. */
 export interface ScreenView {
   photo: Size;
@@ -246,6 +257,20 @@ export function describeLocal(mask: Mask, before: LocalAdjustments): string {
   const key = changed[0];
   return `${mask.name}: ${LABELS[key]} ${formatValue(mask.adjustments[key], key === "exposure" ? 0.01 : 1)}`;
 }
+
+/** Which mask and part are chosen. */
+export interface Chosen {
+  maskId: number | null;
+  partIndex: number | null;
+}
+
+/**
+ * Whether a drag on the photo still has hold of the part it started on: the
+ * same mask and part are still chosen, and no loop is being drawn. Anything
+ * else takes the handles away, and the drag ends there.
+ */
+export const stillHeld = (start: Chosen, now: Chosen & { circling: boolean }) =>
+  !now.circling && start.maskId !== null && start.maskId === now.maskId && start.partIndex === now.partIndex;
 
 /** How many brush parts there are across all masks. */
 export const brushCount = (masks: Mask[]) =>

@@ -163,6 +163,29 @@ fn each_branch_remembers_where_you_were_on_it() {
 }
 
 #[test]
+fn a_new_unnamed_branch_never_takes_a_name_already_in_use() {
+    fn names(history: &History) -> Vec<&str> {
+        history.branches.iter().map(|branch| branch.name.as_str()).collect()
+    }
+    let f = fixture();
+    let start = f.commit(0.5).head_id;
+    let two = f.library.history_branch(f.photo, start, "").unwrap();
+    let three = f.library.history_branch(f.photo, start, "").unwrap();
+    assert_eq!(names(&three), ["Main", "Branch 2", "Branch 3"]);
+
+    f.library.history_delete_branch(f.photo, two.branch_id).unwrap();
+    let four = f.library.history_branch(f.photo, start, "").unwrap();
+    assert_eq!(names(&four), ["Main", "Branch 3", "Branch 4"], "not a second Branch 3");
+
+    // A branch renamed to look like a numbered one is counted too.
+    let g = fixture();
+    let main = g.commit(0.5);
+    g.library.history_rename_branch(g.photo, main.branch_id, "Branch 2").unwrap();
+    let next = g.library.history_branch(g.photo, main.head_id, "").unwrap();
+    assert_eq!(names(&next), ["Branch 2", "Branch 3"]);
+}
+
+#[test]
 fn branches_can_be_renamed_and_deleted_but_one_always_remains() {
     let f = fixture();
     let main = f.commit(0.5);

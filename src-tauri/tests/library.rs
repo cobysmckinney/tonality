@@ -8,7 +8,7 @@ use std::time::{Duration, SystemTime};
 use image::{Rgb, RgbImage};
 use tempfile::TempDir;
 use tonality_lib::import::{self, ScanSession};
-use tonality_lib::library::{Library, LibraryInUse, View};
+use tonality_lib::library::{self, Library, LibraryInUse, View};
 use tonality_lib::thumbs;
 
 /// 2026-03-14 around midday UTC; far enough from midnight to be the same day in any timezone that matters here.
@@ -225,6 +225,33 @@ fn deleted_photos_can_be_recovered_reimported_or_purged() {
     for id in &ids {
         assert_eq!(f.library.thumb_path(*id).exists(), *id == left[0].id);
     }
+}
+
+#[test]
+fn expired_photos_are_purged_while_the_app_is_open() {
+    let f = fixture();
+    import_all(&f.library, &scan(&f.library, std::slice::from_ref(&f.card)));
+    let ids: Vec<i64> = f.library.list_photos(View::Library).unwrap().iter().map(|p| p.id).collect();
+    f.library.trash(&ids).unwrap();
+    let expired = ids[0];
+    let original = f.library.photo_files(expired).unwrap().path;
+
+    // Backdate one deletion past the retention period, as if the app had been open that long.
+    let past = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_secs() as i64
+        - (library::TRASH_RETENTION_DAYS * 24 * 60 * 60 + 60);
+    let db = rusqlite::Connection::open(f.library.root().join(".tonality/library.db")).unwrap();
+    db.execute("UPDATE photos SET deleted_at = ?1 WHERE id = ?2", [past, expired]).unwrap();
+
+    // Looking at Recently Deleted removes it for good, and the others stay.
+    let deleted: Vec<i64> = f.library.list_photos(View::Deleted).unwrap().iter().map(|p| p.id).collect();
+    assert_eq!(deleted.len(), 2);
+    assert!(!deleted.contains(&expired));
+    assert!(!original.exists(), "its original is gone");
+    assert!(!f.library.thumb_path(expired).exists());
+
+    // So does the sidebar's count.
+    db.execute("UPDATE photos SET deleted_at = ?1 WHERE id = ?2", [past, deleted[0]]).unwrap();
+    assert_eq!(f.library.overview().unwrap().deleted_count, 1);
 }
 
 #[test]

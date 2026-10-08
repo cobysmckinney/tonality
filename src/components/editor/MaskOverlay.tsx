@@ -1,7 +1,7 @@
-import { useMemo, useRef, useState } from "react";
+import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Adjustments, Mask, MaskPart, Point, Stroke } from "../../adjustments";
 import { Size } from "../../crop";
-import { brushRadius, ScreenMap, screenMap, SHAPE_NAMES, tidy } from "../../masks";
+import { brushRadius, ScreenMap, screenMap, SHAPE_NAMES, stillHeld, tidy } from "../../masks";
 import { useStore } from "../../store";
 
 interface Props {
@@ -35,8 +35,9 @@ export function MaskOverlay({ photo, region, width, height }: Props) {
   const brush = useStore((s) => s.brush);
   const circling = useStore((s) => s.editor.circling);
   const svg = useRef<SVGSVGElement>(null);
-  const drag = useRef<{ index: number; move: Drag; label: string } | null>(null);
-  const painting = useRef<{ index: number; erase: boolean; last: Point } | null>(null);
+  // A drag keeps the mask it started on and its step's name, so it can be ended after that mask is gone from view.
+  const drag = useRef<{ maskId: number; index: number; move: Drag; label: string } | null>(null);
+  const painting = useRef<{ maskId: number; index: number; erase: boolean; last: Point; label: string } | null>(null);
   const [pointer, setPointer] = useState<{ at: Point; alt: boolean } | null>(null);
 
   // Only the framing matters here; a brush stroke shouldn't rebuild the map.
@@ -51,6 +52,21 @@ export function MaskOverlay({ photo, region, width, height }: Props) {
       }),
     [photo, crop, straighten, rotation, flipHorizontal, flipVertical, region, width, height],
   );
+
+  /** Ends a drag or a brush stroke, recording what it changed as one step. */
+  const finish = () => {
+    const held = drag.current ?? painting.current;
+    drag.current = null;
+    painting.current = null;
+    if (held) useStore.getState().commitAdjust(held.label);
+  };
+  // Choosing another mask or part, drawing a loop or closing the tool takes the handles away: the drag ends there,
+  // rather than carrying on into whatever is chosen next. Layout effects, so no pointer event slips in first.
+  useLayoutEffect(() => {
+    const held = drag.current ?? painting.current;
+    if (held && !stillHeld({ maskId: held.maskId, partIndex: held.index }, { maskId, partIndex, circling: circling !== null })) finish();
+  }, [maskId, partIndex, circling]);
+  useLayoutEffect(() => () => finish(), []);
 
   if (circling) return <CircleDrawing map={map} width={width} height={height} finished={circling.points} />;
   const mask = adjustments.masks.find((m) => m.id === maskId);
@@ -67,7 +83,7 @@ export function MaskOverlay({ photo, region, width, height }: Props) {
     if (event.button !== 0) return;
     event.stopPropagation();
     const part = mask.parts[index];
-    drag.current = { index, move, label: `${mask.name}: ${SHAPE_NAMES[part.shape.kind].toLowerCase()}` };
+    drag.current = { maskId: mask.id, index, move, label: `${mask.name}: ${SHAPE_NAMES[part.shape.kind].toLowerCase()}` };
     if (index !== partIndex) useStore.getState().selectMask(mask.id, index);
     event.currentTarget.setPointerCapture(event.pointerId);
   };
@@ -78,7 +94,7 @@ export function MaskOverlay({ photo, region, width, height }: Props) {
     event.stopPropagation();
     const at = local(event);
     const erase = brush.erase !== event.altKey;
-    painting.current = { index: partIndex, erase, last: at };
+    painting.current = { maskId: mask.id, index: partIndex, erase, last: at, label: `${mask.name}: ${erase ? "erase" : "brush"}` };
     event.currentTarget.setPointerCapture(event.pointerId);
     const stroke = {
       points: [map.toPhoto(at).map(tidy) as Point],
@@ -93,6 +109,8 @@ export function MaskOverlay({ photo, region, width, height }: Props) {
   const onMove = (event: React.PointerEvent) => {
     const at = local(event);
     if (brushing) setPointer({ at, alt: event.altKey });
+    // The button let go somewhere the overlay never heard it: hovering alone never changes anything.
+    if ((event.buttons & 1) === 0) finish();
     const held = drag.current;
     if (held) {
       const part = held.move(map.toPhoto(at), at);
@@ -111,18 +129,6 @@ export function MaskOverlay({ photo, region, width, height }: Props) {
     }
   };
 
-  const onEnd = () => {
-    const state = useStore.getState();
-    if (drag.current) {
-      state.commitAdjust(drag.current.label);
-      drag.current = null;
-    }
-    if (painting.current) {
-      state.commitAdjust(`${mask.name}: ${painting.current.erase ? "erase" : "brush"}`);
-      painting.current = null;
-    }
-  };
-
   return (
     <svg
       ref={svg}
@@ -130,8 +136,8 @@ export function MaskOverlay({ photo, region, width, height }: Props) {
       width={width}
       height={height}
       onPointerMove={onMove}
-      onPointerUp={onEnd}
-      onPointerCancel={onEnd}
+      onPointerUp={finish}
+      onPointerCancel={finish}
       onPointerLeave={() => setPointer(null)}
     >
       {brushing && <rect className="mask-paint" width={width} height={height} onPointerDown={paintStart} />}

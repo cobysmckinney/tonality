@@ -1154,6 +1154,26 @@ button {
   white-space: nowrap;
   pointer-events: none;
 }
+/* In place of a photo that can't be opened: what went wrong, in a few words. */
+.stage-failed {
+  display: grid;
+  justify-items: center;
+  gap: 8px;
+  max-width: 420px;
+  color: var(--faint);
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+.stage-failed p {
+  margin: 0;
+  color: var(--text);
+  font-size: 14px;
+}
+.stage-failed .stage-failed-reason {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
 
 .filmstrip {
   grid-column: 1;
@@ -1239,6 +1259,10 @@ button {
 .rail button.active {
   background: var(--raised);
   color: var(--text);
+}
+.rail button:disabled {
+  opacity: 0.4;
+  pointer-events: none;
 }
 
 .histogram {
@@ -1445,6 +1469,11 @@ button {
   display: flex;
   gap: 8px;
   padding: 0 1px 4px;
+}
+.band-sliders {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 .channel,
 .band {
@@ -1787,6 +1816,8 @@ button {
 }
 .preset-tile:hover .preset-star,
 .preset-tile:hover .preset-more,
+.preset-tile:has(:focus-visible) .preset-star,
+.preset-tile:has(:focus-visible) .preset-more,
 .preset-star.on {
   opacity: 1;
 }

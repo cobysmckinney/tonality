@@ -1,6 +1,7 @@
-import { useMemo, useRef, useState } from "react";
+import { useId, useMemo, useRef, useState } from "react";
 import { CurveChannel, CurvePoints, curveSampler, isStraight, POINT_GAP } from "../../adjustments";
 import { useStore } from "../../store";
+import { onTabKey } from "../../tabs";
 
 const CHANNELS: { key: CurveChannel; label: string }[] = [
   { key: "master", label: "All channels" },
@@ -20,6 +21,7 @@ export function CurveEditor() {
   const curves = useStore((s) => s.editor.adjustments.curves);
   const histogram = useStore((s) => s.editor.histogram);
   const [channel, setChannel] = useState<CurveChannel>("master");
+  const id = useId();
   const svg = useRef<SVGSVGElement>(null);
   const dragging = useRef<number | null>(null);
   const points = curves[channel];
@@ -102,12 +104,20 @@ export function CurveEditor() {
 
   return (
     <div className="curve-editor">
-      <div className="channel-picker" role="tablist" aria-label="Curve channel">
+      <div
+        className="channel-picker"
+        role="tablist"
+        aria-label="Curve channel"
+        onKeyDown={(event) => onTabKey(event, (index) => setChannel(CHANNELS[index].key))}
+      >
         {CHANNELS.map((c) => (
           <button
             key={c.key}
+            id={`${id}-${c.key}`}
             role="tab"
             aria-selected={channel === c.key}
+            aria-controls={`${id}-curve`}
+            tabIndex={channel === c.key ? 0 : -1}
             aria-label={c.label}
             title={c.label}
             className={`channel ${c.key} ${channel === c.key ? "active" : ""} ${isStraight(curves[c.key]) ? "" : "bent"}`}
@@ -117,6 +127,9 @@ export function CurveEditor() {
       </div>
       <svg
         ref={svg}
+        id={`${id}-curve`}
+        role="tabpanel"
+        aria-labelledby={`${id}-${channel}`}
         className={`curve ${channel}`}
         viewBox={`0 0 ${SIZE} ${SIZE}`}
         preserveAspectRatio="none"
