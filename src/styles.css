@@ -1811,6 +1811,8 @@ button {
 }
 .preset-tile:hover .preset-star,
 .preset-tile:hover .preset-more,
+.preset-tile:has(:focus-visible) .preset-star,
+.preset-tile:has(:focus-visible) .preset-more,
 .preset-star.on {
   opacity: 1;
 }
