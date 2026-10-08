@@ -79,6 +79,34 @@ impl EditedImages {
     }
 }
 
+/// The setting that records which look (`gpu::LOOK_VERSION`) the library's
+/// thumbnails and previews of edited photos were drawn with.
+pub const LOOK_SETTING: &str = "lookVersion";
+
+/// Forgets the thumbnails and previews of edited photos if they were drawn
+/// with an older look than this build's, so they are drawn again on next use
+/// and the grid matches the editor. Unedited photos show the camera's own
+/// picture, which no update changes, so theirs are kept. Run when the
+/// library opens; a library from before looks were tracked counts as old.
+pub(crate) fn forget_old_looks(library: &Library) -> Result<()> {
+    let current = gpu::LOOK_VERSION.to_string();
+    if library.setting(LOOK_SETTING)?.as_deref() == Some(current.as_str()) {
+        return Ok(());
+    }
+    // A new version also changes the images' addresses, so the window
+    // doesn't show copies it kept from before.
+    let edited: Vec<i64> = {
+        let db = library.db();
+        let mut bump = db.prepare("UPDATE photos SET version = version + 1 WHERE edits IS NOT NULL RETURNING id")?;
+        let ids = bump.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
+        ids
+    };
+    for id in edited {
+        clear_rendered(library, id);
+    }
+    library.set_setting(LOOK_SETTING, &current)
+}
+
 /// Forgets a photo's generated images, so they are made afresh on next use.
 pub fn clear_rendered(library: &Library, id: i64) {
     let _ = std::fs::remove_file(library.thumb_path(id));

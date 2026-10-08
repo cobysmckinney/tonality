@@ -7,6 +7,9 @@
 //
 // Masks come first: each says how much of its sliders to add to the photo's
 // own at this pixel, so every tool below works locally without knowing it.
+//
+// A change here that alters how an edited photo looks must bump LOOK_VERSION
+// in gpu.rs, or thumbnails drawn before the change keep the old look.
 
 // A local adjustment's sliders, laid out like the photo's own, then
 // invert and how much it applies (0 for a hidden mask).

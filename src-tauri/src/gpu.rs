@@ -17,6 +17,14 @@ use crate::geometry;
 use crate::masks::{self, Coverage, COVERAGE_EDGE, MAX_BRUSHES, MAX_FOUND, MAX_MASKS, MAX_PARTS};
 use crate::segment::{self, Found};
 
+/// Which look the develop pipeline draws. **Bump it whenever a change makes
+/// an edited photo come out differently**: in this file, in
+/// `shaders/develop.wgsl`, in `develop.rs`, or in how a recipe becomes the
+/// shader's input (`edit.rs`, `masks.rs`, `segment.rs`). On its next start a
+/// library then redraws the thumbnails and previews of its edited photos, so
+/// the grid keeps matching the editor (`thumbs::forget_old_looks`).
+pub const LOOK_VERSION: u32 = 1;
+
 const WORKING_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 const OUTPUT_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 /// What 16-bit exports are drawn into: the same picture before it is rounded

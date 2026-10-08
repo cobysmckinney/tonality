@@ -32,7 +32,7 @@ Tonality keeps one managed library, like Apple Photos. Importing copies photos i
 
 ## The editor
 
-Opening a photo (double-click or Enter) loads it at full resolution onto the graphics card, and every slider change redraws it straight away. A photo larger than the graphics card can hold (16,384 pixels a side on most, 8,192 on some) is scaled down just enough to fit, and that is the largest it can be exported at. Editing never touches the original: your edits are stored in the library, and the photo's thumbnail is redrawn with them so the grid matches.
+Opening a photo (double-click or Enter) loads it at full resolution onto the graphics card, and every slider change redraws it straight away. A photo larger than the graphics card can hold (16,384 pixels a side on most, 8,192 on some) is scaled down just enough to fit, and that is the largest it can be exported at. Editing never touches the original: your edits are stored in the library, and the photo's thumbnail is redrawn with them so the grid matches. When an update changes how edits look, the thumbnails of edited photos are redrawn the first time the new version opens the library.
 
 - **Adjust**: light (exposure, contrast, highlights, shadows, whites, blacks), color (temperature, tint, vibrance, saturation), tone curve with per-channel curves, an eight-band color mixer, detail (sharpening, noise reduction, clarity, dehaze), effects (vignette, grain).
 - **Crop** (`C`): the photo is shown whole with an upright crop frame over it. Shapes (free, original, 1:1, 5:4, 4:3, 3:2, 16:9), a straighten slider that turns the photo under the frame and keeps the frame on the photo, quarter-turns and flips. Pasting edits onto another photo leaves that photo's own crop alone.

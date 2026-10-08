@@ -58,6 +58,7 @@ Interface changes are checked in the real app, not only by tests:
 
 - Every edit is a history step. A new kind of change has to undo, redo, branch and paste like the others, and have a readable step name.
 - Thumbnails are drawn by the same shader as the editor, so the grid matches. Anything that changes the look has to change both.
+- Thumbnails and previews of edited photos are kept on disk. A change that makes an edited photo come out differently (the shader, the pipeline in `gpu.rs`, `develop.rs`, how a recipe or mask reaches the shader, a model) must bump `LOOK_VERSION` in `gpu.rs`, so libraries redraw them on their next start.
 - Changing a model, or how its answer is refined, means changing its tag in `segment.rs` so cached mattes are found again.
 - Mask parts are stored relative to the original file, so they follow crops, turns and flips. Keep it that way.
 - Keep `docs/guide.md` (the user guide) in step with behaviour: a change users would notice updates it in the same PR. The README is the pitch; only change it for things worth advertising.

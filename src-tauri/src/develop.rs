@@ -1,5 +1,8 @@
 //! Turning a photo file into the editor's working image: linear-light RGB
 //! at full resolution, the right way up.
+//!
+//! A change here that alters how an edited photo looks must bump
+//! `gpu::LOOK_VERSION`, or thumbnails drawn before the change keep the old look.
 
 use std::path::Path;
 
