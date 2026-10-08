@@ -1,5 +1,4 @@
 import { create } from "zustand";
-import { listen } from "@tauri-apps/api/event";
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import {
@@ -34,6 +33,7 @@ import {
   View,
   Volume,
 } from "./api";
+import { listenAll, settleEach } from "./events";
 import { plural } from "./format";
 import { canAdd, circleShape, foundShapes, isFound, MaskStart, MAX_MASKS, newMask, newShape, SHAPE_NAMES, startKind } from "./masks";
 import { blend, holds, Preset, settingsFrom } from "./presets";
@@ -240,7 +240,10 @@ interface State {
   renamingAlbum: number | null;
   menu: { x: number; y: number; entries: MenuEntry[] } | null;
 
+  /** Loads what the app starts with; anything that fails to load is reported, and the rest still loads. */
   init: () => Promise<void>;
+  /** Starts listening for camera cards and progress from the backend; the returned function stops. */
+  subscribe: () => () => void;
   retryLibrary: () => Promise<void>;
   reload: () => Promise<void>;
   setView: (view: View) => Promise<void>;
@@ -625,38 +628,42 @@ export const useStore = create<State>((set, get) => {
       const libraryProblem = await api.libraryProblem();
       set({ libraryProblem });
       if (libraryProblem) return;
-      await get().reload();
-      const [volumes, presets, favoritePresets] = await Promise.all([
-        api.listVolumes(),
-        api.listPresets(),
-        api.favoritePresets(),
+      const failures = await settleEach([
+        () => get().reload(),
+        async () => set({ volumes: await api.listVolumes() }),
+        async () => set({ presets: await api.listPresets() }),
+        async () => set({ favoritePresets: await api.favoritePresets() }),
       ]);
-      set({ volumes, presets, favoritePresets });
-
-      void listen<Volume[]>("volumes-changed", ({ payload }) => {
-        const known = new Set(get().volumes.map((v) => v.path));
-        set({ volumes: payload });
-        for (const card of payload.filter((v) => !known.has(v.path))) {
-          get().toast({
-            text: `Camera card “${card.name}” connected`,
-            action: { label: "Review photos", run: () => void get().startImport([card.path], card.name) },
-          });
-        }
-      });
-      void listen<Progress>("scan-progress", ({ payload }) => {
-        if (get().importState?.phase === "scanning") set({ importState: { phase: "scanning", progress: payload } });
-      });
-      void listen<Progress>("import-progress", ({ payload }) => {
-        const current = get().importState;
-        if (current?.phase === "importing") set({ importState: { ...current, progress: payload } });
-      });
-      void listen<Progress>("edits-progress", ({ payload }) => {
-        if (editsActivity !== null) advanceActivity(editsActivity, payload.done);
-      });
-      void listen<Progress>("export-progress", ({ payload }) => {
-        if (get().exportState?.phase === "exporting") set({ exportState: { phase: "exporting", progress: payload } });
-      });
+      for (const error of failures) get().toast({ text: String(error), tone: "error" });
     },
+
+    subscribe: () =>
+      listenAll({
+        "volumes-changed": (payload: Volume[]) => {
+          const known = new Set(get().volumes.map((v) => v.path));
+          set({ volumes: payload });
+          if (get().libraryProblem) return;
+          for (const card of payload.filter((v) => !known.has(v.path))) {
+            get().toast({
+              text: `Camera card “${card.name}” connected`,
+              action: { label: "Review photos", run: () => void get().startImport([card.path], card.name) },
+            });
+          }
+        },
+        "scan-progress": (payload: Progress) => {
+          if (get().importState?.phase === "scanning") set({ importState: { phase: "scanning", progress: payload } });
+        },
+        "import-progress": (payload: Progress) => {
+          const current = get().importState;
+          if (current?.phase === "importing") set({ importState: { ...current, progress: payload } });
+        },
+        "edits-progress": (payload: Progress) => {
+          if (editsActivity !== null) advanceActivity(editsActivity, payload.done);
+        },
+        "export-progress": (payload: Progress) => {
+          if (get().exportState?.phase === "exporting") set({ exportState: { phase: "exporting", progress: payload } });
+        },
+      }),
 
     async retryLibrary() {
       try {
