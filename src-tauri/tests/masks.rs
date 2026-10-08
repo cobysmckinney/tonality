@@ -316,3 +316,31 @@ fn a_part_that_cant_be_found_doesnt_show_another_parts_matte() {
     assert_eq!(object(0.2, 0.5), plain);
     assert_eq!(object(0.8, 0.5), plain);
 }
+
+/// A mask over the whole photo, with these sliders.
+fn everywhere(adjustments: LocalAdjustments) -> Mask {
+    let all = Shape::Luminance { low: 0.0, high: 1.0, smoothness: 0.0 };
+    Mask { adjustments, ..brighter(vec![add(all)]) }
+}
+
+#[test]
+fn exposure_stops_at_its_limit_however_many_masks_add_up() {
+    let Some(gpu) = gpu() else { return };
+    // Dim enough that five and six stops up still come out different.
+    let (width, height) = (32u32, 24u32);
+    let pixels = (0..width * height).map(|i| [0.0015 + 0.0015 * (i % width) as f32 / width as f32; 3]).collect();
+    let session = gpu.open(LinearImage { width, height, pixels, scene_referred: false }).unwrap();
+    let render = |recipe: &Adjustments| gpu.render_image(&session, recipe, u32::MAX).unwrap().into_raw();
+    let up = |exposure| everywhere(LocalAdjustments { exposure, ..Default::default() });
+
+    let top = Adjustments { exposure: 5.0, ..Default::default() };
+    let full = render(&top);
+    assert_ne!(full, render(&Adjustments { exposure: 4.0, ..Default::default() }), "the photo is dim enough to tell");
+    assert!(full.chunks(4).all(|pixel| pixel[1] < 250), "and doesn't clip at the limit");
+
+    assert!(full == render(&Adjustments { masks: vec![up(5.0)], ..top.clone() }), "a mask can't go past the limit");
+    assert!(full == render(&with(vec![up(3.0), Mask { id: 2, ..up(3.0) }])), "nor can two added together");
+    // Darkening from the top still works.
+    let lower = Adjustments { exposure: 3.0, ..Default::default() };
+    assert!(render(&lower) == render(&Adjustments { masks: vec![up(-2.0)], ..top }), "a mask still darkens");
+}

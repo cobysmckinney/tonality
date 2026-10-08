@@ -12,7 +12,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use crate::develop::LinearImage;
-use crate::edit::{curve_table, Adjustments, Stroke};
+use crate::edit::{curve_table, Adjustments, Stroke, MAX_EXPOSURE};
 use crate::geometry;
 use crate::masks::{self, Coverage, COVERAGE_EDGE, MAX_BRUSHES, MAX_FOUND, MAX_MASKS, MAX_PARTS};
 use crate::segment::{self, Found};
@@ -651,7 +651,7 @@ impl Gpu {
                 source_pixels_per_output_pixel,
                 session.scene_referred as u8 as f32,
             ],
-            light: [a.exposure.clamp(-5.0, 5.0), unit(a.contrast), unit(a.highlights), unit(a.shadows)],
+            light: [a.exposure.clamp(-MAX_EXPOSURE, MAX_EXPOSURE), unit(a.contrast), unit(a.highlights), unit(a.shadows)],
             tone: [unit(a.whites), unit(a.blacks), unit(a.temperature), unit(a.tint)],
             color: [unit(a.vibrance), unit(a.saturation), unit(a.clarity), unit(a.dehaze)],
             detail: [unit(a.sharpening).max(0.0), unit(a.noise_reduction).max(0.0), unit(a.vignette), unit(a.grain).max(0.0)],
@@ -908,6 +908,12 @@ mod tests {
         }
         let mean = held.pixels.iter().map(|pixel| pixel[2]).sum::<f32>() / held.pixels.len() as f32;
         assert!((mean - 0.5).abs() < 1e-3);
+    }
+
+    #[test]
+    fn the_shader_caps_exposure_where_the_sliders_do() {
+        let shader = include_str!("shaders/develop.wgsl");
+        assert!(shader.contains(&format!("const MAX_EXPOSURE = {MAX_EXPOSURE:.1};")));
     }
 
     #[test]
