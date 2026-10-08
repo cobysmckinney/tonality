@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { dragged, Handle, Rect, Size, toCrop, toFrame, toRect, turnedSize } from "../../crop";
+import { dragged, Handle, heldAspect, Rect, Size, toCrop, toFrame, toRect, turnedSize } from "../../crop";
 import { useStore } from "../../store";
 
 const HANDLES: (Handle & { cursor: string })[] = [
@@ -33,8 +33,8 @@ interface Props {
  */
 export function CropOverlay({ photo, scale, width, height }: Props) {
   const adjustments = useStore((s) => s.editor.adjustments);
-  const aspect = useStore((s) => s.cropAspect);
-  const drag = useRef<{ handle: Handle; start: Rect; x: number; y: number } | null>(null);
+  const chosen = useStore((s) => s.cropAspect);
+  const drag = useRef<{ handle: Handle; start: Rect; aspect: number | null; x: number; y: number } | null>(null);
   // Guides appear only while they help: thirds while the frame moves, a finer grid while straightening.
   const [dragging, setDragging] = useState(false);
   const [straightening, setStraightening] = useState(false);
@@ -49,6 +49,8 @@ export function CropOverlay({ photo, scale, width, height }: Props) {
 
   const turned = turnedSize(photo, adjustments.rotation);
   const rect = toRect(adjustments.crop, turned);
+  // The chosen shape only holds while the crop still has it: undo can put back a crop of another shape.
+  const aspect = heldAspect(rect, chosen);
   // Where the crop sits on screen: its offset from the photo's centre, as seen in the tilted view.
   const [offsetX, offsetY] = toFrame([rect.x - turned.width / 2, rect.y - turned.height / 2], adjustments.straighten);
   const w = rect.width * scale;
@@ -59,7 +61,7 @@ export function CropOverlay({ photo, scale, width, height }: Props) {
   const begin = (handle: Handle) => (event: React.PointerEvent<SVGElement>) => {
     if (event.button !== 0) return;
     event.stopPropagation();
-    drag.current = { handle, start: rect, x: event.clientX, y: event.clientY };
+    drag.current = { handle, start: rect, aspect, x: event.clientX, y: event.clientY };
     setDragging(true);
     event.currentTarget.setPointerCapture(event.pointerId);
   };
@@ -69,17 +71,25 @@ export function CropOverlay({ photo, scale, width, height }: Props) {
     // The button let go somewhere the frame never heard it: hovering alone never moves the crop.
     if ((event.buttons & 1) === 0) return end();
     const delta: [number, number] = [(event.clientX - held.x) / scale, (event.clientY - held.y) / scale];
-    const next = dragged(held.start, held.handle, delta, adjustments.straighten, turned, aspect);
+    const next = dragged(held.start, held.handle, delta, adjustments.straighten, turned, held.aspect);
     useStore.getState().adjust({ crop: toCrop(next, turned) });
   };
   const end = () => {
-    if (!drag.current) return;
+    const held = drag.current;
+    if (!held) return;
     drag.current = null;
     setDragging(false);
-    useStore.getState().commitAdjust();
+    const s = useStore.getState();
+    // A shape that no longer held is let go once the crop is changed freely.
+    const now = toRect(s.editor.adjustments.crop, turned);
+    const moved = (["x", "y", "width", "height"] as const).some((key) => held.start[key] !== now[key]);
+    if (held.aspect === null && chosen !== null && moved) s.setCropShape("Free", null);
+    s.commitAdjust();
   };
   // Leaving the crop tool mid-drag (C, M, Esc, holding \) still records the drag as its own step.
-  useLayoutEffect(() => () => end(), []);
+  const ending = useRef(end);
+  ending.current = end;
+  useLayoutEffect(() => () => ending.current(), []);
 
   const grid = (parts: number) =>
     Array.from({ length: parts - 1 }, (_, i) => {
