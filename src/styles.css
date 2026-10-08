@@ -916,6 +916,19 @@ button {
 .crop-grip {
   fill: transparent;
 }
+.crop-area:focus,
+.crop-grip:focus {
+  outline: none;
+}
+/* Reached with Tab: the frame or corner the arrow keys now move is outlined. */
+.crop-area:focus-visible {
+  stroke: #fff;
+  stroke-width: 3;
+}
+.crop-grip:focus-visible {
+  stroke: #fff;
+  stroke-width: 1.5;
+}
 
 /* Masks drawn over the photo: white lines and knobs, like the crop frame. */
 .mask-overlay {
@@ -1547,6 +1560,13 @@ button {
   stroke-width: 1.6;
   vector-effect: non-scaling-stroke;
   cursor: grab;
+}
+.curve-point:focus {
+  outline: none;
+}
+/* Reached with Tab: the point the arrow keys now move is filled in. */
+.curve-point:focus-visible {
+  fill: currentColor;
 }
 
 /* ---- history ---- */
