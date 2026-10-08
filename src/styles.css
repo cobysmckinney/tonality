@@ -1446,6 +1446,11 @@ button {
   gap: 8px;
   padding: 0 1px 4px;
 }
+.band-sliders {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
 .channel,
 .band {
   width: 16px;

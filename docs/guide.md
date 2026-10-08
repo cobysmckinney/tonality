@@ -105,7 +105,7 @@ Exports are sRGB and carry the capture date, camera, lens and exposure.
 | Grid, editor | `Ctrl+C` / `Ctrl+V` | Copy / paste edits (in the grid, onto every selected photo) |
 | Grid, editor | `Ctrl+E` | Export |
 | Editor | `Esc` | Back to the grid |
-| Editor | Left / Right | Previous / next photo |
+| Editor | Left / Right | Previous / next photo. On a slider they nudge it, and on a row of tabs (the tool rail, the curve's channels, the mixer's colours) they move along it |
 | Editor | `A` / `C` / `M` / `Shift+P` / `H` / `I` | Adjust / crop / masks / presets / history / info |
 | Editor | `Ctrl+Z` / `Ctrl+Shift+Z` or `Ctrl+Y` | Undo / redo |
 | Editor | hold `\` | Show the original |

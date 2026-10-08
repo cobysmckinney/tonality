@@ -25,6 +25,7 @@ import { api, Photo, PhotoInfo, previewUrl, Region, thumbUrl } from "../../api";
 import * as format from "../../format";
 import { albumEntries } from "../../menus";
 import { MenuEntry, neighbours, SidePanel as SidePanelName, useStore, visiblePhotos } from "../../store";
+import { onTabKey } from "../../tabs";
 import { menuBelow, useTitle } from "../Toolbar";
 import { frameSize } from "../../crop";
 import { AdjustPanel } from "./AdjustPanel";
@@ -467,12 +468,21 @@ function Rail() {
   const panel = useStore((s) => s.sidePanel);
   const setPanel = useStore((s) => s.setSidePanel);
   return (
-    <nav className="panel rail" role="tablist" aria-orientation="vertical" aria-label="Tools">
+    <nav
+      className="panel rail"
+      role="tablist"
+      aria-orientation="vertical"
+      aria-label="Tools"
+      onKeyDown={(event) => onTabKey(event, (index) => setPanel(TOOLS[index].panel))}
+    >
       {TOOLS.map(({ panel: tool, label, key, icon: Icon }) => (
         <button
           key={tool}
+          id={`tool-${tool}`}
           role="tab"
           aria-selected={panel === tool}
+          aria-controls="tool-panel"
+          tabIndex={panel === tool ? 0 : -1}
           aria-label={label}
           title={`${label} (${key})`}
           className={panel === tool ? "active" : ""}
@@ -489,7 +499,7 @@ function SidePanel({ photo }: { photo: Photo }) {
   const panel = useStore((s) => s.sidePanel);
   const title = TOOLS.find((tool) => tool.panel === panel)?.label;
   return (
-    <aside className="side" aria-label={title}>
+    <aside className="side" id="tool-panel" role="tabpanel" aria-label={title}>
       <h2 className="side-title">{title}</h2>
       {panel === "adjust" && <AdjustPanel />}
       {panel === "crop" && <CropPanel />}
