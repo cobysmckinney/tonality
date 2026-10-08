@@ -26,6 +26,7 @@ import { api, Photo, PhotoInfo, previewUrl, Region, thumbUrl } from "../../api";
 import * as format from "../../format";
 import { albumEntries } from "../../menus";
 import { MenuEntry, neighbours, SidePanel as SidePanelName, useStore, visiblePhotos } from "../../store";
+import { editorKeysBlocked } from "../../shortcuts";
 import { menuBelow, useTitle } from "../Toolbar";
 import { frameSize, Size } from "../../crop";
 import { fromOriginal, onOriginal } from "../../masks";
@@ -395,8 +396,9 @@ function Stage({ photo, onZoomChange }: { photo: Photo; onZoomChange: (label: st
       if (geometry) zoomAt(geometry.zoom * Math.exp(-event.deltaY * 0.0015), event.clientX, event.clientY);
     };
     const onKey = (event: KeyboardEvent) => {
+      if (event.key.toLowerCase() !== "z" || event.ctrlKey || event.metaKey || event.altKey || event.repeat) return;
       const typing = (event.target as HTMLElement).closest("input:not([type=range]), textarea");
-      if (event.key.toLowerCase() !== "z" || event.ctrlKey || event.metaKey || typing) return;
+      if (typing || editorKeysBlocked(useStore.getState())) return;
       const stage = element.getBoundingClientRect();
       toggleZoom(stage.left + stage.width / 2, stage.top + stage.height / 2);
     };
@@ -562,7 +564,7 @@ export function Editor({ photo, inert }: { photo: Photo; inert: boolean }) {
     const onKey = (event: KeyboardEvent) => {
       const state = useStore.getState();
       const target = event.target as HTMLElement;
-      if (state.confirmRequest || state.menu || state.importState || state.exportState || state.openId === null) return;
+      if (editorKeysBlocked(state) || state.openId === null) return;
       if (target.closest("input:not([type=range]), textarea")) return;
       const onSlider = target.matches("input[type=range]");
       const key = event.key.length === 1 ? event.key.toLowerCase() : event.key;
