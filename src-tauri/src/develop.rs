@@ -6,7 +6,7 @@
 
 use std::path::Path;
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{anyhow, Result};
 use image::metadata::Orientation;
 use rawler::decoders::RawDecodeParams;
 use rawler::imgop::develop::{Intermediate, ProcessingStep, RawDevelop};
@@ -24,10 +24,47 @@ pub struct LinearImage {
     pub scene_referred: bool,
 }
 
+/// Opens a photo's file for editing. When it can't be read, the error says
+/// so in plain words and the decoder's own reason goes to the log.
 pub fn load(path: &Path, is_raw: bool) -> Result<LinearImage> {
     let image = if is_raw { media::decoder_guard(|| load_raw(path)) } else { load_rendered(path) };
-    image.with_context(|| format!("opening {} for editing", path.display()))
+    image.map_err(|error| {
+        eprintln!("couldn't open {} for editing: {error:#}", path.display());
+        unreadable(path, &error)
+    })
 }
+
+/// What to tell someone whose original couldn't be opened, from what went wrong.
+fn unreadable(path: &Path, error: &anyhow::Error) -> anyhow::Error {
+    let name = path.file_name().unwrap_or(path.as_os_str()).to_string_lossy();
+    if let Some(Unsupported(reason)) = error.downcast_ref() {
+        return anyhow!("The original file ({name}) {reason}.");
+    }
+    // The file is there (that is checked first), but the system wouldn't hand it over.
+    let refused = error.chain().filter_map(|cause| cause.downcast_ref::<std::io::Error>()).find(|io| {
+        !matches!(io.kind(), std::io::ErrorKind::UnexpectedEof | std::io::ErrorKind::InvalidData)
+    });
+    if let Some(io) = refused {
+        return anyhow!("The original file ({name}) couldn't be read: {io}.");
+    }
+    anyhow!(
+        "The original file ({name}) is damaged, or isn't a photo Tonality can read. \
+         If it's still on the camera card, deleting this photo permanently and importing it again may help."
+    )
+}
+
+/// A file Tonality can't read yet, though nothing is wrong with it: the end
+/// of a sentence that starts with the file.
+#[derive(Debug)]
+struct Unsupported(&'static str);
+
+impl std::fmt::Display for Unsupported {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.write_str(self.0)
+    }
+}
+
+impl std::error::Error for Unsupported {}
 
 fn load_raw(path: &Path) -> Result<LinearImage> {
     let source = media::open_raw(path)?;
@@ -56,7 +93,9 @@ fn load_raw(path: &Path) -> Result<LinearImage> {
         Intermediate::Monochrome(gray) => {
             (gray.width, gray.height, gray.data.iter().map(|&v| [v, v, v]).collect())
         }
-        Intermediate::FourColor(_) => bail!("four-colour sensors are not supported yet"),
+        Intermediate::FourColor(_) => {
+            return Err(Unsupported("comes from a camera with a four-colour sensor, which Tonality can't read yet").into())
+        }
     };
     let (width, height, pixels) = orient(width, height, pixels, orientation);
     Ok(LinearImage { width: width as u32, height: height as u32, pixels, scene_referred: true })
@@ -123,6 +162,45 @@ mod tests {
         let result: Result<()> = media::decoder_guard(|| panic!("index out of bounds"));
         assert_eq!(format!("{:#}", result.unwrap_err()), "the decoder crashed");
         assert_eq!(media::decoder_guard(|| Ok(7)).unwrap(), 7);
+    }
+
+    #[test]
+    fn a_file_that_cant_be_read_says_so_plainly() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("Originals/IMG_0595.CR2");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, b"the first few bytes of a raw file").unwrap();
+        for is_raw in [true, false] {
+            let error = format!("{:#}", load(&path, is_raw).err().unwrap());
+            assert_eq!(
+                error,
+                "The original file (IMG_0595.CR2) is damaged, or isn't a photo Tonality can read. \
+                 If it's still on the camera card, deleting this photo permanently and importing it again may help."
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_file_the_system_wont_hand_over_isnt_called_damaged() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("IMG_0001.CR2");
+        std::fs::write(&path, b"whatever is in it").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000)).unwrap();
+        if std::fs::read(&path).is_ok() {
+            return eprintln!("skipping: running as a user who can read anything");
+        }
+        let error = format!("{:#}", load(&path, true).err().unwrap());
+        assert!(error.starts_with("The original file (IMG_0001.CR2) couldn't be read: "), "{error}");
+        assert!(!error.contains("damaged"), "{error}");
+    }
+
+    #[test]
+    fn a_camera_tonality_cant_read_yet_is_not_called_damaged() {
+        let error = anyhow::Error::from(Unsupported("comes from a camera with a four-colour sensor, which Tonality can't read yet"));
+        let error = format!("{:#}", unreadable(Path::new("/photos/IMG_1.CRW"), &error.context("decoding")));
+        assert_eq!(error, "The original file (IMG_1.CRW) comes from a camera with a four-colour sensor, which Tonality can't read yet.");
     }
 
     #[test]

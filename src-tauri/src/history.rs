@@ -225,6 +225,25 @@ fn tidy_name(name: &str) -> String {
     name.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+/// The name for a new unnamed branch: one past the highest "Branch N" the
+/// photo has, starting at "Branch 2" (the first branch is "Main"). Counting
+/// on from the highest, rather than filling a gap left by a deleted branch,
+/// keeps the numbers in the order the branches were made, which is the order
+/// the picker lists them in.
+fn next_branch_name(db: &Connection, photo_id: i64) -> Result<String> {
+    let names = db
+        .prepare("SELECT name FROM edit_branches WHERE photo_id = ?1")?
+        .query_map([photo_id], |r| r.get::<_, String>(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let highest = names
+        .iter()
+        .filter_map(|name| name.strip_prefix("Branch ")?.parse::<u32>().ok())
+        .max()
+        .unwrap_or(1)
+        .max(1);
+    Ok(format!("Branch {}", u64::from(highest) + 1))
+}
+
 impl Library {
     /// Runs one history change as a single transaction and returns the result.
     fn change_history(&self, photo_id: i64, change: impl FnOnce(&Connection, &Current) -> Result<()>) -> Result<History> {
@@ -273,9 +292,7 @@ impl Library {
             ensure!(owner == Some(photo_id), "that step belongs to another photo");
             let mut name = tidy_name(name);
             if name.is_empty() {
-                let count: i64 =
-                    db.query_row("SELECT COUNT(*) FROM edit_branches WHERE photo_id = ?1", [photo_id], |r| r.get(0))?;
-                name = format!("Branch {}", count + 1);
+                name = next_branch_name(db, photo_id)?;
             }
             let branch = insert_branch(db, photo_id, &name, step_id)?;
             db.execute("UPDATE photos SET branch_id = ?2 WHERE id = ?1", params![photo_id, branch])?;

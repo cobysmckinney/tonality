@@ -1,5 +1,4 @@
 import { create } from "zustand";
-import { listen } from "@tauri-apps/api/event";
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import {
@@ -34,9 +33,12 @@ import {
   View,
   Volume,
 } from "./api";
+import { listenAll, settleEach } from "./events";
 import { plural } from "./format";
 import { canAdd, circleShape, foundShapes, isFound, MaskStart, MAX_MASKS, newMask, newShape, SHAPE_NAMES, startKind } from "./masks";
 import { blend, holds, Preset, settingsFrom } from "./presets";
+import { forget } from "./selection";
+import { canStartExport, canStartImport } from "./sheets";
 
 export type Filter = "all" | "picks" | "unrejected" | "rejects";
 
@@ -126,6 +128,8 @@ export interface EditorState {
   photoId: number | null;
   /** True once the photo is on the GPU and frames can be drawn. */
   ready: boolean;
+  /** Why the photo couldn't be opened for editing (a missing or damaged original), if it couldn't. */
+  failed: string | null;
   size: { width: number; height: number } | null;
   /** What the sliders show right now, including a drag still in progress. */
   adjustments: Adjustments;
@@ -161,6 +165,7 @@ export interface EditorState {
 const idleEditor: EditorState = {
   photoId: null,
   ready: false,
+  failed: null,
   size: null,
   adjustments: DEFAULTS,
   committed: DEFAULTS,
@@ -239,7 +244,10 @@ interface State {
   renamingAlbum: number | null;
   menu: { x: number; y: number; entries: MenuEntry[] } | null;
 
+  /** Loads what the app starts with; anything that fails to load is reported, and the rest still loads. */
   init: () => Promise<void>;
+  /** Starts listening for camera cards and progress from the backend; the returned function stops. */
+  subscribe: () => () => void;
   retryLibrary: () => Promise<void>;
   reload: () => Promise<void>;
   setView: (view: View) => Promise<void>;
@@ -255,11 +263,12 @@ interface State {
   /**
    * Starts a mask holding one part of this kind (or the background), and
    * works on it. An object needs a circle drawn first: without one
-   * (`drawn`), drawing it begins.
+   * (`drawn`), drawing it begins. When the part has to be found first,
+   * returns once that's done.
    */
-  addMask: (start: MaskStart, drawn?: Shape) => void;
+  addMask: (start: MaskStart, drawn?: Shape) => Promise<void> | void;
   /** Adds a part to the mask being worked on; an object, as `addMask`. */
-  addMaskPart: (kind: Shape["kind"], mode: MaskMode, drawn?: Shape) => void;
+  addMaskPart: (kind: Shape["kind"], mode: MaskMode, drawn?: Shape) => Promise<void> | void;
   /** Begins drawing a circle on the photo, for its object to be found. */
   startCircle: (circling: NonNullable<EditorState["circling"]>) => void;
   cancelCircle: () => void;
@@ -495,24 +504,38 @@ export const useStore = create<State>((set, get) => {
   /**
    * Runs `then` straight away, or when it needs found parts (the subject,
    * the sky, a circled object), once the backend has found them in the open
-   * photo: a second or two each the first time.
+   * photo: a second or two each the first time. Asked while something else
+   * is being found, it waits its turn.
    */
-  const foundFirst = async (shapes: Shape[], then: () => void) => {
+  let findQueue: Promise<unknown> = Promise.resolve();
+  let findsWaiting = 0;
+  const foundFirst = (shapes: Shape[], then: () => void): Promise<void> | void => {
     if (shapes.length === 0) return then();
     const { photoId, ready, finding } = get().editor;
-    if (!ready || photoId === null || finding) return;
+    if (!ready || photoId === null) return;
     const kinds = new Set(shapes.map((shape) => shape.kind));
     const what = kinds.size > 1 ? "the masks’ parts" : kinds.has("sky") ? "the sky" : kinds.has("object") ? "the object" : "the subject";
-    setEditor({ finding: what });
-    try {
-      await during(`Finding ${what}`, () => api.findParts(photoId, shapes));
-      if (get().editor.photoId === photoId) then();
-    } catch (error) {
-      get().toast({ text: `Couldn’t find ${what}: ${error}`, tone: "error" });
-    } finally {
-      // Opening another photo meanwhile has already reset the editor.
-      if (get().editor.photoId === photoId) setEditor({ finding: null, circling: null });
-    }
+    const here = () => get().editor.photoId === photoId;
+    findsWaiting++;
+    if (finding === null) setEditor({ finding: what });
+    const run = async () => {
+      try {
+        // Opening another photo meanwhile drops what was asked of this one.
+        if (!here()) return;
+        setEditor({ finding: what });
+        await during(`Finding ${what}`, () => api.findParts(photoId, shapes));
+        if (here()) then();
+      } catch (error) {
+        get().toast({ text: `Couldn’t find ${what}: ${error}`, tone: "error" });
+      } finally {
+        findsWaiting--;
+        // Opening another photo meanwhile has already reset the editor.
+        if (here() && findsWaiting === 0) setEditor({ finding: null });
+      }
+    };
+    const result = findQueue.then(run);
+    findQueue = result;
+    return result;
   };
 
   /** Takes in a history the library just returned for the open photo. */
@@ -571,22 +594,8 @@ export const useStore = create<State>((set, get) => {
   const removeFromView = (ids: number[]) => {
     const gone = new Set(ids);
     const state = get();
-    let openId = state.openId;
-    if (openId !== null && gone.has(openId)) {
-      // Step to the nearest surviving neighbour, preferring the next photo.
-      const visible = visiblePhotos(state);
-      const at = visible.findIndex((p) => p.id === openId);
-      const next = visible.slice(at + 1).find((p) => !gone.has(p.id));
-      const previous = visible.slice(0, at).reverse().find((p) => !gone.has(p.id));
-      openId = (next ?? previous)?.id ?? null;
-    }
-    set({
-      photos: state.photos.filter((p) => !gone.has(p.id)),
-      selection: new Set([...state.selection].filter((id) => !gone.has(id))),
-      cursor: state.cursor !== null && gone.has(state.cursor) ? openId : state.cursor,
-      anchor: state.anchor !== null && gone.has(state.anchor) ? null : state.anchor,
-      openId,
-    });
+    const visible = visiblePhotos(state).map((p) => p.id);
+    set({ photos: state.photos.filter((p) => !gone.has(p.id)), ...forget(visible, gone, state) });
   };
 
   return {
@@ -623,38 +632,42 @@ export const useStore = create<State>((set, get) => {
       const libraryProblem = await api.libraryProblem();
       set({ libraryProblem });
       if (libraryProblem) return;
-      await get().reload();
-      const [volumes, presets, favoritePresets] = await Promise.all([
-        api.listVolumes(),
-        api.listPresets(),
-        api.favoritePresets(),
+      const failures = await settleEach([
+        () => get().reload(),
+        async () => set({ volumes: await api.listVolumes() }),
+        async () => set({ presets: await api.listPresets() }),
+        async () => set({ favoritePresets: await api.favoritePresets() }),
       ]);
-      set({ volumes, presets, favoritePresets });
-
-      void listen<Volume[]>("volumes-changed", ({ payload }) => {
-        const known = new Set(get().volumes.map((v) => v.path));
-        set({ volumes: payload });
-        for (const card of payload.filter((v) => !known.has(v.path))) {
-          get().toast({
-            text: `Camera card “${card.name}” connected`,
-            action: { label: "Review photos", run: () => void get().startImport([card.path], card.name) },
-          });
-        }
-      });
-      void listen<Progress>("scan-progress", ({ payload }) => {
-        if (get().importState?.phase === "scanning") set({ importState: { phase: "scanning", progress: payload } });
-      });
-      void listen<Progress>("import-progress", ({ payload }) => {
-        const current = get().importState;
-        if (current?.phase === "importing") set({ importState: { ...current, progress: payload } });
-      });
-      void listen<Progress>("edits-progress", ({ payload }) => {
-        if (editsActivity !== null) advanceActivity(editsActivity, payload.done);
-      });
-      void listen<Progress>("export-progress", ({ payload }) => {
-        if (get().exportState?.phase === "exporting") set({ exportState: { phase: "exporting", progress: payload } });
-      });
+      for (const error of failures) get().toast({ text: String(error), tone: "error" });
     },
+
+    subscribe: () =>
+      listenAll({
+        "volumes-changed": (payload: Volume[]) => {
+          const known = new Set(get().volumes.map((v) => v.path));
+          set({ volumes: payload });
+          if (get().libraryProblem) return;
+          for (const card of payload.filter((v) => !known.has(v.path))) {
+            get().toast({
+              text: `Camera card “${card.name}” connected`,
+              action: { label: "Review photos", run: () => void get().startImport([card.path], card.name) },
+            });
+          }
+        },
+        "scan-progress": (payload: Progress) => {
+          if (get().importState?.phase === "scanning") set({ importState: { phase: "scanning", progress: payload } });
+        },
+        "import-progress": (payload: Progress) => {
+          const current = get().importState;
+          if (current?.phase === "importing") set({ importState: { ...current, progress: payload } });
+        },
+        "edits-progress": (payload: Progress) => {
+          if (editsActivity !== null) advanceActivity(editsActivity, payload.done);
+        },
+        "export-progress": (payload: Progress) => {
+          if (get().exportState?.phase === "exporting") set({ exportState: { phase: "exporting", progress: payload } });
+        },
+      }),
 
     async retryLibrary() {
       try {
@@ -704,7 +717,7 @@ export const useStore = create<State>((set, get) => {
       const { size, adjustments } = get().editor;
       if (!size) return;
       const shape = drawn ?? newShape(kind, size, adjustments);
-      void foundFirst(isFound(shape) ? [shape] : [], () => {
+      return foundFirst(isFound(shape) ? [shape] : [], () => {
         const { ready, size, adjustments } = get().editor;
         const { masks } = adjustments;
         if (!ready || !size || masks.length >= MAX_MASKS || !canAdd(masks, kind)) return;
@@ -717,16 +730,20 @@ export const useStore = create<State>((set, get) => {
 
     addMaskPart(kind, mode, drawn) {
       if (kind === "object" && !drawn) return get().startCircle({ mode });
-      const { size, adjustments } = get().editor;
-      if (!size) return;
+      const { size, adjustments, maskId: target } = get().editor;
+      if (!size || target === null) return;
       const shape = drawn ?? newShape(kind, size, adjustments);
-      void foundFirst(isFound(shape) ? [shape] : [], () => {
+      const name = SHAPE_NAMES[kind].toLowerCase();
+      // The part goes to the mask it was asked for, whichever is chosen by the time it's found.
+      return foundFirst(isFound(shape) ? [shape] : [], () => {
         const { ready, adjustments, maskId } = get().editor;
-        const mask = adjustments.masks.find((m) => m.id === maskId);
-        if (!ready || !mask || !canAdd(adjustments.masks, kind)) return;
+        if (!ready) return;
+        const mask = adjustments.masks.find((m) => m.id === target);
+        if (!mask) return get().toast({ text: `The mask was deleted before the ${name} was found` });
+        if (!canAdd(adjustments.masks, kind)) return;
         const parts = [...mask.parts, { mode, shape }];
-        setEditor({ partIndex: parts.length - 1 });
-        get().updateMask(mask.id, { parts }, `${mask.name}: ${mode} ${SHAPE_NAMES[kind].toLowerCase()}`);
+        if (maskId === target) setEditor({ partIndex: parts.length - 1 });
+        get().updateMask(mask.id, { parts }, `${mask.name}: ${mode} ${name}`);
       });
     },
 
@@ -744,15 +761,30 @@ export const useStore = create<State>((set, get) => {
       const { circling, adjustments, maskId } = get().editor;
       if (!circling || circling.points) return;
       const shape = circleShape(points);
-      setEditor({ circling: { ...circling, points } });
+      const loop = { ...circling, points };
+      setEditor({ circling: loop });
+      let asked: Promise<void> | void;
       if (circling.replace !== undefined) {
         const mask = adjustments.masks.find((m) => m.id === maskId);
         const part = mask?.parts[circling.replace];
         if (!mask || !part) return setEditor({ circling: null });
         const index = circling.replace;
-        void foundFirst([shape], () => get().updateMaskPart(index, { ...part, shape }, `${mask.name}: circle again`));
-      } else if (circling.mode === null) get().addMask("object", shape);
-      else get().addMaskPart("object", circling.mode, shape);
+        // Only the circle changes, on the mask and part it was drawn for, as they are once it's found.
+        asked = foundFirst([shape], () => {
+          const now = get().editor.adjustments.masks.find((m) => m.id === mask.id);
+          const same = now?.parts[index];
+          if (!now || !same || JSON.stringify(same.shape) !== JSON.stringify(part.shape)) {
+            return get().toast({ text: "The part was removed before the object was found" });
+          }
+          const parts = now.parts.map((p, i) => (i === index ? { ...p, shape } : p));
+          get().updateMask(now.id, { parts }, `${now.name}: circle again`);
+        });
+      } else if (circling.mode === null) asked = get().addMask("object", shape);
+      else asked = get().addMaskPart("object", circling.mode, shape);
+      // The loop stays on the photo until its object is found, even behind another find.
+      void Promise.resolve(asked).finally(() => {
+        if (get().editor.circling === loop) setEditor({ circling: null });
+      });
     },
 
     updateMask(id, change, label) {
@@ -817,7 +849,8 @@ export const useStore = create<State>((set, get) => {
             get().toast({ text: `Couldn’t find ${what} in this photo, so that part of its mask is empty`, tone: "error" });
           }
         } catch (error) {
-          get().toast({ text: String(error), tone: "error" });
+          // Said on the stage, where the photo would be, rather than in a toast.
+          if (get().openId === id) setEditor({ failed: String(error) });
         }
       });
     },
@@ -1133,7 +1166,12 @@ export const useStore = create<State>((set, get) => {
       const chosen = get().photos.filter((p) => ids.includes(p.id));
       if (chosen.length === 0) return;
       const next: Flag = flag !== 0 && chosen.every((p) => p.flag === flag) ? 0 : flag;
+      const before = visiblePhotos(get()).map((p) => p.id);
       patch(ids, (p) => ({ ...p, flag: next }));
+      // Photos the filter now hides leave the selection, as if removed.
+      const shown = new Set(visiblePhotos(get()).map((p) => p.id));
+      const hidden = new Set(before.filter((id) => !shown.has(id)));
+      if (hidden.size > 0) set((s) => forget(before, hidden, s));
       await attempt(() => api.setFlag(ids, next));
     },
 
@@ -1235,8 +1273,12 @@ export const useStore = create<State>((set, get) => {
     },
 
     async startImport(paths, source) {
-      const busy = get().importState?.phase;
-      if (busy === "scanning" || busy === "importing") return;
+      // A drop or a card's "Review photos" while exporting would open a second sheet over the first.
+      if (get().exportState) {
+        get().toast({ text: "Finish exporting before importing" });
+        return;
+      }
+      if (!canStartImport(get())) return;
       set({ importState: { phase: "scanning", progress: null }, menu: null });
       try {
         const scan = await api.scanImport(paths, source);
@@ -1298,7 +1340,7 @@ export const useStore = create<State>((set, get) => {
     },
 
     async startExport(ids) {
-      if (ids.length === 0 || get().exportState || get().importState) return;
+      if (ids.length === 0 || !canStartExport(get())) return;
       // An edit still in hand is recorded first: what is on screen is what gets exported.
       settle();
       set({ menu: null });

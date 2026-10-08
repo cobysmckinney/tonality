@@ -1,7 +1,8 @@
-import { ReactNode, useState } from "react";
+import { ReactNode, useId, useState } from "react";
 import { ChevronDown } from "lucide-react";
 import { Band, DEFAULTS, LABELS, MIXER_BANDS, rangeOf, same, SECTIONS, SliderKey } from "../../adjustments";
 import { useStore } from "../../store";
+import { onTabKey } from "../../tabs";
 import { CurveEditor } from "./CurveEditor";
 import { Slider } from "./Slider";
 
@@ -54,6 +55,7 @@ const HUE_STEPS = [0, 30, 60, 120, 180, 240, 280, 320, 360];
 function Mixer() {
   const mixer = useStore((s) => s.editor.adjustments.mixer);
   const [selected, setSelected] = useState(0);
+  const id = useId();
   const band = mixer[selected];
   const change = (part: Partial<Band>) =>
     useStore.getState().adjust({ mixer: mixer.map((b, i) => (i === selected ? { ...b, ...part } : b)) });
@@ -66,14 +68,17 @@ function Mixer() {
 
   return (
     <>
-      <div className="band-picker" role="tablist" aria-label="Colour range">
+      <div className="band-picker" role="tablist" aria-label="Colour range" onKeyDown={(event) => onTabKey(event, setSelected)}>
         {MIXER_BANDS.map((b, i) => {
           const touched = mixer[i].hue !== 0 || mixer[i].saturation !== 0 || mixer[i].luminance !== 0;
           return (
             <button
               key={b.name}
+              id={`${id}-${i}`}
               role="tab"
               aria-selected={selected === i}
+              aria-controls={`${id}-panel`}
+              tabIndex={selected === i ? 0 : -1}
               aria-label={b.name}
               title={b.name}
               className={`band ${selected === i ? "active" : ""} ${touched ? "bent" : ""}`}
@@ -83,23 +88,25 @@ function Mixer() {
           );
         })}
       </div>
-      <Slider label="Hue" value={band.hue} min={-100} max={100} track={hueTrack} onChange={(v) => change({ hue: v })} />
-      <Slider
-        label="Saturation"
-        value={band.saturation}
-        min={-100}
-        max={100}
-        track={saturationTrack}
-        onChange={(v) => change({ saturation: v })}
-      />
-      <Slider
-        label="Luminance"
-        value={band.luminance}
-        min={-100}
-        max={100}
-        track={luminanceTrack}
-        onChange={(v) => change({ luminance: v })}
-      />
+      <div className="band-sliders" id={`${id}-panel`} role="tabpanel" aria-labelledby={`${id}-${selected}`}>
+        <Slider label="Hue" value={band.hue} min={-100} max={100} track={hueTrack} onChange={(v) => change({ hue: v })} />
+        <Slider
+          label="Saturation"
+          value={band.saturation}
+          min={-100}
+          max={100}
+          track={saturationTrack}
+          onChange={(v) => change({ saturation: v })}
+        />
+        <Slider
+          label="Luminance"
+          value={band.luminance}
+          min={-100}
+          max={100}
+          track={luminanceTrack}
+          onChange={(v) => change({ luminance: v })}
+        />
+      </div>
     </>
   );
 }

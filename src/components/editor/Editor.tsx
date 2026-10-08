@@ -8,6 +8,7 @@ import {
   FolderOpen,
   Heart,
   History as HistoryIcon,
+  ImageOff,
   Info as InfoIcon,
   Layers,
   LucideIcon,
@@ -25,8 +26,11 @@ import { api, Photo, PhotoInfo, previewUrl, Region, thumbUrl } from "../../api";
 import * as format from "../../format";
 import { albumEntries } from "../../menus";
 import { MenuEntry, neighbours, SidePanel as SidePanelName, useStore, visiblePhotos } from "../../store";
+import { editorKeysBlocked } from "../../shortcuts";
+import { onTabKey } from "../../tabs";
 import { menuBelow, useTitle } from "../Toolbar";
-import { frameSize } from "../../crop";
+import { frameSize, Size } from "../../crop";
+import { fromOriginal, onOriginal } from "../../masks";
 import { AdjustPanel } from "./AdjustPanel";
 import { CropOverlay } from "./CropOverlay";
 import { CropPanel } from "./CropPanel";
@@ -211,6 +215,7 @@ interface FrameRequest {
   height: number;
   showClipping: boolean;
   uncropped: boolean;
+  original: boolean;
   maskOverlay: number | null;
 }
 
@@ -225,10 +230,11 @@ function Stage({ photo, onZoomChange }: { photo: Photo; onZoomChange: (label: st
   const canvas = useRef<HTMLCanvasElement>(null);
   const [area, setArea] = useState({ width: 0, height: 0 });
   const [view, setView] = useState<View>(FIT);
-  /** What is on the canvas: which photo, which part of it, and whether it is the crop tool's uncropped view. */
-  const [painted, setPainted] = useState<{ id: number; region: Region; uncropped: boolean } | null>(null);
+  /** What is on the canvas: which photo, which part of it, and whether it is the crop tool's uncropped view or the original. */
+  const [painted, setPainted] = useState<{ id: number; region: Region; uncropped: boolean; original: boolean } | null>(null);
 
   const ready = useStore((s) => s.editor.ready && s.editor.photoId === photo.id);
+  const failed = useStore((s) => (s.editor.photoId === photo.id ? s.editor.failed : null));
   const photoSize = useStore((s) => s.editor.size);
   const own = useStore((s) => s.editor.adjustments);
   const trying = useStore((s) => s.editor.preview);
@@ -238,16 +244,12 @@ function Stage({ photo, onZoomChange }: { photo: Photo; onZoomChange: (label: st
   const showClipping = useStore((s) => s.editor.showClipping && !s.editor.showOriginal);
   const uncropped = useStore((s) => s.sidePanel === "crop" && !s.editor.showOriginal);
   const masking = useStore((s) => s.sidePanel === "masks" && !s.editor.showOriginal);
-  const circling = useStore((s) => s.sidePanel === "masks" && s.editor.circling !== null && s.editor.finding === null);
+  const circling = useStore((s) => s.sidePanel === "masks" && s.editor.circling !== null && !s.editor.circling.points);
   const maskOverlay = useStore((s) =>
     s.sidePanel === "masks" && s.editor.showMask && !s.editor.showOriginal ? s.editor.maskId : null,
   );
 
-  // A vignette follows the crop, so it has no meaning on the uncropped view.
-  const adjustments = useMemo(
-    () => (showOriginal ? DEFAULTS : uncropped ? { ...current, vignette: 0 } : current),
-    [current, showOriginal, uncropped],
-  );
+  const adjustments = useMemo(() => (showOriginal ? DEFAULTS : current), [current, showOriginal]);
   /** The size, in photo pixels, of the picture being shown. */
   const frame = useMemo(
     () => (photoSize ? frameSize(photoSize, adjustments, uncropped) : null),
@@ -270,19 +272,41 @@ function Stage({ photo, onZoomChange }: { photo: Photo; onZoomChange: (label: st
     if (!ready || !frame || area.width === 0 || area.height === 0) return null;
     const ratio = window.devicePixelRatio || 1;
     const available = { width: Math.floor(area.width * ratio), height: Math.floor(area.height * ratio) };
-    const fit = Math.min(available.width / frame.width, available.height / frame.height, 1);
-    // The crop tool always shows everything.
-    const zoom = view.zoom === null || uncropped ? fit : clamp(view.zoom, fit, MAX_ZOOM);
-    const width = Math.max(1, Math.min(available.width, Math.round(frame.width * zoom)));
-    const height = Math.max(1, Math.min(available.height, Math.round(frame.height * zoom)));
-    const span = { width: width / (frame.width * zoom), height: height / (frame.height * zoom) };
-    const region: Region = {
-      x: clamp(view.x - span.width / 2, 0, 1 - span.width),
-      y: clamp(view.y - span.height / 2, 0, 1 - span.height),
-      ...span,
+    const place = (shown: Size, x: number, y: number) => {
+      const fit = Math.min(available.width / shown.width, available.height / shown.height, 1);
+      // The crop tool always shows everything.
+      const zoom = view.zoom === null || uncropped ? fit : clamp(view.zoom, fit, MAX_ZOOM);
+      const width = Math.max(1, Math.min(available.width, Math.round(shown.width * zoom)));
+      const height = Math.max(1, Math.min(available.height, Math.round(shown.height * zoom)));
+      const span = { width: width / (shown.width * zoom), height: height / (shown.height * zoom) };
+      const region: Region = {
+        x: clamp(x - span.width / 2, 0, 1 - span.width),
+        y: clamp(y - span.height / 2, 0, 1 - span.height),
+        ...span,
+      };
+      return { fit, zoom, width, height, region };
     };
-    return { ratio, fit, zoom, width, height, region, fitted: zoom <= fit };
-  }, [ready, frame, area, view, uncropped]);
+    let placed = place(frame, view.x, view.y);
+    // The view is kept on the edited picture. The original is framed
+    // differently (uncropped, unturned), so it is centred on the same spot of
+    // the photo as the edit, wherever that spot is on the original.
+    if (showOriginal && view.zoom !== null && photoSize) {
+      const edit = place(frameSize(photoSize, current, false), view.x, view.y).region;
+      const [x, y] = onOriginal(photoSize, current, [edit.x + edit.width / 2, edit.y + edit.height / 2]);
+      placed = place(frame, x, y);
+    }
+    return { ratio, ...placed, fitted: placed.zoom <= placed.fit };
+  }, [ready, frame, area, view, uncropped, showOriginal, photoSize, current]);
+
+  /** A view of the picture on screen as a view of the edited picture, which is how it is kept. */
+  const kept = useCallback(
+    (shown: View): View => {
+      if (!showOriginal || !photoSize) return shown;
+      const [x, y] = fromOriginal(photoSize, current, [shown.x, shown.y]);
+      return { ...shown, x, y };
+    },
+    [showOriginal, photoSize, current],
+  );
 
   useEffect(() => {
     onZoomChange(!geometry || geometry.fitted ? "Fit" : `${Math.round(geometry.zoom * 100)}%`);
@@ -316,7 +340,7 @@ function Stage({ photo, onZoomChange }: { photo: Photo; onZoomChange: (label: st
           }
           target.getContext("2d")!.putImageData(rendered.pixels, 0, 0);
           useStore.getState().noteFrame(rendered);
-          setPainted({ id: request.id, region: request.region, uncropped: request.uncropped });
+          setPainted({ id: request.id, region: request.region, uncropped: request.uncropped, original: request.original });
         }
       } catch {
         // The photo was closed or swapped while this frame was on its way.
@@ -328,9 +352,10 @@ function Stage({ photo, onZoomChange }: { photo: Photo; onZoomChange: (label: st
   useEffect(() => {
     if (!geometry) return;
     const { region, width, height } = geometry;
-    wanted.current = { id: photo.id, adjustments, region, width, height, showClipping, uncropped, maskOverlay };
+    const original = showOriginal;
+    wanted.current = { id: photo.id, adjustments, region, width, height, showClipping, uncropped, original, maskOverlay };
     void pump();
-  }, [geometry, adjustments, showClipping, uncropped, maskOverlay, photo.id, pump]);
+  }, [geometry, adjustments, showClipping, uncropped, showOriginal, maskOverlay, photo.id, pump]);
 
   /** Zooms to `zoom`, keeping the point under the pointer where it is. */
   const zoomAt = useCallback(
@@ -354,9 +379,9 @@ function Stage({ photo, onZoomChange }: { photo: Photo; onZoomChange: (label: st
       };
       const fx = clamp((clientX - stage.left) / stage.width, 0, 1);
       const fy = clamp((clientY - stage.top) / stage.height, 0, 1);
-      setView({ zoom: next, x: u + (0.5 - fx) * span.width, y: v + (0.5 - fy) * span.height });
+      setView(kept({ zoom: next, x: u + (0.5 - fx) * span.width, y: v + (0.5 - fy) * span.height }));
     },
-    [geometry, frame, uncropped],
+    [geometry, frame, uncropped, kept],
   );
 
   const toggleZoom = useCallback(
@@ -372,8 +397,9 @@ function Stage({ photo, onZoomChange }: { photo: Photo; onZoomChange: (label: st
       if (geometry) zoomAt(geometry.zoom * Math.exp(-event.deltaY * 0.0015), event.clientX, event.clientY);
     };
     const onKey = (event: KeyboardEvent) => {
+      if (event.key.toLowerCase() !== "z" || event.ctrlKey || event.metaKey || event.altKey || event.repeat) return;
       const typing = (event.target as HTMLElement).closest("input:not([type=range]), textarea");
-      if (event.key.toLowerCase() !== "z" || event.ctrlKey || event.metaKey || typing) return;
+      if (typing || editorKeysBlocked(useStore.getState())) return;
       const stage = element.getBoundingClientRect();
       toggleZoom(stage.left + stage.width / 2, stage.top + stage.height / 2);
     };
@@ -393,11 +419,13 @@ function Stage({ photo, onZoomChange }: { photo: Photo; onZoomChange: (label: st
     const dy = ((event.clientY - drag.current.y) * geometry.ratio) / (frame.height * geometry.zoom);
     drag.current = { x: event.clientX, y: event.clientY };
     const { region } = geometry;
-    setView({
-      zoom: geometry.zoom,
-      x: clamp(region.x + region.width / 2 - dx, region.width / 2, 1 - region.width / 2),
-      y: clamp(region.y + region.height / 2 - dy, region.height / 2, 1 - region.height / 2),
-    });
+    setView(
+      kept({
+        zoom: geometry.zoom,
+        x: clamp(region.x + region.width / 2 - dx, region.width / 2, 1 - region.width / 2),
+        y: clamp(region.y + region.height / 2 - dy, region.height / 2, 1 - region.height / 2),
+      }),
+    );
   };
 
   const live = painted?.id === photo.id && geometry !== null;
@@ -405,7 +433,7 @@ function Stage({ photo, onZoomChange }: { photo: Photo; onZoomChange: (label: st
   // While a zoom or pan waits for its frame, the last one is scaled and moved
   // to where its part of the picture now sits, rather than stretched to fit.
   const placed =
-    live && shown && painted.uncropped === uncropped
+    live && shown && painted.uncropped === uncropped && painted.original === showOriginal
       ? {
           left: ((painted.region.x - geometry.region.x) / geometry.region.width) * shown.width,
           top: ((painted.region.y - geometry.region.y) / geometry.region.height) * shown.height,
@@ -428,7 +456,7 @@ function Stage({ photo, onZoomChange }: { photo: Photo; onZoomChange: (label: st
       onPointerCancel={() => (drag.current = null)}
     >
       {/* Until the editor has drawn its first frame, show the saved preview. */}
-      {!live && (
+      {!live && !failed && (
         <>
           <img src={thumbUrl(photo)} alt="" draggable={false} />
           <img key={photo.id} src={previewUrl(photo)} alt={photo.fileName} draggable={false} />
@@ -446,7 +474,14 @@ function Stage({ photo, onZoomChange }: { photo: Photo; onZoomChange: (label: st
           <MaskOverlay photo={photoSize} region={geometry.region} width={shown.width} height={shown.height} />
         )}
       </div>
-      {!ready && <span className="stage-note">Preparing photo…</span>}
+      {!ready && !failed && <span className="stage-note">Preparing photo…</span>}
+      {failed && (
+        <div className="stage-failed" role="alert">
+          <ImageOff size={22} strokeWidth={1.75} />
+          <p>This photo can’t be opened.</p>
+          <p className="stage-failed-reason">{failed}</p>
+        </div>
+      )}
       {ready && circling && <span className="stage-note centered">Draw a loop around what you want · Esc cancels</span>}
     </div>
   );
@@ -462,20 +497,34 @@ const TOOLS: { panel: SidePanelName; label: string; key: string; icon: LucideIco
   { panel: "info", label: "Info", key: "I", icon: InfoIcon },
 ];
 
+/** The tool shown in the side panel. A photo that can't be opened has nothing to edit, only its info to show. */
+const useShownPanel = () => useStore((s) => (s.editor.failed ? "info" : s.sidePanel));
+
 /** The tools, as a column of icons along the window's right edge. */
 function Rail() {
-  const panel = useStore((s) => s.sidePanel);
+  const panel = useShownPanel();
+  const failed = useStore((s) => s.editor.failed !== null);
   const setPanel = useStore((s) => s.setSidePanel);
   return (
-    <nav className="panel rail" role="tablist" aria-orientation="vertical" aria-label="Tools">
+    <nav
+      className="panel rail"
+      role="tablist"
+      aria-orientation="vertical"
+      aria-label="Tools"
+      onKeyDown={(event) => onTabKey(event, (index) => setPanel(TOOLS[index].panel))}
+    >
       {TOOLS.map(({ panel: tool, label, key, icon: Icon }) => (
         <button
           key={tool}
+          id={`tool-${tool}`}
           role="tab"
           aria-selected={panel === tool}
+          aria-controls="tool-panel"
+          tabIndex={panel === tool ? 0 : -1}
           aria-label={label}
           title={`${label} (${key})`}
           className={panel === tool ? "active" : ""}
+          disabled={failed && tool !== "info"}
           onClick={() => setPanel(tool)}
         >
           <Icon size={17} strokeWidth={1.75} />
@@ -486,10 +535,10 @@ function Rail() {
 }
 
 function SidePanel({ photo }: { photo: Photo }) {
-  const panel = useStore((s) => s.sidePanel);
+  const panel = useShownPanel();
   const title = TOOLS.find((tool) => tool.panel === panel)?.label;
   return (
-    <aside className="side" aria-label={title}>
+    <aside className="side" id="tool-panel" role="tabpanel" aria-label={title}>
       <h2 className="side-title">{title}</h2>
       {panel === "adjust" && <AdjustPanel />}
       {panel === "crop" && <CropPanel />}
@@ -512,6 +561,7 @@ export function Editor({ photo, inert }: { photo: Photo; inert: boolean }) {
   const edited = useStore((s) => s.editor.ready && !isAsShot(s.editor.adjustments));
   const showOriginal = useStore((s) => s.editor.showOriginal);
   const hasClipboard = useStore((s) => s.clipboard !== null);
+  const failed = useStore((s) => s.editor.failed !== null);
   const [zoomLabel, setZoomLabel] = useState("Fit");
   const s = useStore.getState();
   const ids = [photo.id];
@@ -524,7 +574,7 @@ export function Editor({ photo, inert }: { photo: Photo; inert: boolean }) {
     const onKey = (event: KeyboardEvent) => {
       const state = useStore.getState();
       const target = event.target as HTMLElement;
-      if (state.confirmRequest || state.menu || state.importState || state.exportState || state.openId === null) return;
+      if (editorKeysBlocked(state) || state.openId === null) return;
       if (target.closest("input:not([type=range]), textarea")) return;
       const onSlider = target.matches("input[type=range]");
       const key = event.key.length === 1 ? event.key.toLowerCase() : event.key;
@@ -535,8 +585,10 @@ export function Editor({ photo, inert }: { photo: Photo; inert: boolean }) {
         else if (key === "y") void state.redo();
         else if (key === "c") void state.copyEdits(open);
         else if (key === "v") void state.pasteEdits([open]);
-        else if (key === "e") void state.startExport([open]);
-        else return;
+        else if (key === "e") {
+          // A photo that can't be opened can't be exported either.
+          if (!state.editor.failed) void state.startExport([open]);
+        } else return;
         event.preventDefault();
         return;
       }
@@ -547,12 +599,13 @@ export function Editor({ photo, inert }: { photo: Photo; inert: boolean }) {
         if (onSlider) return;
         event.preventDefault();
         const list = visiblePhotos(state);
-        const next = list[list.findIndex((p) => p.id === open) + (key === "ArrowLeft" ? -1 : 1)];
+        const at = list.findIndex((p) => p.id === open);
+        const next = at < 0 ? undefined : list[at + (key === "ArrowLeft" ? -1 : 1)];
         if (next) state.openPhoto(next.id);
       } else if (key === "Escape" || (key === "Enter" && state.sidePanel === "crop" && !target.closest("button"))) {
         // Escape backs out one level at a time: off a slider, out of a circle being drawn, off the chosen mask, out of the crop or mask tools, out of the photo.
         if (onSlider) target.blur();
-        else if (state.editor.circling && !state.editor.finding) state.cancelCircle();
+        else if (state.editor.circling && !state.editor.circling.points) state.cancelCircle();
         else if (state.sidePanel === "masks" && state.editor.maskId !== null) state.selectMask(null);
         else if (state.sidePanel === "crop" || state.sidePanel === "masks") state.setSidePanel("adjust");
         else state.closePhoto();
@@ -632,6 +685,14 @@ export function Editor({ photo, inert }: { photo: Photo; inert: boolean }) {
               onPointerDown={() => s.setShowOriginal(true)}
               onPointerUp={() => s.setShowOriginal(false)}
               onPointerLeave={() => s.setShowOriginal(false)}
+              // Holding Space or Enter on it works like holding the pointer down.
+              onKeyDown={(event) => {
+                if (event.key !== " " && event.key !== "Enter") return;
+                event.preventDefault();
+                if (!event.repeat) s.setShowOriginal(true);
+              }}
+              onKeyUp={(event) => (event.key === " " || event.key === "Enter") && s.setShowOriginal(false)}
+              onBlur={() => s.setShowOriginal(false)}
             >
               <SquareSplitHorizontal size={16} />
             </button>
@@ -641,7 +702,7 @@ export function Editor({ photo, inert }: { photo: Photo; inert: boolean }) {
             <button className="icon-button" title="More" aria-label="More" onClick={(event) => menuBelow(event, more())}>
               <Ellipsis size={16} />
             </button>
-            <button className="button primary" title="Export this photo (Ctrl+E)" onClick={() => void s.startExport(ids)}>
+            <button className="button primary" title="Export this photo (Ctrl+E)" disabled={failed} onClick={() => void s.startExport(ids)}>
               <Download size={15} /> <span className="collapsible">Export</span>
             </button>
           </div>

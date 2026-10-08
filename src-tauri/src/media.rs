@@ -295,6 +295,7 @@ pub(crate) fn raw_image(decoder: &dyn Decoder, source: &RawSource, params: &RawD
     use rawler::imgop::xyz::Illuminant;
     use rawler::tags::DngTag;
 
+    check_whole(source)?;
     let mut raw = decoder.raw_image(source, params, false).map_err(|e| anyhow!("{e}"))?;
     if raw.color_matrix.len() == 1 {
         if let Some(matrix) = raw.color_matrix.remove(&Illuminant::Unknown) {
@@ -317,6 +318,50 @@ pub(crate) fn raw_image(decoder: &dyn Decoder, source: &RawSource, params: &RawD
         }
     }
     Ok(raw)
+}
+
+/// Fails when the file ends before the image data its own layout points to,
+/// as a copy cut short does. For many cameras rawler reads the sensor data
+/// up to the end of the file and leaves the rest of the picture blank, so
+/// this is checked before decoding. Files not laid out like a TIFF (CR3,
+/// RAF) aren't checked here.
+pub fn check_whole(source: &RawSource) -> Result<()> {
+    use rawler::formats::tiff::reader::TiffReader;
+    use rawler::formats::tiff::{Entry, GenericTiffReader, Value, IFD};
+    use rawler::tags::TiffCommonTag;
+
+    fn numbers(entry: &Entry) -> Vec<u64> {
+        match &entry.value {
+            Value::Long(values) => values.iter().map(|&v| v as u64).collect(),
+            Value::Short(values) => values.iter().map(|&v| v as u64).collect(),
+            _ => Vec::new(),
+        }
+    }
+    /// Where the last of the image data in `ifd` and the directories under it ends.
+    fn data_end(ifd: &IFD, strips: TiffCommonTag) -> u64 {
+        let pairs = [(strips, TiffCommonTag::StripByteCounts), (TiffCommonTag::TileOffsets, TiffCommonTag::TileByteCounts)];
+        let own = pairs
+            .into_iter()
+            .filter_map(|(offsets, counts)| Some((numbers(ifd.get_entry(offsets)?), numbers(ifd.get_entry(counts)?))))
+            .flat_map(|(offsets, counts)| offsets.into_iter().zip(counts))
+            // All ones means "not given" in some cameras' files.
+            .filter(|&(offset, count)| offset != u32::MAX as u64 && count != u32::MAX as u64)
+            .map(|(offset, count)| ifd.base as u64 + offset + count)
+            .max()
+            .unwrap_or(0);
+        ifd.sub_ifds().values().flatten().map(|sub| data_end(sub, strips)).fold(own, u64::max)
+    }
+
+    let Ok(tiff) = GenericTiffReader::new_with_buffer(source.buf(), 0, 0, None) else { return Ok(()) };
+    // Panasonic's files keep where the sensor data starts in a tag of their own.
+    let panasonic = matches!(source.buf().get(..4), Some(b"IIU\0"));
+    let strips = if panasonic { TiffCommonTag::PanaOffsets } else { TiffCommonTag::StripOffsets };
+    let end = tiff.chains().iter().map(|ifd| data_end(ifd, strips)).max().unwrap_or(0);
+    let length = source.buf().len() as u64;
+    if end > length {
+        bail!("the file is cut short: it ends at byte {length}, but its image data runs to byte {end}");
+    }
+    Ok(())
 }
 
 fn uncompress_jpeg_tiles(source: &RawSource) -> Result<Option<RawSource>> {
@@ -508,19 +553,80 @@ fn shrink(image: RgbImage, edge: u32) -> Result<RgbImage> {
 
 /// Writes `image` as a JPEG, atomically, so a half-written file is never served.
 pub fn write_jpeg(image: &RgbImage, dest: &Path, quality: u8) -> Result<()> {
+    write_atomically(dest, |writer| {
+        image::codecs::jpeg::JpegEncoder::new_with_quality(writer, quality).encode(
+            image.as_raw(),
+            image.width(),
+            image.height(),
+            image::ExtendedColorType::Rgb8,
+        )?;
+        Ok(())
+    })
+}
+
+/// Writes a file at `dest` through `write`, so a half-written file is never
+/// read: it goes to a partial file next to `dest`, which is moved into place
+/// only once it is complete, and deleted if anything fails.
+pub fn write_atomically(dest: &Path, write: impl FnOnce(&mut BufWriter<File>) -> Result<()>) -> Result<()> {
     let dir = dest.parent().context("destination has no parent folder")?;
     fs::create_dir_all(dir)?;
     // Two requests can render the same photo at once; give each its own partial file.
     static COUNTER: AtomicU64 = AtomicU64::new(0);
     let partial = dest.with_extension(format!("{}.part", COUNTER.fetch_add(1, Ordering::Relaxed)));
     let mut writer = BufWriter::new(File::create(&partial)?);
-    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut writer, quality).encode(
-        image.as_raw(),
-        image.width(),
-        image.height(),
-        image::ExtendedColorType::Rgb8,
-    )?;
-    writer.into_inner().map_err(|e| e.into_error())?;
-    fs::rename(&partial, dest)?;
-    Ok(())
+    let written = (|| {
+        write(&mut writer)?;
+        writer.into_inner().map_err(|e| e.into_error())?;
+        fs::rename(&partial, dest)?;
+        Ok(())
+    })();
+    if written.is_err() {
+        let _ = fs::remove_file(&partial);
+    }
+    written
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn leftovers(dir: &Path) -> Vec<String> {
+        fs::read_dir(dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|name| name.ends_with(".part"))
+            .collect()
+    }
+
+    #[test]
+    fn a_written_jpeg_is_moved_into_place() {
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("ab/1.jpg");
+        write_jpeg(&RgbImage::new(8, 4), &dest, 80).unwrap();
+        assert_eq!(image::open(&dest).unwrap().width(), 8);
+        assert!(leftovers(dest.parent().unwrap()).is_empty());
+    }
+
+    #[test]
+    fn a_jpeg_that_cant_be_moved_into_place_leaves_nothing_behind() {
+        let dir = tempfile::tempdir().unwrap();
+        // A file can't be renamed over a folder that has something in it.
+        let dest = dir.path().join("1.jpg");
+        fs::create_dir(&dest).unwrap();
+        fs::write(dest.join("keep"), b"x").unwrap();
+        assert!(write_jpeg(&RgbImage::new(8, 4), &dest, 80).is_err());
+        assert!(leftovers(dir.path()).is_empty());
+    }
+
+    #[test]
+    fn a_failed_write_leaves_nothing_behind() {
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("1.jpg");
+        let result = write_atomically(&dest, |writer| {
+            std::io::Write::write_all(writer, b"half a picture")?;
+            bail!("the encoder gave up")
+        });
+        assert!(result.is_err());
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 0);
+    }
 }

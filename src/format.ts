@@ -23,12 +23,16 @@ export function dayHeading(day: string): { title: string; detail: string } {
 export const longDateTime = (date: Date) => dateTime.format(date);
 export const shortTime = (date: Date) => timeOnly.format(date);
 
+/** "1/250s" and "1/3s" when the camera wrote a fraction, "0.3s" and "2.5s" when it wrote tenths. Export writes the same. */
 export function shutter(seconds: number): string {
-  if (seconds >= 0.4) return `${+seconds.toFixed(1)}s`;
-  return `1/${Math.round(1 / seconds)}s`;
+  const perSecond = 1 / seconds;
+  const whole = Math.round(perSecond);
+  if (seconds < 0.25 || (seconds < 1 && Math.abs(perSecond - whole) < 0.02 * perSecond)) return `1/${whole}s`;
+  return `${+seconds.toFixed(1)}s`;
 }
 
-export const aperture = (f: number) => `ƒ/${+f.toFixed(1)}`;
+/** Up to two decimals, since a few lenses open to f/0.95: ƒ/0.95, ƒ/2.8, ƒ/8. */
+export const aperture = (f: number) => `ƒ/${+f.toFixed(2)}`;
 export const focalLength = (mm: number) => `${Math.round(mm)} mm`;
 
 export function fileSize(bytes: number): string {

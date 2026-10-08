@@ -425,6 +425,7 @@ fn capture_fields(capture: &Capture) -> Vec<Field> {
     let text = |tag, value: &str| value.is_ascii().then(|| field(tag, Value::Ascii(vec![value.as_bytes().to_vec()])));
     let ratio = |tag, num: u32, denom: u32| field(tag, Value::Rational(vec![exif::Rational { num, denom }]));
     let tenths = |value: f64| (value * 10.0).round() as u32;
+    let hundredths = |value: f64| (value * 100.0).round() as u32;
 
     let mut fields = vec![
         text(Tag::Software, "Tonality"),
@@ -434,12 +435,19 @@ fn capture_fields(capture: &Capture) -> Vec<Field> {
         capture.model.as_deref().and_then(|model| text(Tag::Model, model)),
         capture.lens.as_deref().and_then(|lens| text(Tag::LensModel, lens)),
         capture.iso.map(|iso| field(Tag::PhotographicSensitivity, Value::Short(vec![iso.min(u16::MAX as u32) as u16]))),
-        capture.aperture.map(|f| ratio(Tag::FNumber, tenths(f), 10)),
+        // Hundredths, as cameras write it: f/0.95 lenses exist.
+        capture.aperture.map(|f| ratio(Tag::FNumber, hundredths(f), 100)),
         capture.focal_length.map(|mm| ratio(Tag::FocalLength, tenths(mm), 10)),
-        // Fast shutter speeds are fractions of a second: 1/250, not 0.004.
-        capture.shutter.map(|seconds| match seconds {
-            s if s < 0.25 => ratio(Tag::ExposureTime, 1, (1.0 / s).round() as u32),
-            s => ratio(Tag::ExposureTime, tenths(s), 10),
+        // Shutter speeds under a second are fractions when the camera's are:
+        // 1/250 and 1/3, but 0.3 and 0.8 as tenths.
+        capture.shutter.map(|seconds| {
+            let per_second = 1.0 / seconds;
+            let whole = per_second.round();
+            if seconds < 0.25 || (seconds < 1.0 && (per_second - whole).abs() < 0.02 * per_second) {
+                ratio(Tag::ExposureTime, 1, whole as u32)
+            } else {
+                ratio(Tag::ExposureTime, tenths(seconds), 10)
+            }
         }),
     ];
     // 'YYYY-MM-DDTHH:MM:SS' in the library, 'YYYY:MM:DD HH:MM:SS' in EXIF.
@@ -794,6 +802,35 @@ mod tests {
         assert_eq!(shown(Tag::ExposureTime), "1/250");
         assert_eq!(shown(Tag::FocalLength), "35");
         assert!(read.get_field(Tag::Orientation, In::PRIMARY).is_none());
+
+        let fast = Capture { aperture: Some(0.95), ..capture() };
+        let bytes = write_tiff(&capture_fields(&fast), None, 0).unwrap();
+        let read = exif::Reader::new().read_raw(bytes).unwrap();
+        assert_eq!(read.get_field(Tag::FNumber, In::PRIMARY).unwrap().display_value().to_string(), "0.95", "not rounded to f/1");
+    }
+
+    #[test]
+    fn shutter_speeds_are_written_as_the_camera_wrote_them() {
+        let cases = [
+            (1.0 / 250.0, (1, 250)),
+            (1.0 / 4.0, (1, 4)),
+            (1.0 / 3.0, (1, 3)),
+            (0.3, (3, 10)),
+            (0.4, (4, 10)),
+            (0.5, (1, 2)),
+            (0.8, (8, 10)),
+            (1.3, (13, 10)),
+            (30.0, (300, 10)),
+        ];
+        for (seconds, expected) in cases {
+            let bytes = write_tiff(&capture_fields(&Capture { shutter: Some(seconds), ..capture() }), None, 0).unwrap();
+            let read = exif::Reader::new().read_raw(bytes).unwrap();
+            // The rational itself: kamadak-exif shows 3/10 as 1/3.33, which would hide the difference.
+            let Value::Rational(ref written) = read.get_field(Tag::ExposureTime, In::PRIMARY).unwrap().value else {
+                panic!("the exposure time is not a rational")
+            };
+            assert_eq!((written[0].num, written[0].denom), expected, "{seconds} s");
+        }
     }
 
     #[test]
