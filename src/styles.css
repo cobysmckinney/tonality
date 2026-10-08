@@ -969,6 +969,14 @@ button {
 .mask-knob-grip {
   fill: transparent;
 }
+.mask-knob:focus {
+  outline: none;
+}
+/* Reached with Tab: a ring round the knob the arrow keys now move. */
+.mask-knob:focus-visible .mask-knob-grip {
+  stroke: #fff;
+  stroke-width: 1.5;
+}
 .mask-knob-dot {
   fill: #fff;
   stroke: rgb(0 0 0 / 0.55);
