@@ -372,28 +372,14 @@ pub fn render_frame(
     let frame = gpu.render(session, &adjustments, region, (width, height), guides).map_err(message)?;
 
     // The histogram always describes the whole photo, whatever the zoom.
-    let small = gpu.render_image(session, &adjustments, 256).map_err(message)?;
-    let mut histogram = [[0u32; 256]; 4];
-    let (mut blown, mut crushed) = (0usize, 0usize);
-    for pixel in small.pixels() {
-        let [r, g, b] = pixel.0;
-        histogram[0][r as usize] += 1;
-        histogram[1][g as usize] += 1;
-        histogram[2][b as usize] += 1;
-        let brightness = (0.2126 * r as f32 + 0.7152 * g as f32 + 0.0722 * b as f32).round() as usize;
-        histogram[3][brightness.min(255)] += 1;
-        blown += (r.max(g).max(b) >= 254) as usize;
-        crushed += (r.max(g).max(b) <= 1) as usize;
-    }
-    // A handful of specular highlights is not worth a warning.
-    let noticeable = (small.width() * small.height()) as usize / 2000;
-    let flags = (blown > noticeable) as u32 | ((crushed > noticeable) as u32) << 1;
+    let histogram = gpu.histogram(session, &adjustments).map_err(message)?;
+    let flags = histogram.blown as u32 | (histogram.crushed as u32) << 1;
 
     let mut reply = Vec::with_capacity(16 + 4 * 256 * 4 + frame.len());
     for value in [width, height, flags, 0] {
         reply.extend_from_slice(&value.to_le_bytes());
     }
-    for bin in histogram.iter().flatten() {
+    for bin in histogram.bins.iter().flatten() {
         reply.extend_from_slice(&bin.to_le_bytes());
     }
     reply.extend_from_slice(&frame);

@@ -9,6 +9,7 @@ use rayon::prelude::*;
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use crate::develop::LinearImage;
@@ -143,6 +144,60 @@ pub struct Session {
     /// empty and aren't tried again until asked for (`find_parts`) or the
     /// photo is opened again.
     missing: Mutex<HashSet<String>>,
+    /// What recent frames were drawn into, least recently used first, so
+    /// the next frame of the same size doesn't need new ones.
+    targets: Mutex<Vec<Target>>,
+    /// Counts the mattes set, which change the picture without changing the recipe.
+    mattes_set: AtomicU64,
+    /// The last histogram, with the recipe and `mattes_set` it was drawn with.
+    histogram: Mutex<Option<(Adjustments, u64, Histogram)>>,
+}
+
+/// How the whole picture's tones are spread, as the histogram shows them.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Histogram {
+    /// 256 bins each for red, green, blue and brightness.
+    pub bins: [[u32; 256]; 4],
+    /// Enough of the picture is blown out, or crushed to black, to warn about.
+    pub blown: bool,
+    pub crushed: bool,
+}
+
+impl Histogram {
+    /// The long edge of the small picture a histogram is counted from.
+    const EDGE: u32 = 256;
+
+    fn of(picture: &image::RgbImage) -> Self {
+        let mut bins = [[0u32; 256]; 4];
+        let (mut blown, mut crushed) = (0usize, 0usize);
+        for pixel in picture.pixels() {
+            let [r, g, b] = pixel.0;
+            bins[0][r as usize] += 1;
+            bins[1][g as usize] += 1;
+            bins[2][b as usize] += 1;
+            let brightness = (0.2126 * r as f32 + 0.7152 * g as f32 + 0.0722 * b as f32).round() as usize;
+            bins[3][brightness.min(255)] += 1;
+            blown += (r.max(g).max(b) >= 254) as usize;
+            crushed += (r.max(g).max(b) <= 1) as usize;
+        }
+        // A handful of specular highlights is not worth a warning.
+        let noticeable = (picture.width() * picture.height()) as usize / 2000;
+        Self { bins, blown: blown > noticeable, crushed: crushed > noticeable }
+    }
+}
+
+/// How many frame targets a session keeps: the editor's frame and the
+/// histogram's small picture, with one to spare.
+const TARGETS_KEPT: usize = 3;
+
+/// A texture to draw a frame into and the buffer it is read back through.
+struct Target {
+    width: u32,
+    height: u32,
+    format: wgpu::TextureFormat,
+    texture: wgpu::Texture,
+    view: wgpu::TextureView,
+    readback: wgpu::Buffer,
 }
 
 impl Session {
@@ -162,6 +217,7 @@ impl Session {
         let key = found.key();
         self.missing.lock().unwrap().remove(&key);
         self.mattes.lock().unwrap().insert(key, Arc::new(matte));
+        self.mattes_set.fetch_add(1, Ordering::Relaxed);
     }
 
     /// Where this part's matte is kept between sessions, if anywhere.
@@ -443,7 +499,54 @@ impl Gpu {
             mattes: Mutex::new(HashMap::new()),
             finding: Mutex::new(()),
             missing: Mutex::new(HashSet::new()),
+            targets: Mutex::new(Vec::new()),
+            mattes_set: AtomicU64::new(0),
+            histogram: Mutex::new(None),
         })
+    }
+
+    /// The histogram of the whole picture `adjustments` make, whatever part
+    /// of it is on screen. It is kept until the recipe or a found part
+    /// changes, so panning, zooming and the guides don't count it again.
+    pub fn histogram(&self, session: &Session, adjustments: &Adjustments) -> Result<Histogram> {
+        let mattes_set = session.mattes_set.load(Ordering::Relaxed);
+        if let Some((recipe, set, histogram)) = &*session.histogram.lock().unwrap() {
+            if *set == mattes_set && recipe == adjustments {
+                return Ok(histogram.clone());
+            }
+        }
+        let histogram = Histogram::of(&self.render_image(session, adjustments, Histogram::EDGE)?);
+        *session.histogram.lock().unwrap() = Some((adjustments.clone(), mattes_set, histogram.clone()));
+        Ok(histogram)
+    }
+
+    /// A target for a `width` x `height` frame in `format`: the session's
+    /// last one of that size, or a new one. Hand it back with `keep_target`.
+    fn take_target(&self, session: &Session, width: u32, height: u32, format: wgpu::TextureFormat) -> Result<Target> {
+        let mut targets = session.targets.lock().unwrap();
+        if let Some(i) = targets.iter().position(|t| (t.width, t.height, t.format) == (width, height, format)) {
+            return Ok(targets.remove(i));
+        }
+        drop(targets);
+        let pixel_bytes = format.block_copy_size(None).context("a frame format without a pixel size")?;
+        let texture = self.texture("frame", width, height, 1, format);
+        let readback = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("readback"),
+            size: padded_row(width * pixel_bytes) as u64 * height as u64,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        Ok(Target { width, height, format, view: texture.create_view(&Default::default()), texture, readback })
+    }
+
+    /// Keeps `target` for the next frame of its size, letting go of the
+    /// least recently used if there are too many.
+    fn keep_target(&self, session: &Session, target: Target) {
+        let mut targets = session.targets.lock().unwrap();
+        targets.push(target);
+        if targets.len() > TARGETS_KEPT {
+            targets.remove(0);
+        }
     }
 
     /// A stack of `layers` coverage maps, as the shader reads them.
@@ -713,23 +816,16 @@ impl Gpu {
                 _ => return Err(anyhow!(NO_DEEP)),
             },
         };
-        let pixel_bytes = format.block_copy_size(None).context("a frame format without a pixel size")?;
-        let target = self.texture("frame", width, height, 1, format);
-        // Rows in a readback buffer must be padded to a multiple of 256 bytes.
-        let row = width * pixel_bytes;
-        let padded_row = row.next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
-        let readback = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("readback"),
-            size: padded_row as u64 * height as u64,
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
+        let row = width * format.block_copy_size(None).context("a frame format without a pixel size")?;
+        let padded_row = padded_row(row);
+        // The coverage lock is held to the end, so no other frame of this session uses the target meanwhile.
+        let target = self.take_target(session, width, height, format)?;
         let mut encoder = self.device.create_command_encoder(&Default::default());
-        self.draw(&mut encoder, pipeline, bindings, &target.create_view(&Default::default()));
+        self.draw(&mut encoder, pipeline, bindings, &target.view);
         encoder.copy_texture_to_buffer(
-            target.as_image_copy(),
+            target.texture.as_image_copy(),
             wgpu::TexelCopyBufferInfo {
-                buffer: &readback,
+                buffer: &target.readback,
                 layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(padded_row), rows_per_image: Some(height) },
             },
             wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
@@ -737,17 +833,21 @@ impl Gpu {
         self.queue.submit([encoder.finish()]);
 
         let (sender, receiver) = std::sync::mpsc::channel();
-        readback.slice(..).map_async(wgpu::MapMode::Read, move |result| {
+        target.readback.slice(..).map_async(wgpu::MapMode::Read, move |result| {
             let _ = sender.send(result);
         });
         self.device.poll(wgpu::PollType::wait_indefinitely()).context("waiting for the graphics device")?;
         receiver.recv().context("the graphics device dropped the frame")??;
 
-        let mapped = readback.slice(..).get_mapped_range().context("reading the frame back")?;
         let mut pixels = Vec::with_capacity((row * height) as usize);
-        for line in mapped.chunks_exact(padded_row as usize) {
-            pixels.extend_from_slice(&line[..row as usize]);
+        {
+            let mapped = target.readback.slice(..).get_mapped_range().context("reading the frame back")?;
+            for line in mapped.chunks_exact(padded_row as usize) {
+                pixels.extend_from_slice(&line[..row as usize]);
+            }
         }
+        target.readback.unmap();
+        self.keep_target(session, target);
         Ok(pixels)
     }
 
@@ -800,6 +900,12 @@ impl Gpu {
         }
         Ok((width, height))
     }
+}
+
+/// The bytes a row of `row` bytes takes in a readback buffer, whose rows
+/// must start at multiples of 256 bytes.
+fn padded_row(row: u32) -> u32 {
+    row.next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT)
 }
 
 /// Why there is no 16-bit picture on a device that can't draw one.
@@ -970,6 +1076,80 @@ mod tests {
             let (in_crop, in_whole) = (grey(&cropped, 60, x, y), grey(&whole, width, 12 + x, 28 + y));
             assert!((in_crop - in_whole).abs() <= 2, "at ({x}, {y}) of the crop: {in_crop} cropped, {in_whole} in the crop tool");
         }
+    }
+
+    #[test]
+    fn frames_drawn_into_kept_targets_match_frames_drawn_afresh() {
+        let Some(gpu) = gpu() else { return };
+        let session = gradient(gpu);
+        let grainy = Adjustments { grain: 60.0, exposure: 0.5, ..Default::default() };
+        let darker = Adjustments { exposure: -1.0, vignette: -40.0, ..Default::default() };
+        let draw = |session: &Session, edit: &Adjustments, size| {
+            gpu.render(session, edit, Region::FULL, size, Guides::default()).unwrap()
+        };
+        let target_of = |width, height| {
+            let targets = session.targets.lock().unwrap();
+            targets.iter().find(|t| (t.width, t.height, t.format) == (width, height, OUTPUT_FORMAT)).map(|t| t.texture.clone())
+        };
+
+        draw(&session, &grainy, (96, 80));
+        let first = target_of(96, 80).expect("the frame's target is kept");
+        // Another size in between, as the histogram's small picture is.
+        draw(&session, &darker, (48, 40));
+        let again = draw(&session, &darker, (96, 80));
+        assert!(target_of(96, 80) == Some(first), "the second frame of the same size reused the target");
+        assert!(again == draw(&gradient(gpu), &darker, (96, 80)), "and came out as a fresh session draws it");
+
+        // A deep picture of the same size has its own target, and doesn't disturb the plain one.
+        if gpu.develop_deep.is_some() {
+            gpu.render_deep_image(&session, &grainy, u32::MAX).unwrap();
+        }
+        assert!(draw(&session, &grainy, (96, 80)) == draw(&gradient(gpu), &grainy, (96, 80)));
+
+        // A string of sizes keeps only the most recent few.
+        for width in 10..20 {
+            draw(&session, &grainy, (width, 10));
+        }
+        assert_eq!(session.targets.lock().unwrap().len(), TARGETS_KEPT);
+        assert!(target_of(19, 10).is_some() && target_of(96, 80).is_none());
+    }
+
+    #[test]
+    fn the_histogram_is_counted_again_only_when_the_picture_changes() {
+        use crate::edit::{LocalAdjustments, Mask, MaskPart, Mode, Shape};
+        let Some(gpu) = gpu() else { return };
+        let session = gradient(gpu);
+        let counted = |edit: &Adjustments| Histogram::of(&gpu.render_image(&session, edit, Histogram::EDGE).unwrap());
+        let kept = || session.histogram.lock().unwrap().as_ref().map(|(_, _, histogram)| histogram.clone());
+
+        let edit = Adjustments { contrast: 30.0, ..Default::default() };
+        let histogram = gpu.histogram(&session, &edit).unwrap();
+        assert_eq!(histogram, counted(&edit));
+        assert_eq!(kept(), Some(histogram.clone()));
+        // Kept: a stand-in left in its place is what comes back for the same recipe.
+        let stand_in = Histogram { bins: [[7; 256]; 4], blown: true, crushed: true };
+        session.histogram.lock().unwrap().as_mut().unwrap().2 = stand_in.clone();
+        assert_eq!(gpu.histogram(&session, &edit).unwrap(), stand_in);
+
+        // Another recipe is counted afresh.
+        let brighter = Adjustments { exposure: 1.0, ..edit.clone() };
+        assert_eq!(gpu.histogram(&session, &brighter).unwrap(), counted(&brighter));
+
+        // So is the same recipe once a part it masks is found.
+        let subject = Mask {
+            id: 1,
+            parts: vec![MaskPart { mode: Mode::Add, shape: Shape::Subject }],
+            adjustments: LocalAdjustments { exposure: 2.0, ..Default::default() },
+            ..Default::default()
+        };
+        let masked = Adjustments { masks: vec![subject], ..edit };
+        // Not found yet: it draws as empty, without running the model.
+        session.missing.lock().unwrap().insert(Found::Subject.key());
+        let before = gpu.histogram(&session, &masked).unwrap();
+        session.set_matte(&Found::Subject, image::GrayImage::from_pixel(8, 8, image::Luma([255])));
+        let after = gpu.histogram(&session, &masked).unwrap();
+        assert_ne!(before, after);
+        assert_eq!(after, counted(&masked));
     }
 
     #[test]
