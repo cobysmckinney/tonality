@@ -108,7 +108,7 @@ Exports are sRGB and carry the capture date, camera, lens and exposure.
 | Editor | Left / Right | Previous / next photo |
 | Editor | `A` / `C` / `M` / `Shift+P` / `H` / `I` | Adjust / crop / masks / presets / history / info |
 | Editor | `Ctrl+Z` / `Ctrl+Shift+Z` or `Ctrl+Y` | Undo / redo |
-| Editor | hold `\` | Show the original |
+| Editor | hold `\`, or hold Space or Enter on the Show original button | Show the original |
 | Editor | `Z`, double-click | Fit / 100% |
 | Editor | `J` | Show clipped areas |
 | Editor | `O` | Mask overlay |
