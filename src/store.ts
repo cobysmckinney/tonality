@@ -704,16 +704,20 @@ export const useStore = create<State>((set, get) => {
 
     addMaskPart(kind, mode, drawn) {
       if (kind === "object" && !drawn) return get().startCircle({ mode });
-      const { size, adjustments } = get().editor;
-      if (!size) return;
+      const { size, adjustments, maskId: target } = get().editor;
+      if (!size || target === null) return;
       const shape = drawn ?? newShape(kind, size, adjustments);
+      const name = SHAPE_NAMES[kind].toLowerCase();
+      // The part goes to the mask it was asked for, whichever is chosen by the time it's found.
       void foundFirst(isFound(shape) ? [shape] : [], () => {
         const { ready, adjustments, maskId } = get().editor;
-        const mask = adjustments.masks.find((m) => m.id === maskId);
-        if (!ready || !mask || !canAdd(adjustments.masks, kind)) return;
+        if (!ready) return;
+        const mask = adjustments.masks.find((m) => m.id === target);
+        if (!mask) return get().toast({ text: `The mask was deleted before the ${name} was found` });
+        if (!canAdd(adjustments.masks, kind)) return;
         const parts = [...mask.parts, { mode, shape }];
-        setEditor({ partIndex: parts.length - 1 });
-        get().updateMask(mask.id, { parts }, `${mask.name}: ${mode} ${SHAPE_NAMES[kind].toLowerCase()}`);
+        if (maskId === target) setEditor({ partIndex: parts.length - 1 });
+        get().updateMask(mask.id, { parts }, `${mask.name}: ${mode} ${name}`);
       });
     },
 
@@ -737,7 +741,16 @@ export const useStore = create<State>((set, get) => {
         const part = mask?.parts[circling.replace];
         if (!mask || !part) return setEditor({ circling: null });
         const index = circling.replace;
-        void foundFirst([shape], () => get().updateMaskPart(index, { ...part, shape }, `${mask.name}: circle again`));
+        // Only the circle changes, on the mask and part it was drawn for, as they are once it's found.
+        void foundFirst([shape], () => {
+          const now = get().editor.adjustments.masks.find((m) => m.id === mask.id);
+          const same = now?.parts[index];
+          if (!now || !same || JSON.stringify(same.shape) !== JSON.stringify(part.shape)) {
+            return get().toast({ text: "The part was removed before the object was found" });
+          }
+          const parts = now.parts.map((p, i) => (i === index ? { ...p, shape } : p));
+          get().updateMask(now.id, { parts }, `${now.name}: circle again`);
+        });
       } else if (circling.mode === null) get().addMask("object", shape);
       else get().addMaskPart("object", circling.mode, shape);
     },
