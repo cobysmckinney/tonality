@@ -31,7 +31,8 @@ export function shutter(seconds: number): string {
   return `${+seconds.toFixed(1)}s`;
 }
 
-export const aperture = (f: number) => `ƒ/${+f.toFixed(1)}`;
+/** Up to two decimals, since a few lenses open to f/0.95: ƒ/0.95, ƒ/2.8, ƒ/8. */
+export const aperture = (f: number) => `ƒ/${+f.toFixed(2)}`;
 export const focalLength = (mm: number) => `${Math.round(mm)} mm`;
 
 export function fileSize(bytes: number): string {
