@@ -75,7 +75,9 @@ export default function App() {
   const loaded = useStore((s) => s.loaded);
   const empty = useStore((s) => visiblePhotos(s).length === 0);
   const openPhoto = useStore((s) => (s.openId === null ? undefined : s.photos.find((p) => p.id === s.openId)));
-  const modal = useStore((s) => s.importState !== null || s.exportState !== null || s.confirmRequest !== null);
+  const modal = useStore(
+    (s) => s.importState !== null || s.exportState !== null || s.confirmRequest !== null || s.shortcutsOpen,
+  );
 
   useEffect(() => {
     const { subscribe, init } = useStore.getState();
