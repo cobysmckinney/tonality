@@ -79,6 +79,26 @@ pub fn frame(width: u32, height: u32, adjustments: &Adjustments, uncropped: bool
     }
 }
 
+/// Where the crop sits in `frame`: its left, top, width and height, in the
+/// frame's 0..1 coordinates. The crop itself gives `[0, 0, 1, 1]`; the crop
+/// tool's uncropped box gives the upright rectangle inside it, since both
+/// share the straighten angle.
+pub fn crop_in_frame(width: u32, height: u32, adjustments: &Adjustments, frame: &Frame) -> [f64; 4] {
+    let crop = self::frame(width, height, adjustments, false);
+    // The crop's centre, measured from the frame's, in the frame's own
+    // (untilted) axes: the inverse of the tilt in `frame_to_source`.
+    let (sin, cos) = frame.angle.sin_cos();
+    let [dx, dy] = [crop.center[0] - frame.center[0], crop.center[1] - frame.center[1]];
+    let offset = [cos * dx - sin * dy, sin * dx + cos * dy];
+    let size = [crop.size[0] / frame.size[0], crop.size[1] / frame.size[1]];
+    [
+        0.5 + offset[0] / frame.size[0] - size[0] / 2.0,
+        0.5 + offset[1] / frame.size[1] - size[1] / 2.0,
+        size[0],
+        size[1],
+    ]
+}
+
 /// Maps a position in the frame (0..1 across and down) to a position in the
 /// photo file (0..1 across and down).
 pub fn frame_to_source(width: u32, height: u32, adjustments: &Adjustments, frame: &Frame) -> Affine {
@@ -178,5 +198,54 @@ mod tests {
         assert!(close(m.apply([0.5, 0.0]), [0.0, 0.0]));
         // The right-hand point of the frame shows the old top-right corner.
         assert!(close(m.apply([1.0, 0.5]), [1.0, 0.0]));
+    }
+
+    #[test]
+    fn the_crop_fills_its_own_frame() {
+        let cropped = Adjustments { crop: Crop { x: 0.3, y: 0.6, width: 0.4, height: 0.5 }, straighten: 7.0, ..Default::default() };
+        let f = frame(300, 200, &cropped, false);
+        let rect = crop_in_frame(300, 200, &cropped, &f);
+        for (got, want) in rect.iter().zip([0.0, 0.0, 1.0, 1.0]) {
+            assert!((got - want).abs() < 1e-9, "{rect:?}");
+        }
+    }
+
+    #[test]
+    fn a_centred_half_crop_sits_in_the_middle_of_the_whole_photo() {
+        let cropped = Adjustments { crop: Crop { x: 0.5, y: 0.5, width: 0.5, height: 0.5 }, ..Default::default() };
+        let rect = crop_in_frame(300, 200, &cropped, &frame(300, 200, &cropped, true));
+        for (got, want) in rect.iter().zip([0.25, 0.25, 0.5, 0.5]) {
+            assert!((got - want).abs() < 1e-9, "{rect:?}");
+        }
+    }
+
+    #[test]
+    fn the_crop_in_the_uncropped_frame_shows_the_same_place() {
+        let crops = [
+            Crop { x: 0.3, y: 0.6, width: 0.4, height: 0.5 },
+            Crop { x: 0.7, y: 0.35, width: 0.25, height: 0.6 },
+        ];
+        for crop in crops {
+            for straighten in [0.0, 12.0, -30.0] {
+                for rotation in 0..4 {
+                    for flip_horizontal in [false, true] {
+                        let a = Adjustments { crop, straighten, rotation, flip_horizontal, ..Default::default() };
+                        let (cropped, whole) = (frame(300, 200, &a, false), frame(300, 200, &a, true));
+                        let rect = crop_in_frame(300, 200, &a, &whole);
+                        let (in_crop, in_whole) =
+                            (frame_to_source(300, 200, &a, &cropped), frame_to_source(300, 200, &a, &whole));
+                        for t in [[0.0, 0.0], [1.0, 0.0], [0.2, 0.9], [1.0, 1.0], [0.5, 0.5]] {
+                            let u = [rect[0] + t[0] * rect[2], rect[1] + t[1] * rect[3]];
+                            assert!(
+                                close(in_crop.apply(t), in_whole.apply(u)),
+                                "{a:?} at {t:?}: {:?} vs {:?}",
+                                in_crop.apply(t),
+                                in_whole.apply(u)
+                            );
+                        }
+                    }
+                }
+            }
+        }
     }
 }
