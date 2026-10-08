@@ -37,6 +37,7 @@ import {
 import { plural } from "./format";
 import { canAdd, circleShape, foundShapes, isFound, MaskStart, MAX_MASKS, newMask, newShape, SHAPE_NAMES, startKind } from "./masks";
 import { blend, holds, Preset, settingsFrom } from "./presets";
+import { canStartExport, canStartImport } from "./sheets";
 
 export type Filter = "all" | "picks" | "unrejected" | "rejects";
 
@@ -1235,8 +1236,12 @@ export const useStore = create<State>((set, get) => {
     },
 
     async startImport(paths, source) {
-      const busy = get().importState?.phase;
-      if (busy === "scanning" || busy === "importing") return;
+      // A drop or a card's "Review photos" while exporting would open a second sheet over the first.
+      if (get().exportState) {
+        get().toast({ text: "Finish exporting before importing" });
+        return;
+      }
+      if (!canStartImport(get())) return;
       set({ importState: { phase: "scanning", progress: null }, menu: null });
       try {
         const scan = await api.scanImport(paths, source);
@@ -1298,7 +1303,7 @@ export const useStore = create<State>((set, get) => {
     },
 
     async startExport(ids) {
-      if (ids.length === 0 || get().exportState || get().importState) return;
+      if (ids.length === 0 || !canStartExport(get())) return;
       // An edit still in hand is recorded first: what is on screen is what gets exported.
       settle();
       set({ menu: null });
