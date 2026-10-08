@@ -1,4 +1,5 @@
-//! Opening originals for editing: files cut short are refused rather than drawn half blank.
+//! Opening originals for editing: files cut short are refused rather than drawn
+//! half blank, and DNGs laid out the way some converters write them still open.
 
 use std::path::PathBuf;
 
@@ -105,4 +106,109 @@ fn cut_short_samples() {
         println!("{name}: cut in half: {:?}", error.as_ref().map(|error| format!("{error:#}")));
         assert!(error.is_some(), "{name} cut in half opens as if whole");
     }
+}
+
+/// XYZ to linear sRGB: as a DNG colour matrix, it makes the "camera" see in linear sRGB.
+const XYZ_TO_SRGB: [[f32; 3]; 3] = [[3.2406, -1.5372, -0.4986], [-0.9689, 1.8758, 0.0415], [0.0557, -0.2040, 1.0570]];
+const SRGB_TO_XYZ: [[f32; 3]; 3] = [[0.4124, 0.3576, 0.1805], [0.2126, 0.7152, 0.0722], [0.0193, 0.1192, 0.9505]];
+/// The colour of the light, as the camera sees it: warm.
+const LIGHT: [f32; 3] = [0.6, 0.5, 0.3];
+const TILE: u32 = 16;
+/// How bright each of the four tiles is, left to right and top to bottom.
+const TILE_SHADES: [f32; 4] = [1.0, 0.75, 0.5, 0.25];
+
+/// A DNG as converters such as Adobe's write it: 32 x 32 pixels of a grey
+/// card under a warm light, in four tiles that are each an 8-bit JPEG; one
+/// colour matrix for no particular illuminant; and the white point, if
+/// given, as a chromaticity rather than a camera neutral.
+fn converted_dng(white_as_xy: bool) -> Vec<u8> {
+    use rawler::formats::tiff::writer::{DirectoryWriter, TiffWriter};
+    use rawler::formats::tiff::{Rational, SRational};
+    use rawler::tags::{DngTag, ExifTag, TiffCommonTag};
+
+    let mut bytes = Vec::new();
+    let mut tiff = TiffWriter::new(std::io::Cursor::new(&mut bytes)).unwrap();
+    let (mut offsets, mut counts) = (Vec::new(), Vec::new());
+    for shade in TILE_SHADES {
+        let level = LIGHT.map(|v| (v * shade * 320.0).round() as u8);
+        let tile = image::RgbImage::from_pixel(TILE, TILE, image::Rgb(level));
+        let mut jpeg = Vec::new();
+        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpeg, 100).encode_image(&tile).unwrap();
+        offsets.push(tiff.write_data(&jpeg).unwrap());
+        counts.push(jpeg.len() as u32);
+    }
+
+    let mut root = DirectoryWriter::new();
+    root.add_tag(TiffCommonTag::NewSubFileType, 0u32);
+    root.add_tag(TiffCommonTag::ImageWidth, TILE * 2);
+    root.add_tag(TiffCommonTag::ImageLength, TILE * 2);
+    root.add_tag(TiffCommonTag::BitsPerSample, [8u16; 3]);
+    root.add_tag(TiffCommonTag::Compression, 7u16);
+    root.add_tag(TiffCommonTag::PhotometricInt, 34892u16); // LinearRaw
+    root.add_tag(TiffCommonTag::Make, "Tonality");
+    root.add_tag(TiffCommonTag::Model, "Test card");
+    root.add_tag(TiffCommonTag::SamplesPerPixel, 3u16);
+    root.add_tag(ExifTag::PlanarConfiguration, 1u16);
+    root.add_tag(TiffCommonTag::TileWidth, TILE);
+    root.add_tag(TiffCommonTag::TileLength, TILE);
+    root.add_tag(TiffCommonTag::TileOffsets, &offsets);
+    root.add_tag(TiffCommonTag::TileByteCounts, &counts);
+    root.add_tag(DngTag::DNGVersion, [1u8, 4, 0, 0]);
+    root.add_tag(DngTag::DNGBackwardVersion, [1u8, 1, 0, 0]);
+    root.add_tag(DngTag::UniqueCameraModel, "Tonality Test card");
+    root.add_tag(DngTag::WhiteLevel, [255u16; 3]);
+    // No particular illuminant: the matrix applies to any light.
+    root.add_tag(DngTag::CalibrationIlluminant1, 0u16);
+    let matrix: Vec<SRational> = XYZ_TO_SRGB.iter().flatten().map(|v| SRational::new((v * 10_000.0).round() as i32, 10_000)).collect();
+    root.add_tag(DngTag::ColorMatrix1, matrix.as_slice());
+    if white_as_xy {
+        let xyz = SRGB_TO_XYZ.map(|row| row.iter().zip(LIGHT).map(|(m, v)| m * v).sum::<f32>());
+        let sum: f32 = xyz.iter().sum();
+        let xy = [xyz[0] / sum, xyz[1] / sum].map(|v| Rational::new((v * 1_000_000.0).round() as u32, 1_000_000));
+        root.add_tag(DngTag::AsShotWhiteXY, xy);
+    }
+    tiff.build(root).unwrap();
+    bytes
+}
+
+/// The colour in the middle of each tile of a developed picture.
+fn tile_colours(image: &tonality_lib::develop::LinearImage) -> Vec<[f32; 3]> {
+    (0..4u32)
+        .map(|tile| {
+            let (x, y) = ((tile % 2) * TILE + TILE / 2, (tile / 2) * TILE + TILE / 2);
+            image.pixels[(y * image.width + x) as usize]
+        })
+        .collect()
+}
+
+#[test]
+fn a_dng_whose_tiles_are_jpegs_opens_with_each_tile_in_its_place() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().join("converted.dng");
+    std::fs::write(&path, converted_dng(true)).unwrap();
+    let image = tonality_lib::develop::load(&path, true).unwrap();
+    assert!(image.scene_referred);
+    assert_eq!((image.width, image.height), (TILE * 2, TILE * 2));
+    let colours = tile_colours(&image);
+    let brightness: Vec<f32> = colours.iter().map(|[r, g, b]| (r + g + b) / 3.0).collect();
+    for (tile, shade) in TILE_SHADES.iter().enumerate() {
+        let ratio = brightness[tile] / brightness[0];
+        assert!((ratio - shade).abs() < 0.03, "tile {tile} is {ratio} as bright as the first, not {shade}: {colours:?}");
+    }
+}
+
+#[test]
+fn a_dng_that_gives_its_white_as_a_chromaticity_is_white_balanced() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let develop = |white_as_xy: bool| {
+        let path = dir.path().join(format!("white-{white_as_xy}.dng"));
+        std::fs::write(&path, converted_dng(white_as_xy)).unwrap();
+        tile_colours(&tonality_lib::develop::load(&path, true).unwrap())[0]
+    };
+    // The grey card comes out grey under the warm light...
+    let [r, g, b] = develop(true);
+    assert!((r / g - 1.0).abs() < 0.03 && (b / g - 1.0).abs() < 0.03, "{:?}", [r, g, b]);
+    // ...where without the white point it would keep the light's colour.
+    let [r, g, b] = develop(false);
+    assert!(r > b * 1.5, "{:?}", [r, g, b]);
 }

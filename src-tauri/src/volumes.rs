@@ -24,6 +24,13 @@ fn camera_volume(mount: &Path) -> Option<Volume> {
 
 #[cfg(target_os = "linux")]
 fn mount_points() -> Vec<PathBuf> {
+    card_mounts(&std::fs::read_to_string("/proc/self/mounts").unwrap_or_default())
+}
+
+/// The mount points in a mount table (laid out like `/proc/self/mounts`)
+/// that could be a camera card.
+#[cfg(any(target_os = "linux", test))]
+fn card_mounts(table: &str) -> Vec<PathBuf> {
     // Card filesystems, plus anything a desktop automounter put in the usual places.
     const CARD_FILESYSTEMS: &[&str] = &["vfat", "exfat", "msdos", "ntfs", "ntfs3", "fuseblk", "udf"];
     const REMOVABLE_ROOTS: &[&str] = &["/run/media/", "/media/", "/mnt/"];
@@ -47,8 +54,7 @@ fn mount_points() -> Vec<PathBuf> {
         }
         String::from_utf8_lossy(&out).into_owned()
     }
-    std::fs::read_to_string("/proc/self/mounts")
-        .unwrap_or_default()
+    table
         .lines()
         .filter_map(|line| {
             let mut fields = line.split(' ');
@@ -103,4 +109,63 @@ pub fn watch(on_change: impl Fn(&[Volume]) + Send + 'static) {
             }
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cards_are_found_by_filesystem_or_where_they_are_mounted() {
+        let table = "\
+proc /proc proc rw,nosuid,nodev,noexec,relatime 0 0
+/dev/nvme0n1p2 / ext4 rw,relatime 0 0
+/dev/nvme0n1p1 /boot vfat rw,relatime,fmask=0022 0 0
+/dev/sdb1 /run/media/coby/EOS_DIGITAL exfat rw,nosuid,nodev,relatime 0 0
+/dev/sdc1 /media/backup ext4 rw,relatime 0 0
+/dev/sdd1 /mnt/card ntfs3 rw,relatime 0 0
+/dev/sde1 /home/coby/odd\\040place fuseblk rw,relatime 0 0
+tmpfs /run/user/1000 tmpfs rw,nosuid,nodev 0 0
+";
+        let found: Vec<String> = card_mounts(table).iter().map(|path| path.to_string_lossy().into_owned()).collect();
+        assert_eq!(
+            found,
+            ["/boot", "/run/media/coby/EOS_DIGITAL", "/media/backup", "/mnt/card", "/home/coby/odd place"],
+            "card filesystems anywhere, and anything under the usual removable roots",
+        );
+    }
+
+    #[test]
+    fn escaped_characters_in_mount_points_are_read_back() {
+        let table = "/dev/sdb1 /run/media/coby/My\\040Card\\011(2)\\134x vfat rw 0 0\n";
+        assert_eq!(card_mounts(table), [PathBuf::from("/run/media/coby/My Card\t(2)\\x")]);
+        // A backslash not followed by three octal digits is kept as it is.
+        let table = "/dev/sdb1 /media/a\\b\\9 vfat rw 0 0\n";
+        assert_eq!(card_mounts(table), [PathBuf::from("/media/a\\b\\9")]);
+    }
+
+    #[test]
+    fn short_or_empty_lines_are_skipped() {
+        assert!(card_mounts("").is_empty());
+        assert!(card_mounts("\n\nnonsense\n/dev/sdb1\n").is_empty());
+        assert_eq!(card_mounts("/dev/sdb1 /media/card\n/dev/sdc1 /media/other vfat\n"), [PathBuf::from("/media/other")]);
+    }
+
+    #[test]
+    fn a_card_is_a_volume_with_a_dcim_folder() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let card = dir.path().join("EOS_DIGITAL");
+        std::fs::create_dir_all(card.join("DCIM/100CANON")).unwrap();
+        let drive = dir.path().join("BACKUP");
+        std::fs::create_dir_all(&drive).unwrap();
+        let odd = dir.path().join("ODD");
+        std::fs::create_dir_all(&odd).unwrap();
+        std::fs::write(odd.join("DCIM"), b"a file, not a folder").unwrap();
+
+        let volume = camera_volume(&card).unwrap();
+        assert_eq!(volume, Volume { name: "EOS_DIGITAL".into(), path: card.to_string_lossy().into_owned() });
+        assert_eq!(camera_volume(&drive), None);
+        assert_eq!(camera_volume(&odd), None);
+        assert_eq!(camera_volume(&dir.path().join("gone")), None);
+    }
 }
