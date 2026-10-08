@@ -280,6 +280,7 @@ impl Library {
         // Leftovers from an import or review that was interrupted.
         let _ = fs::remove_dir_all(library.incoming_dir());
         let _ = fs::remove_dir_all(library.scan_cache_dir());
+        crate::thumbs::forget_old_looks(&library).context("checking thumbnails against this version")?;
         Ok(library)
     }
 

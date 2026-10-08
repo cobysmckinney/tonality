@@ -138,6 +138,7 @@ const SCENE_SKY: usize = 2;
 
 /// Names the subject model and the way its answer is refined. Part of each
 /// cached matte's file name, so changing either finds every matte again.
+/// Bump `gpu::LOOK_VERSION` too, so thumbnails drawn with the old mattes go.
 const SUBJECT_TAG: &str = "isnet-1";
 const SKY_TAG: &str = "skyseg-ade-1";
 

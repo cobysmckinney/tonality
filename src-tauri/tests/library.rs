@@ -7,6 +7,8 @@ use std::time::{Duration, SystemTime};
 
 use image::{Rgb, RgbImage};
 use tempfile::TempDir;
+use tonality_lib::edit::Adjustments;
+use tonality_lib::gpu::LOOK_VERSION;
 use tonality_lib::import::{self, ScanSession};
 use tonality_lib::library::{self, Library, LibraryInUse, View};
 use tonality_lib::thumbs;
@@ -375,6 +377,39 @@ fn a_library_opens_in_one_copy_at_a_time() {
     assert!(error.is::<LibraryInUse>(), "unexpected error: {error:#}");
     drop(library);
     Library::open(&root).expect("the library opens again once the first copy closes");
+}
+
+#[test]
+fn an_update_that_changes_the_look_redraws_edited_photos_only() {
+    let Fixture { _dir, library, card } = fixture();
+    import_all(&library, &scan(&library, &[card]));
+    let photos = library.list_photos(View::Library).unwrap();
+    let (edited, plain) = (photos[0].id, photos[1].id);
+    library.history_commit(edited, &Adjustments { exposure: 1.0, ..Default::default() }, "Exposure +1.00").unwrap();
+    // Stand-ins for images drawn earlier.
+    let edited_images = [library.thumb_path(edited), library.preview_path(edited)];
+    let plain_images = [library.thumb_path(plain), library.preview_path(plain)];
+    for path in edited_images.iter().chain(&plain_images) {
+        write_bytes(path, b"drawn earlier");
+    }
+    let root = library.root().to_path_buf();
+    let version = |library: &Library, id| library.list_photos(View::Library).unwrap().iter().find(|p| p.id == id).unwrap().version;
+    let before = version(&library, edited);
+
+    // Opening again with the same look keeps them all.
+    drop(library);
+    let library = Library::open(&root).unwrap();
+    assert!(edited_images.iter().chain(&plain_images).all(|path| path.is_file()));
+    assert_eq!(version(&library, edited), before);
+
+    // As if they were drawn by an older version.
+    library.set_setting(thumbs::LOOK_SETTING, "0").unwrap();
+    drop(library);
+    let library = Library::open(&root).unwrap();
+    assert!(edited_images.iter().all(|path| !path.exists()), "the edited photo's images are dropped");
+    assert!(plain_images.iter().all(|path| path.is_file()), "the camera's own picture is kept");
+    assert!(version(&library, edited) > before, "so the window doesn't show a copy it kept");
+    assert_eq!(library.setting(thumbs::LOOK_SETTING).unwrap(), Some(LOOK_VERSION.to_string()));
 }
 
 /// Runs the real decoders over a folder of camera files:
