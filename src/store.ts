@@ -256,11 +256,12 @@ interface State {
   /**
    * Starts a mask holding one part of this kind (or the background), and
    * works on it. An object needs a circle drawn first: without one
-   * (`drawn`), drawing it begins.
+   * (`drawn`), drawing it begins. When the part has to be found first,
+   * returns once that's done.
    */
-  addMask: (start: MaskStart, drawn?: Shape) => void;
+  addMask: (start: MaskStart, drawn?: Shape) => Promise<void> | void;
   /** Adds a part to the mask being worked on; an object, as `addMask`. */
-  addMaskPart: (kind: Shape["kind"], mode: MaskMode, drawn?: Shape) => void;
+  addMaskPart: (kind: Shape["kind"], mode: MaskMode, drawn?: Shape) => Promise<void> | void;
   /** Begins drawing a circle on the photo, for its object to be found. */
   startCircle: (circling: NonNullable<EditorState["circling"]>) => void;
   cancelCircle: () => void;
@@ -496,24 +497,38 @@ export const useStore = create<State>((set, get) => {
   /**
    * Runs `then` straight away, or when it needs found parts (the subject,
    * the sky, a circled object), once the backend has found them in the open
-   * photo: a second or two each the first time.
+   * photo: a second or two each the first time. Asked while something else
+   * is being found, it waits its turn.
    */
-  const foundFirst = async (shapes: Shape[], then: () => void) => {
+  let findQueue: Promise<unknown> = Promise.resolve();
+  let findsWaiting = 0;
+  const foundFirst = (shapes: Shape[], then: () => void): Promise<void> | void => {
     if (shapes.length === 0) return then();
     const { photoId, ready, finding } = get().editor;
-    if (!ready || photoId === null || finding) return;
+    if (!ready || photoId === null) return;
     const kinds = new Set(shapes.map((shape) => shape.kind));
     const what = kinds.size > 1 ? "the masks’ parts" : kinds.has("sky") ? "the sky" : kinds.has("object") ? "the object" : "the subject";
-    setEditor({ finding: what });
-    try {
-      await during(`Finding ${what}`, () => api.findParts(photoId, shapes));
-      if (get().editor.photoId === photoId) then();
-    } catch (error) {
-      get().toast({ text: `Couldn’t find ${what}: ${error}`, tone: "error" });
-    } finally {
-      // Opening another photo meanwhile has already reset the editor.
-      if (get().editor.photoId === photoId) setEditor({ finding: null, circling: null });
-    }
+    const here = () => get().editor.photoId === photoId;
+    findsWaiting++;
+    if (finding === null) setEditor({ finding: what });
+    const run = async () => {
+      try {
+        // Opening another photo meanwhile drops what was asked of this one.
+        if (!here()) return;
+        setEditor({ finding: what });
+        await during(`Finding ${what}`, () => api.findParts(photoId, shapes));
+        if (here()) then();
+      } catch (error) {
+        get().toast({ text: `Couldn’t find ${what}: ${error}`, tone: "error" });
+      } finally {
+        findsWaiting--;
+        // Opening another photo meanwhile has already reset the editor.
+        if (here() && findsWaiting === 0) setEditor({ finding: null });
+      }
+    };
+    const result = findQueue.then(run);
+    findQueue = result;
+    return result;
   };
 
   /** Takes in a history the library just returned for the open photo. */
@@ -691,7 +706,7 @@ export const useStore = create<State>((set, get) => {
       const { size, adjustments } = get().editor;
       if (!size) return;
       const shape = drawn ?? newShape(kind, size, adjustments);
-      void foundFirst(isFound(shape) ? [shape] : [], () => {
+      return foundFirst(isFound(shape) ? [shape] : [], () => {
         const { ready, size, adjustments } = get().editor;
         const { masks } = adjustments;
         if (!ready || !size || masks.length >= MAX_MASKS || !canAdd(masks, kind)) return;
@@ -709,7 +724,7 @@ export const useStore = create<State>((set, get) => {
       const shape = drawn ?? newShape(kind, size, adjustments);
       const name = SHAPE_NAMES[kind].toLowerCase();
       // The part goes to the mask it was asked for, whichever is chosen by the time it's found.
-      void foundFirst(isFound(shape) ? [shape] : [], () => {
+      return foundFirst(isFound(shape) ? [shape] : [], () => {
         const { ready, adjustments, maskId } = get().editor;
         if (!ready) return;
         const mask = adjustments.masks.find((m) => m.id === target);
@@ -735,14 +750,16 @@ export const useStore = create<State>((set, get) => {
       const { circling, adjustments, maskId } = get().editor;
       if (!circling || circling.points) return;
       const shape = circleShape(points);
-      setEditor({ circling: { ...circling, points } });
+      const loop = { ...circling, points };
+      setEditor({ circling: loop });
+      let asked: Promise<void> | void;
       if (circling.replace !== undefined) {
         const mask = adjustments.masks.find((m) => m.id === maskId);
         const part = mask?.parts[circling.replace];
         if (!mask || !part) return setEditor({ circling: null });
         const index = circling.replace;
         // Only the circle changes, on the mask and part it was drawn for, as they are once it's found.
-        void foundFirst([shape], () => {
+        asked = foundFirst([shape], () => {
           const now = get().editor.adjustments.masks.find((m) => m.id === mask.id);
           const same = now?.parts[index];
           if (!now || !same || JSON.stringify(same.shape) !== JSON.stringify(part.shape)) {
@@ -751,8 +768,12 @@ export const useStore = create<State>((set, get) => {
           const parts = now.parts.map((p, i) => (i === index ? { ...p, shape } : p));
           get().updateMask(now.id, { parts }, `${now.name}: circle again`);
         });
-      } else if (circling.mode === null) get().addMask("object", shape);
-      else get().addMaskPart("object", circling.mode, shape);
+      } else if (circling.mode === null) asked = get().addMask("object", shape);
+      else asked = get().addMaskPart("object", circling.mode, shape);
+      // The loop stays on the photo until its object is found, even behind another find.
+      void Promise.resolve(asked).finally(() => {
+        if (get().editor.circling === loop) setEditor({ circling: null });
+      });
     },
 
     updateMask(id, change, label) {
