@@ -508,19 +508,80 @@ fn shrink(image: RgbImage, edge: u32) -> Result<RgbImage> {
 
 /// Writes `image` as a JPEG, atomically, so a half-written file is never served.
 pub fn write_jpeg(image: &RgbImage, dest: &Path, quality: u8) -> Result<()> {
+    write_atomically(dest, |writer| {
+        image::codecs::jpeg::JpegEncoder::new_with_quality(writer, quality).encode(
+            image.as_raw(),
+            image.width(),
+            image.height(),
+            image::ExtendedColorType::Rgb8,
+        )?;
+        Ok(())
+    })
+}
+
+/// Writes a file at `dest` through `write`, so a half-written file is never
+/// read: it goes to a partial file next to `dest`, which is moved into place
+/// only once it is complete, and deleted if anything fails.
+pub fn write_atomically(dest: &Path, write: impl FnOnce(&mut BufWriter<File>) -> Result<()>) -> Result<()> {
     let dir = dest.parent().context("destination has no parent folder")?;
     fs::create_dir_all(dir)?;
     // Two requests can render the same photo at once; give each its own partial file.
     static COUNTER: AtomicU64 = AtomicU64::new(0);
     let partial = dest.with_extension(format!("{}.part", COUNTER.fetch_add(1, Ordering::Relaxed)));
     let mut writer = BufWriter::new(File::create(&partial)?);
-    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut writer, quality).encode(
-        image.as_raw(),
-        image.width(),
-        image.height(),
-        image::ExtendedColorType::Rgb8,
-    )?;
-    writer.into_inner().map_err(|e| e.into_error())?;
-    fs::rename(&partial, dest)?;
-    Ok(())
+    let written = (|| {
+        write(&mut writer)?;
+        writer.into_inner().map_err(|e| e.into_error())?;
+        fs::rename(&partial, dest)?;
+        Ok(())
+    })();
+    if written.is_err() {
+        let _ = fs::remove_file(&partial);
+    }
+    written
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn leftovers(dir: &Path) -> Vec<String> {
+        fs::read_dir(dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|name| name.ends_with(".part"))
+            .collect()
+    }
+
+    #[test]
+    fn a_written_jpeg_is_moved_into_place() {
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("ab/1.jpg");
+        write_jpeg(&RgbImage::new(8, 4), &dest, 80).unwrap();
+        assert_eq!(image::open(&dest).unwrap().width(), 8);
+        assert!(leftovers(dest.parent().unwrap()).is_empty());
+    }
+
+    #[test]
+    fn a_jpeg_that_cant_be_moved_into_place_leaves_nothing_behind() {
+        let dir = tempfile::tempdir().unwrap();
+        // A file can't be renamed over a folder that has something in it.
+        let dest = dir.path().join("1.jpg");
+        fs::create_dir(&dest).unwrap();
+        fs::write(dest.join("keep"), b"x").unwrap();
+        assert!(write_jpeg(&RgbImage::new(8, 4), &dest, 80).is_err());
+        assert!(leftovers(dir.path()).is_empty());
+    }
+
+    #[test]
+    fn a_failed_write_leaves_nothing_behind() {
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("1.jpg");
+        let result = write_atomically(&dest, |writer| {
+            std::io::Write::write_all(writer, b"half a picture")?;
+            bail!("the encoder gave up")
+        });
+        assert!(result.is_err());
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 0);
+    }
 }

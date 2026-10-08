@@ -29,11 +29,14 @@ struct MaskPart {
 
 struct Params {
     // The part of the frame being drawn: frame = view.xy + uv * view.zw.
-    // The frame is the cropped picture.
+    // The frame is the crop, or in the crop tool the whole tilted photo.
     view: vec4f,
     // Two rows of the matrix taking a frame position to a position in the
     // photo, undoing crop, straightening, flips and quarter-turns.
     to_source: array<vec4f, 2>,
+    // Where the crop sits in the frame (left, top, width, height, 0..1): the
+    // whole frame normally, a part of it in the crop tool.
+    crop: vec4f,
     // width, height, source pixels per output pixel, 1 if scene-referred (RAW).
     image: vec4f,
     // exposure (EV), contrast, highlights, shadows
@@ -85,6 +88,8 @@ fn vertex(@builtin(vertex_index) index: u32) -> VertexOutput {
 
 const LUMA = vec3f(0.2126, 0.7152, 0.0722);
 const MID_GRAY = 0.18;
+// The Exposure slider's limit in stops, either way. MAX_EXPOSURE in edit.rs.
+const MAX_EXPOSURE = 5.0;
 
 // The built-in look for RAW files. Exposure and saturation were fitted so the
 // brightness distribution and colourfulness of unedited photos match the
@@ -100,6 +105,18 @@ fn luma(c: vec3f) -> f32 {
 // Squeezes scene luminance into 0..1 with mid gray at 0.5, for building masks.
 fn tonal_position(l: f32) -> f32 {
     return l / (l + MID_GRAY);
+}
+
+// Lifts a veil of haze off a colour, or lays one on when dehaze is negative.
+fn lift_veil(c: vec3f, haze: f32, dehaze: f32) -> vec3f {
+    var h = haze;
+    if (dehaze > 0.0) {
+        // A colour can't carry more veil than its own darkest channel;
+        // without this limit, dark detail in a bright area turns black.
+        h = min(h, min(c.r, min(c.g, c.b)));
+    }
+    let veil = dehaze * 0.6 * h;
+    return max((c - veil) / (1.0 - veil), vec3f(0.0));
 }
 
 fn srgb_encode(c: vec3f) -> vec3f {
@@ -298,7 +315,7 @@ fn fragment(in: VertexOutput) -> @location(0) vec4f {
             detail += applied * mask.detail;
         }
         // Each slider still ends at its own limits, however many masks add up.
-        light = vec4f(light.x, clamp(light.yzw, vec3f(-1.0), vec3f(1.0)));
+        light = clamp(light, vec4f(-MAX_EXPOSURE, -1.0, -1.0, -1.0), vec4f(MAX_EXPOSURE, 1.0, 1.0, 1.0));
         tone = clamp(tone, vec4f(-1.0), vec4f(1.0));
         color = clamp(color, vec4f(-1.0), vec4f(1.0));
         detail = clamp(detail, vec4f(-1.0), vec4f(1.0));
@@ -319,11 +336,17 @@ fn fragment(in: VertexOutput) -> @location(0) vec4f {
         c = denoise(uv, lod, texel, c, noise_reduction * fine);
     }
 
-    var sharpening = detail.x * 1.6;
-    if (scene_referred) {
-        sharpening += BASE_SHARPENING;
+    // Sharpening pushes each pixel's brightness away from its neighbours';
+    // below zero (only a mask can go there) it pulls it towards them instead.
+    let base_sharpening = select(0.0, BASE_SHARPENING, scene_referred);
+    var sharpening = base_sharpening + detail.x * 1.6;
+    if (detail.x < 0.0) {
+        // -100 lands halfway to the neighbours, in log terms, whatever the
+        // file's own sharpening: a one-pixel blur. Any further would start to
+        // turn the finest detail inside out.
+        sharpening = mix(base_sharpening, -0.5, -detail.x);
     }
-    if (sharpening > 0.0) {
+    if (sharpening != 0.0) {
         let around = (read_source(uv + vec2f(texel.x, 0.0), lod) + read_source(uv - vec2f(texel.x, 0.0), lod)
             + read_source(uv + vec2f(0.0, texel.y), lod) + read_source(uv - vec2f(0.0, texel.y), lod)) * 0.25;
         let ratio = clamp((luma(c) + 0.002) / (luma(around) + 0.002), 0.5, 2.0);
@@ -336,21 +359,19 @@ fn fragment(in: VertexOutput) -> @location(0) vec4f {
     gains /= luma(gains);
     let gain = gains * exp2(light.x);
     c *= gain;
-    let medium = max(textureSampleLevel(blur_medium, linear_sampler, uv, 0.0).rgb, vec3f(0.0)) * gain;
-    let large = max(textureSampleLevel(blur_large, linear_sampler, uv, 0.0).rgb, vec3f(0.0)) * gain;
+    var medium = max(textureSampleLevel(blur_medium, linear_sampler, uv, 0.0).rgb, vec3f(0.0)) * gain;
+    var large = max(textureSampleLevel(blur_large, linear_sampler, uv, 0.0).rgb, vec3f(0.0)) * gain;
 
     // Dehaze: haze is a veil of light, strongest where even the darkest
     // channel of the neighbourhood is bright. Lift it off (or lay it on).
+    // The blurs lose the same veil, so clarity and shadows/highlights
+    // compare the pixel with surroundings that are as dehazed as it is.
     let dehaze = color.w;
     if (dehaze != 0.0) {
-        var haze = min(min(large.r, min(large.g, large.b)), 0.9);
-        if (dehaze > 0.0) {
-            // A pixel can't carry more veil than its own darkest channel;
-            // without this limit, dark detail in a bright area turns black.
-            haze = min(haze, min(c.r, min(c.g, c.b)));
-        }
-        let veil = dehaze * 0.6 * haze;
-        c = max((c - veil) / (1.0 - veil), vec3f(0.0));
+        let haze = min(min(large.r, min(large.g, large.b)), 0.9);
+        c = lift_veil(c, haze, dehaze);
+        medium = lift_veil(medium, haze, dehaze);
+        large = lift_veil(large, haze, dehaze);
     }
 
     // Clarity: exaggerate (or soften) how each pixel differs from its
@@ -421,8 +442,10 @@ fn fragment(in: VertexOutput) -> @location(0) vec4f {
     v = mix(vec3f(gray), v, boost);
 
     // Vignette: darken or lighten towards the corners.
-    // It follows the crop, so it frames the picture you end up with.
-    let from_center = length((frame_uv - 0.5) * 1.41421356);
+    // It follows the crop, so it frames the picture you end up with, even
+    // while the crop tool shows the whole photo around it.
+    let in_crop = (frame_uv - p.crop.xy) / p.crop.zw;
+    let from_center = length((in_crop - 0.5) * 1.41421356);
     let edge = smoothstep(0.25, 1.0, from_center);
     v *= 1.0 + detail.z * 0.85 * edge * edge;
 

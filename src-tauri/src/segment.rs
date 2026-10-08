@@ -12,9 +12,7 @@
 //! before any edits, so it follows crops and turns like every other mask
 //! part, and is kept on disk next to the thumbnails.
 
-use std::fs;
 use std::path::Path;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -27,6 +25,7 @@ use crate::develop::LinearImage;
 use crate::edit::Shape;
 use crate::gpu::fit_within;
 use crate::masks::COVERAGE_EDGE;
+use crate::media;
 
 /// ImageNet's colour normalisation, which most of the models were trained with.
 const IMAGENET: Normalise = Normalise { mean: [0.485, 0.456, 0.406], deviation: [0.229, 0.224, 0.225] };
@@ -672,17 +671,40 @@ fn resize(image: &RgbImage, width: u32, height: u32) -> Result<RgbImage> {
 
 /// Writes `matte` as a PNG, atomically, so a half-written file is never read.
 fn write_png(matte: &GrayImage, dest: &Path) -> Result<()> {
-    fs::create_dir_all(dest.parent().context("destination has no parent folder")?)?;
-    static COUNTER: AtomicU64 = AtomicU64::new(0);
-    let partial = dest.with_extension(format!("{}.part", COUNTER.fetch_add(1, Ordering::Relaxed)));
-    matte.save_with_format(&partial, image::ImageFormat::Png)?;
-    fs::rename(&partial, dest)?;
-    Ok(())
+    use image::ImageEncoder;
+    media::write_atomically(dest, |writer| {
+        image::codecs::png::PngEncoder::new(writer).write_image(
+            matte.as_raw(),
+            matte.width(),
+            matte.height(),
+            image::ExtendedColorType::L8,
+        )?;
+        Ok(())
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_matte_is_cached_as_a_png_and_a_failed_one_leaves_nothing_behind() {
+        let dir = tempfile::tempdir().unwrap();
+        let matte = GrayImage::from_fn(6, 3, |x, _| image::Luma([x as u8 * 40]));
+        let dest = dir.path().join("ab/1.png");
+        write_png(&matte, &dest).unwrap();
+        assert_eq!(image::open(&dest).unwrap().into_luma8(), matte);
+
+        // A file can't be renamed over a folder that has something in it.
+        let blocked = dir.path().join("2.png");
+        std::fs::create_dir(&blocked).unwrap();
+        std::fs::write(blocked.join("keep"), b"x").unwrap();
+        assert!(write_png(&matte, &blocked).is_err());
+        for folder in [dir.path(), dest.parent().unwrap()] {
+            let names: Vec<_> = std::fs::read_dir(folder).unwrap().map(|e| e.unwrap().file_name()).collect();
+            assert!(names.iter().all(|name| !name.to_string_lossy().ends_with(".part")), "{names:?}");
+        }
+    }
 
     #[test]
     fn box_filter_matches_counting_by_hand() {

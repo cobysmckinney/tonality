@@ -336,6 +336,7 @@ impl Library {
     // ---- reading ----
 
     pub fn overview(&self) -> Result<Overview> {
+        self.purge_expired_quietly();
         let db = self.db();
         let count = |sql: &str| db.query_row(sql, [], |r| r.get::<_, u32>(0));
         let albums = db
@@ -382,6 +383,9 @@ impl Library {
                 Some(id),
             ),
         };
+        if matches!(view, View::Deleted) {
+            self.purge_expired_quietly();
+        }
         let db = self.db();
         let mut stmt = db.prepare(&format!("SELECT {COLUMNS} FROM photos p {rest}"))?;
         let map = |r: &Row| {
@@ -669,6 +673,16 @@ impl Library {
             ids
         };
         self.purge(&expired)
+    }
+
+    /// Purges expired photos whenever the library is looked at, so a long
+    /// session doesn't leave them at "0 days left". A file that can't be
+    /// deleted stays in Recently Deleted for next time; it mustn't stop the
+    /// library from showing.
+    fn purge_expired_quietly(&self) {
+        if let Err(error) = self.purge_expired() {
+            eprintln!("{error:#}");
+        }
     }
 
     // ---- albums ----
