@@ -317,6 +317,78 @@ fn a_part_that_cant_be_found_doesnt_show_another_parts_matte() {
     assert_eq!(object(0.8, 0.5), plain);
 }
 
+/// A mask over the whole photo with only its sharpening set.
+fn sharpened(amount: f32) -> Adjustments {
+    with(vec![Mask {
+        id: 1,
+        name: "Test".into(),
+        parts: vec![add(Shape::Luminance { low: 0.0, high: 1.0, smoothness: 0.0 })],
+        adjustments: LocalAdjustments { sharpening: amount, ..Default::default() },
+        ..Default::default()
+    }])
+}
+
+/// How much neighbouring pixels differ, summed over the picture.
+fn roughness(picture: &image::RgbImage) -> i64 {
+    let (width, height) = picture.dimensions();
+    let level = |x, y| picture.get_pixel(x, y).0[1] as i64;
+    let mut total = 0;
+    for y in 0..height - 1 {
+        for x in 0..width - 1 {
+            total += (level(x, y) - level(x + 1, y)).abs() + (level(x, y) - level(x, y + 1)).abs();
+        }
+    }
+    total
+}
+
+#[test]
+fn a_masks_negative_sharpening_softens_a_photo_with_no_sharpening() {
+    let Some(gpu) = gpu() else { return };
+    // A one-pixel checkerboard: the finest detail there is.
+    let (width, height) = (40u32, 30u32);
+    let light = |x: u32, y: u32| (x + y).is_multiple_of(2);
+    let pixels = (0..width * height).map(|i| [if light(i % width, i / width) { 0.3 } else { 0.2 }; 3]).collect();
+    let session = gpu.open(LinearImage { width, height, pixels, scene_referred: false }).unwrap();
+
+    let plain = gpu.render_image(&session, &Adjustments::default(), u32::MAX).unwrap();
+    let half = gpu.render_image(&session, &sharpened(-50.0), u32::MAX).unwrap();
+    let soft = gpu.render_image(&session, &sharpened(-100.0), u32::MAX).unwrap();
+    assert!(roughness(&half) < roughness(&plain), "{} vs {}", roughness(&half), roughness(&plain));
+    assert!(roughness(&soft) < roughness(&half), "{} vs {}", roughness(&soft), roughness(&half));
+
+    // At the end of the slider the checkerboard goes about flat, and doesn't turn inside out.
+    let gap = |picture: &image::RgbImage| {
+        let (mut lights, mut darks) = (0i64, 0i64);
+        for (x, y, pixel) in picture.enumerate_pixels() {
+            if light(x, y) { lights += pixel.0[1] as i64 } else { darks += pixel.0[1] as i64 }
+        }
+        (lights - darks) as f32 / (width * height / 2) as f32
+    };
+    assert!(gap(&plain) > 20.0, "{}", gap(&plain));
+    assert!(gap(&soft).abs() < 2.0, "{} levels apart, from {}", gap(&soft), gap(&plain));
+    assert!(gap(&soft) > -0.5, "turned inside out: {}", gap(&soft));
+}
+
+#[test]
+fn a_masks_negative_sharpening_softens_a_raw_past_its_built_in_sharpening() {
+    let Some(gpu) = gpu() else { return };
+    // Fine noise on a dark grey, as a RAW file would have it.
+    let (width, height) = (64u32, 48u32);
+    let pixels = (0..width * height)
+        .map(|i| {
+            let wobble = (i.wrapping_mul(2_654_435_761) >> 16) % 100;
+            [0.08 + wobble as f32 / 2000.0; 3]
+        })
+        .collect();
+    let session = gpu.open(LinearImage { width, height, pixels, scene_referred: true }).unwrap();
+
+    let roughness_at = |amount| roughness(&gpu.render_image(&session, &sharpened(amount), u32::MAX).unwrap());
+    let (plain, a_little, most) = (roughness_at(0.0), roughness_at(-30.0), roughness_at(-100.0));
+    assert!(a_little < plain, "{a_little} vs {plain}");
+    // Before, everything past about -16 looked the same.
+    assert!(most < a_little * 3 / 4, "{most} vs {a_little}");
+}
+
 /// A mask over the whole photo, with these sliders.
 fn everywhere(adjustments: LocalAdjustments) -> Mask {
     let all = Shape::Luminance { low: 0.0, high: 1.0, smoothness: 0.0 };
