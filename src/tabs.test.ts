@@ -24,4 +24,23 @@ describe("moving along a row of tabs", () => {
     expect(tabAfter("a", 1, 4)).toBeNull();
     expect(tabAfter("ArrowRight", 0, 0)).toBeNull();
   });
+
+  test("they pass over tabs that can't be chosen", () => {
+    // Only the last of four tabs can be chosen, as in the rail of a photo that can't be opened.
+    const onlyLast = (index: number) => index === 3;
+    expect(tabAfter("ArrowDown", 3, 4, onlyLast)).toBe(3);
+    expect(tabAfter("ArrowUp", 3, 4, onlyLast)).toBe(3);
+    expect(tabAfter("Home", 3, 4, onlyLast)).toBe(3);
+    expect(tabAfter("End", 3, 4, onlyLast)).toBe(3);
+    // The second can't be chosen: moving steps over it either way, and Home and End look inwards.
+    const notSecond = (index: number) => index !== 1;
+    expect(tabAfter("ArrowRight", 0, 4, notSecond)).toBe(2);
+    expect(tabAfter("ArrowLeft", 2, 4, notSecond)).toBe(0);
+    expect(tabAfter("Home", 2, 4, (index) => index > 1)).toBe(2);
+    expect(tabAfter("End", 0, 4, (index) => index < 2)).toBe(1);
+  });
+
+  test("with none that can be chosen, nothing moves", () => {
+    expect(tabAfter("ArrowRight", 0, 4, () => false)).toBeNull();
+  });
 });

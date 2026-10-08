@@ -198,7 +198,7 @@ export function ImportSheet() {
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       const current = useStore.getState();
-      if (current.confirmRequest || current.importState?.phase === "importing") return;
+      if (!current.importState || current.confirmRequest || current.importState.phase === "importing") return;
       if (event.key === "Escape") void current.dismissImport();
       // Enter is the sheet's main action unless a button has the focus.
       if (event.key === "Enter" && !(event.target as HTMLElement).closest("button")) void current.runImport();

@@ -4,18 +4,29 @@
  * and choose as they go, as tabs do elsewhere.
  */
 
-/** The tab a key moves to from tab `at` of `count`, going round at the ends; null for keys that don't move. */
-export function tabAfter(key: string, at: number, count: number): number | null {
+/**
+ * The tab a key moves to from tab `at` of `count`, going round at the ends and
+ * passing over tabs that can't be chosen; null for keys that don't move, or
+ * when no tab can be chosen.
+ */
+export function tabAfter(key: string, at: number, count: number, usable: (index: number) => boolean = () => true): number | null {
   if (count === 0) return null;
-  if (key === "ArrowRight" || key === "ArrowDown") return (at + 1) % count;
-  if (key === "ArrowLeft" || key === "ArrowUp") return (at - 1 + count) % count;
-  if (key === "Home") return 0;
-  if (key === "End") return count - 1;
+  let start: number;
+  let step: number;
+  if (key === "ArrowRight" || key === "ArrowDown") [start, step] = [at + 1, 1];
+  else if (key === "ArrowLeft" || key === "ArrowUp") [start, step] = [at - 1, -1];
+  else if (key === "Home") [start, step] = [0, 1];
+  else if (key === "End") [start, step] = [count - 1, -1];
+  else return null;
+  for (let i = 0; i < count; i++) {
+    const index = (((start + i * step) % count) + count) % count;
+    if (usable(index)) return index;
+  }
   return null;
 }
 
 /**
- * For a tab list's keydown: moves the focus to the next tab and chooses it.
+ * For a tab list's keydown: moves the focus to the next tab that can be chosen, and chooses it.
  * The key stops there, so Left and Right on a tab don't also change photo.
  */
 export function onTabKey(
@@ -24,7 +35,8 @@ export function onTabKey(
 ) {
   const tabs = [...event.currentTarget.querySelectorAll<HTMLElement>('[role="tab"]')];
   const at = tabs.findIndex((tab) => tab === document.activeElement);
-  const next = tabAfter(event.key, Math.max(at, 0), tabs.length);
+  const usable = (index: number) => !tabs[index].matches(":disabled, [aria-disabled='true']");
+  const next = tabAfter(event.key, Math.max(at, 0), tabs.length, usable);
   if (next === null) return;
   event.preventDefault();
   event.stopPropagation();

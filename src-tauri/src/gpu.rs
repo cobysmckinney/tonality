@@ -12,7 +12,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use crate::develop::LinearImage;
-use crate::edit::{curve_table, Adjustments, Stroke};
+use crate::edit::{curve_table, Adjustments, Stroke, MAX_EXPOSURE};
 use crate::geometry;
 use crate::masks::{self, Coverage, COVERAGE_EDGE, MAX_BRUSHES, MAX_FOUND, MAX_MASKS, MAX_PARTS};
 use crate::segment::{self, Found};
@@ -73,6 +73,7 @@ pub struct Guides {
 struct Params {
     view: [f32; 4],
     to_source: [[f32; 4]; 2],
+    crop: [f32; 4],
     image: [f32; 4],
     light: [f32; 4],
     tone: [f32; 4],
@@ -626,6 +627,7 @@ impl Gpu {
         let unit = |value: f32| (value / 100.0).clamp(-1.0, 1.0);
         let frame = geometry::frame(session.width, session.height, adjustments, uncropped);
         let to_source = geometry::frame_to_source(session.width, session.height, adjustments, &frame).0;
+        let crop = geometry::crop_in_frame(session.width, session.height, adjustments, &frame);
         let (packed, strokes, found) = masks::pack(&a.masks, session.width, session.height, mask_overlay);
         for (part, error) in self.ensure_found(session, &found) {
             eprintln!("couldn't find {}, drawing it as empty: {error:#}", part.name());
@@ -642,13 +644,14 @@ impl Gpu {
         let params = Params {
             view: [region.x, region.y, region.width, region.height],
             to_source: to_source.map(|row| [row[0] as f32, row[1] as f32, row[2] as f32, 0.0]),
+            crop: crop.map(|value| value as f32),
             image: [
                 session.width as f32,
                 session.height as f32,
                 source_pixels_per_output_pixel,
                 session.scene_referred as u8 as f32,
             ],
-            light: [a.exposure.clamp(-5.0, 5.0), unit(a.contrast), unit(a.highlights), unit(a.shadows)],
+            light: [a.exposure.clamp(-MAX_EXPOSURE, MAX_EXPOSURE), unit(a.contrast), unit(a.highlights), unit(a.shadows)],
             tone: [unit(a.whites), unit(a.blacks), unit(a.temperature), unit(a.tint)],
             color: [unit(a.vibrance), unit(a.saturation), unit(a.clarity), unit(a.dehaze)],
             detail: [unit(a.sharpening).max(0.0), unit(a.noise_reduction).max(0.0), unit(a.vignette), unit(a.grain).max(0.0)],
@@ -813,6 +816,7 @@ fn spans(from: u32, to: u32) -> Vec<Vec<(usize, f32)>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::edit::Crop;
 
     /// A small picture that changes smoothly both ways.
     fn gradient(gpu: &Gpu) -> Session {
@@ -825,6 +829,49 @@ mod tests {
 
     fn gpu() -> Option<&'static Gpu> {
         shared().inspect_err(|error| eprintln!("skipping: {error:#}")).ok()
+    }
+
+    /// A picture of one flat grey, which has no local contrast anywhere.
+    fn flat(gpu: &Gpu, value: f32) -> Session {
+        let (width, height) = (64u32, 48u32);
+        let pixels = vec![[value; 3]; (width * height) as usize];
+        gpu.open(LinearImage { width, height, pixels, scene_referred: false }).unwrap()
+    }
+
+    /// The largest difference between two renders, in 8-bit steps.
+    fn largest_difference(a: &image::RgbImage, b: &image::RgbImage) -> u8 {
+        assert_eq!(a.dimensions(), b.dimensions());
+        a.as_raw().iter().zip(b.as_raw()).map(|(a, b)| a.abs_diff(*b)).max().unwrap()
+    }
+
+    #[test]
+    fn clarity_leaves_a_flat_dehazed_picture_alone() {
+        let Some(gpu) = gpu() else { return };
+        let session = flat(gpu, 0.3);
+        for dehaze in [100.0, -100.0] {
+            let dehazed = Adjustments { dehaze, ..Default::default() };
+            let with_clarity = Adjustments { clarity: 100.0, ..dehazed.clone() };
+            let dehazed = gpu.render_image(&session, &dehazed, u32::MAX).unwrap();
+            let with_clarity = gpu.render_image(&session, &with_clarity, u32::MAX).unwrap();
+            let difference = largest_difference(&dehazed, &with_clarity);
+            assert!(difference <= 1, "clarity moved a flat picture with dehaze {dehaze} by {difference} steps");
+        }
+    }
+
+    #[test]
+    fn shadows_and_highlights_judge_a_dehazed_picture_by_how_it_now_looks() {
+        let Some(gpu) = gpu() else { return };
+        // Dehaze +100 takes a veil of 0.6 x 0.3 off a flat 0.3 grey.
+        let veil = 0.6 * 0.3;
+        let hazy = flat(gpu, 0.3);
+        let clear = flat(gpu, (0.3 - veil) / (1.0 - veil));
+        for (shadows, highlights) in [(100.0, 0.0), (0.0, -100.0)] {
+            let edit = Adjustments { shadows, highlights, ..Default::default() };
+            let dehazed = gpu.render_image(&hazy, &Adjustments { dehaze: 100.0, ..edit.clone() }, u32::MAX).unwrap();
+            let already_clear = gpu.render_image(&clear, &edit, u32::MAX).unwrap();
+            let difference = largest_difference(&dehazed, &already_clear);
+            assert!(difference <= 1, "shadows {shadows} and highlights {highlights} differ by {difference} steps");
+        }
     }
 
     #[test]
@@ -843,6 +890,28 @@ mod tests {
         assert_eq!(whole.0, (96, 80));
         // Seven rows at a time, leaving a short band at the bottom.
         assert!(whole == draw(96 * 7), "bands differ from the picture drawn in one go");
+    }
+
+    #[test]
+    fn the_crop_tool_draws_the_vignette_around_the_crop() {
+        let Some(gpu) = gpu() else { return };
+        let (width, height) = (120u32, 80u32);
+        let flat = LinearImage { width, height, pixels: vec![[0.5; 3]; (width * height) as usize], scene_referred: false };
+        let session = gpu.open(flat).unwrap();
+        // Half the photo, off to the left and down: 60 x 40 pixels from (12, 28).
+        let crop = Crop { x: 0.35, y: 0.6, width: 0.5, height: 0.5 };
+        let edit = Adjustments { vignette: -80.0, crop, ..Default::default() };
+        let cropped = gpu.render(&session, &edit, Region::FULL, (60, 40), Guides::default()).unwrap();
+        let whole =
+            gpu.render(&session, &edit, Region::FULL, (width, height), Guides { uncropped: true, ..Default::default() }).unwrap();
+        let grey = |rgba: &[u8], row: u32, x: u32, y: u32| rgba[((y * row + x) * 4) as usize] as i32;
+
+        let middle = grey(&cropped, 60, 30, 20);
+        assert!(grey(&cropped, 60, 0, 0) < middle - 40, "the vignette darkens the crop's corners");
+        for (x, y) in [(0, 0), (59, 0), (0, 39), (59, 39), (30, 20), (10, 30)] {
+            let (in_crop, in_whole) = (grey(&cropped, 60, x, y), grey(&whole, width, 12 + x, 28 + y));
+            assert!((in_crop - in_whole).abs() <= 2, "at ({x}, {y}) of the crop: {in_crop} cropped, {in_whole} in the crop tool");
+        }
     }
 
     #[test]
@@ -882,6 +951,12 @@ mod tests {
         }
         let mean = held.pixels.iter().map(|pixel| pixel[2]).sum::<f32>() / held.pixels.len() as f32;
         assert!((mean - 0.5).abs() < 1e-3);
+    }
+
+    #[test]
+    fn the_shader_caps_exposure_where_the_sliders_do() {
+        let shader = include_str!("shaders/develop.wgsl");
+        assert!(shader.contains(&format!("const MAX_EXPOSURE = {MAX_EXPOSURE:.1};")));
     }
 
     #[test]
