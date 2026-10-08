@@ -128,7 +128,7 @@ function PartRow(props: { mask: Mask; part: MaskPart; index: number; selected: b
 function MaskParts({ mask, partIndex }: { mask: Mask; partIndex: number | null }) {
   const masks = useStore((s) => s.editor.adjustments.masks);
   const finding = useStore((s) => s.editor.finding !== null);
-  const circling = useStore((s) => s.editor.circling !== null);
+  const circling = useStore((s) => s.editor.circling !== null && !s.editor.circling.points);
   const s = useStore.getState();
   const partMenu = (mode: MaskMode) => (event: React.MouseEvent) =>
     menuBelow(
@@ -142,7 +142,7 @@ function MaskParts({ mask, partIndex }: { mask: Mask; partIndex: number | null }
           <PartRow key={index} mask={mask} part={part} index={index} selected={index === partIndex} />
         ))}
       </ul>
-      {circling && !finding ? (
+      {circling ? (
         <div className="mask-part-actions">
           <span className="layer-note">Draw a loop on the photo</span>
           <button className="button quiet" onClick={() => s.cancelCircle()}>
@@ -175,6 +175,8 @@ function MaskParts({ mask, partIndex }: { mask: Mask; partIndex: number | null }
 function MaskRow(props: { mask: Mask; matte: ImageData | undefined; selected: boolean; partIndex: number | null }) {
   const { mask, matte, selected, partIndex } = props;
   const [renaming, setRenaming] = useState(false);
+  // The part that was chosen when a click let go of this mask, so a double-click can choose it again.
+  const lastPart = useRef<number | null>(null);
   const s = useStore.getState();
 
   const entries: MenuEntry[] = [
@@ -202,8 +204,17 @@ function MaskRow(props: { mask: Mask; matte: ImageData | undefined; selected: bo
             className="mask-row-main"
             aria-pressed={selected}
             // A second click on the chosen mask lets go of it, back to starting a new one.
-            onClick={() => s.selectMask(selected ? null : mask.id)}
-            onDoubleClick={() => setRenaming(true)}
+            // The second click of a double-click is the rename's, not another toggle.
+            onClick={(event) => {
+              if (event.detail > 1) return;
+              lastPart.current = selected ? partIndex : null;
+              s.selectMask(selected ? null : mask.id);
+            }}
+            // Renaming a mask chooses it, as it was if the first click let go of it.
+            onDoubleClick={() => {
+              if (!selected) s.selectMask(mask.id, lastPart.current ?? 0);
+              setRenaming(true);
+            }}
             onContextMenu={(event) => {
               event.preventDefault();
               s.openMenu(event.clientX, event.clientY, entries);

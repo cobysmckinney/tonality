@@ -8,6 +8,7 @@ import {
   FolderOpen,
   Heart,
   History as HistoryIcon,
+  ImageOff,
   Info as InfoIcon,
   Layers,
   LucideIcon,
@@ -229,6 +230,7 @@ function Stage({ photo, onZoomChange }: { photo: Photo; onZoomChange: (label: st
   const [painted, setPainted] = useState<{ id: number; region: Region; uncropped: boolean } | null>(null);
 
   const ready = useStore((s) => s.editor.ready && s.editor.photoId === photo.id);
+  const failed = useStore((s) => (s.editor.photoId === photo.id ? s.editor.failed : null));
   const photoSize = useStore((s) => s.editor.size);
   const own = useStore((s) => s.editor.adjustments);
   const trying = useStore((s) => s.editor.preview);
@@ -238,16 +240,12 @@ function Stage({ photo, onZoomChange }: { photo: Photo; onZoomChange: (label: st
   const showClipping = useStore((s) => s.editor.showClipping && !s.editor.showOriginal);
   const uncropped = useStore((s) => s.sidePanel === "crop" && !s.editor.showOriginal);
   const masking = useStore((s) => s.sidePanel === "masks" && !s.editor.showOriginal);
-  const circling = useStore((s) => s.sidePanel === "masks" && s.editor.circling !== null && s.editor.finding === null);
+  const circling = useStore((s) => s.sidePanel === "masks" && s.editor.circling !== null && !s.editor.circling.points);
   const maskOverlay = useStore((s) =>
     s.sidePanel === "masks" && s.editor.showMask && !s.editor.showOriginal ? s.editor.maskId : null,
   );
 
-  // A vignette follows the crop, so it has no meaning on the uncropped view.
-  const adjustments = useMemo(
-    () => (showOriginal ? DEFAULTS : uncropped ? { ...current, vignette: 0 } : current),
-    [current, showOriginal, uncropped],
-  );
+  const adjustments = useMemo(() => (showOriginal ? DEFAULTS : current), [current, showOriginal]);
   /** The size, in photo pixels, of the picture being shown. */
   const frame = useMemo(
     () => (photoSize ? frameSize(photoSize, adjustments, uncropped) : null),
@@ -428,7 +426,7 @@ function Stage({ photo, onZoomChange }: { photo: Photo; onZoomChange: (label: st
       onPointerCancel={() => (drag.current = null)}
     >
       {/* Until the editor has drawn its first frame, show the saved preview. */}
-      {!live && (
+      {!live && !failed && (
         <>
           <img src={thumbUrl(photo)} alt="" draggable={false} />
           <img key={photo.id} src={previewUrl(photo)} alt={photo.fileName} draggable={false} />
@@ -446,7 +444,14 @@ function Stage({ photo, onZoomChange }: { photo: Photo; onZoomChange: (label: st
           <MaskOverlay photo={photoSize} region={geometry.region} width={shown.width} height={shown.height} />
         )}
       </div>
-      {!ready && <span className="stage-note">Preparing photo…</span>}
+      {!ready && !failed && <span className="stage-note">Preparing photo…</span>}
+      {failed && (
+        <div className="stage-failed" role="alert">
+          <ImageOff size={22} strokeWidth={1.75} />
+          <p>This photo can’t be opened.</p>
+          <p className="stage-failed-reason">{failed}</p>
+        </div>
+      )}
       {ready && circling && <span className="stage-note centered">Draw a loop around what you want · Esc cancels</span>}
     </div>
   );
@@ -462,9 +467,13 @@ const TOOLS: { panel: SidePanelName; label: string; key: string; icon: LucideIco
   { panel: "info", label: "Info", key: "I", icon: InfoIcon },
 ];
 
+/** The tool shown in the side panel. A photo that can't be opened has nothing to edit, only its info to show. */
+const useShownPanel = () => useStore((s) => (s.editor.failed ? "info" : s.sidePanel));
+
 /** The tools, as a column of icons along the window's right edge. */
 function Rail() {
-  const panel = useStore((s) => s.sidePanel);
+  const panel = useShownPanel();
+  const failed = useStore((s) => s.editor.failed !== null);
   const setPanel = useStore((s) => s.setSidePanel);
   return (
     <nav className="panel rail" role="tablist" aria-orientation="vertical" aria-label="Tools">
@@ -476,6 +485,7 @@ function Rail() {
           aria-label={label}
           title={`${label} (${key})`}
           className={panel === tool ? "active" : ""}
+          disabled={failed && tool !== "info"}
           onClick={() => setPanel(tool)}
         >
           <Icon size={17} strokeWidth={1.75} />
@@ -486,7 +496,7 @@ function Rail() {
 }
 
 function SidePanel({ photo }: { photo: Photo }) {
-  const panel = useStore((s) => s.sidePanel);
+  const panel = useShownPanel();
   const title = TOOLS.find((tool) => tool.panel === panel)?.label;
   return (
     <aside className="side" aria-label={title}>
@@ -512,6 +522,7 @@ export function Editor({ photo, inert }: { photo: Photo; inert: boolean }) {
   const edited = useStore((s) => s.editor.ready && !isAsShot(s.editor.adjustments));
   const showOriginal = useStore((s) => s.editor.showOriginal);
   const hasClipboard = useStore((s) => s.clipboard !== null);
+  const failed = useStore((s) => s.editor.failed !== null);
   const [zoomLabel, setZoomLabel] = useState("Fit");
   const s = useStore.getState();
   const ids = [photo.id];
@@ -535,8 +546,10 @@ export function Editor({ photo, inert }: { photo: Photo; inert: boolean }) {
         else if (key === "y") void state.redo();
         else if (key === "c") void state.copyEdits(open);
         else if (key === "v") void state.pasteEdits([open]);
-        else if (key === "e") void state.startExport([open]);
-        else return;
+        else if (key === "e") {
+          // A photo that can't be opened can't be exported either.
+          if (!state.editor.failed) void state.startExport([open]);
+        } else return;
         event.preventDefault();
         return;
       }
@@ -547,12 +560,13 @@ export function Editor({ photo, inert }: { photo: Photo; inert: boolean }) {
         if (onSlider) return;
         event.preventDefault();
         const list = visiblePhotos(state);
-        const next = list[list.findIndex((p) => p.id === open) + (key === "ArrowLeft" ? -1 : 1)];
+        const at = list.findIndex((p) => p.id === open);
+        const next = at < 0 ? undefined : list[at + (key === "ArrowLeft" ? -1 : 1)];
         if (next) state.openPhoto(next.id);
       } else if (key === "Escape" || (key === "Enter" && state.sidePanel === "crop" && !target.closest("button"))) {
         // Escape backs out one level at a time: off a slider, out of a circle being drawn, off the chosen mask, out of the crop or mask tools, out of the photo.
         if (onSlider) target.blur();
-        else if (state.editor.circling && !state.editor.finding) state.cancelCircle();
+        else if (state.editor.circling && !state.editor.circling.points) state.cancelCircle();
         else if (state.sidePanel === "masks" && state.editor.maskId !== null) state.selectMask(null);
         else if (state.sidePanel === "crop" || state.sidePanel === "masks") state.setSidePanel("adjust");
         else state.closePhoto();
@@ -641,7 +655,7 @@ export function Editor({ photo, inert }: { photo: Photo; inert: boolean }) {
             <button className="icon-button" title="More" aria-label="More" onClick={(event) => menuBelow(event, more())}>
               <Ellipsis size={16} />
             </button>
-            <button className="button primary" title="Export this photo (Ctrl+E)" onClick={() => void s.startExport(ids)}>
+            <button className="button primary" title="Export this photo (Ctrl+E)" disabled={failed} onClick={() => void s.startExport(ids)}>
               <Download size={15} /> <span className="collapsible">Export</span>
             </button>
           </div>
