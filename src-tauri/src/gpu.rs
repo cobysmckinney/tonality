@@ -19,9 +19,16 @@ use crate::segment::{self, Found};
 
 const WORKING_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 const OUTPUT_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
-/// What 16-bit exports are drawn into: the same picture before it is rounded
-/// to 256 levels.
-const DEEP_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba32Float;
+/// What 16-bit exports can be drawn into, best first: the same picture
+/// before it is rounded to 256 levels. Not every graphics driver can draw
+/// into the first two; half-float still gives far finer steps than 8 bits.
+const DEEP_FORMATS: [wgpu::TextureFormat; 3] =
+    [wgpu::TextureFormat::Rgba32Float, wgpu::TextureFormat::Rgba16Unorm, wgpu::TextureFormat::Rgba16Float];
+/// What every texture drawn into is made for (`Gpu::texture`).
+const DRAWN_USAGES: wgpu::TextureUsages = wgpu::TextureUsages::TEXTURE_BINDING
+    .union(wgpu::TextureUsages::RENDER_ATTACHMENT)
+    .union(wgpu::TextureUsages::COPY_DST)
+    .union(wgpu::TextureUsages::COPY_SRC);
 /// Brush and found coverage: 256 levels is far finer than any slider step it scales.
 const COVERAGE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R8Unorm;
 
@@ -33,8 +40,6 @@ const LARGE_BLUR: (u32, f32) = (192, 5.0);
 /// The most pixels read back from the GPU in one go. A full-size export is
 /// drawn in bands of this many, so no photo is too big for one buffer.
 const BAND_PIXELS: u32 = 16 << 20;
-/// Deep pixels are four times the size, so their bands are a quarter as tall.
-const DEEP_BAND_PIXELS: u32 = BAND_PIXELS / 4;
 
 /// A whole picture with 16 bits for each of red, green and blue.
 pub type DeepImage = image::ImageBuffer<image::Rgb<u16>, Vec<u16>>;
@@ -98,8 +103,9 @@ pub struct Gpu {
     device: wgpu::Device,
     queue: wgpu::Queue,
     develop: wgpu::RenderPipeline,
-    /// The develop shader again, drawing into `DEEP_FORMAT`.
-    develop_deep: wgpu::RenderPipeline,
+    /// The develop shader again, drawing into the best of `DEEP_FORMATS`
+    /// this device can draw into, if any.
+    develop_deep: Option<(wgpu::TextureFormat, wgpu::RenderPipeline)>,
     copy: wgpu::RenderPipeline,
     gaussian: wgpu::RenderPipeline,
     sampler: wgpu::Sampler,
@@ -180,7 +186,7 @@ struct Coverages {
     found_layers: Vec<Option<String>>,
     bind_group: wgpu::BindGroup,
     /// The same bindings for the deep pipeline; a bind group belongs to one pipeline's layout.
-    deep_bind_group: wgpu::BindGroup,
+    deep_bind_group: Option<wgpu::BindGroup>,
 }
 
 /// The app's one GPU connection, opened on first use.
@@ -212,15 +218,25 @@ impl Gpu {
     }
 
     pub fn new() -> Result<Self> {
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+        Self::on(wgpu::InstanceDescriptor::new_without_display_handle())
+    }
+
+    /// Opens the best graphics adapter `instance` offers.
+    fn on(instance: wgpu::InstanceDescriptor) -> Result<Self> {
+        let instance = wgpu::Instance::new(instance);
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::HighPerformance,
             ..Default::default()
         }))
         .map_err(|e| anyhow!("no usable graphics adapter: {e}"))?;
         let limits = adapter.limits();
+        let deep_format = deep_format(|format| {
+            adapter.features().contains(format.required_features())
+                && adapter.get_texture_format_features(format).allowed_usages.contains(DRAWN_USAGES)
+        });
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             label: Some("tonality"),
+            required_features: deep_format.map(|format| format.required_features()).unwrap_or_default(),
             // Ask for the adapter's real limits: photos are far larger than the default texture size.
             required_limits: limits.clone(),
             ..Default::default()
@@ -262,7 +278,7 @@ impl Gpu {
 
         Ok(Self {
             develop: pipeline("develop", &develop_shader, "fragment", OUTPUT_FORMAT),
-            develop_deep: pipeline("develop deep", &develop_shader, "fragment", DEEP_FORMAT),
+            develop_deep: deep_format.map(|format| (format, pipeline("develop deep", &develop_shader, "fragment", format))),
             copy: pipeline("copy", &prepare_shader, "copy", WORKING_FORMAT),
             gaussian: pipeline("gaussian", &prepare_shader, "gaussian", WORKING_FORMAT),
             sampler,
@@ -280,10 +296,7 @@ impl Gpu {
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING
-                | wgpu::TextureUsages::RENDER_ATTACHMENT
-                | wgpu::TextureUsages::COPY_DST
-                | wgpu::TextureUsages::COPY_SRC,
+            usage: DRAWN_USAGES,
             view_formats: &[],
         })
     }
@@ -401,7 +414,7 @@ impl Gpu {
         let (_, found_view) = self.coverage_maps(1, 1, 1);
         let coverages = Coverages {
             bind_group: self.develop_bindings(&self.develop, &views, &params, &brush_view, &found_view),
-            deep_bind_group: self.develop_bindings(&self.develop_deep, &views, &params, &brush_view, &found_view),
+            deep_bind_group: self.deep_bindings(&views, &params, &brush_view, &found_view),
             brushes: None,
             brush_view,
             maps: Vec::new(),
@@ -468,12 +481,23 @@ impl Gpu {
         })
     }
 
+    /// `develop_bindings` for the deep pipeline, if there is one.
+    fn deep_bindings(
+        &self,
+        views: &Views,
+        params: &wgpu::Buffer,
+        brushes: &wgpu::TextureView,
+        found: &wgpu::TextureView,
+    ) -> Option<wgpu::BindGroup> {
+        let (_, pipeline) = self.develop_deep.as_ref()?;
+        Some(self.develop_bindings(pipeline, views, params, brushes, found))
+    }
+
     /// Points both pipelines' bindings at the session's current coverage maps.
     fn rebind(&self, session: &Session, coverages: &mut Coverages) {
         let (brushes, found) = (&coverages.brush_view, &coverages.found_view);
         coverages.bind_group = self.develop_bindings(&self.develop, &session.views, &session.params, brushes, found);
-        coverages.deep_bind_group =
-            self.develop_bindings(&self.develop_deep, &session.views, &session.params, brushes, found);
+        coverages.deep_bind_group = self.deep_bindings(&session.views, &session.params, brushes, found);
     }
 
     /// Makes sure these found parts' mattes are ready for the shader: read
@@ -608,8 +632,7 @@ impl Gpu {
         self.draw_frame(session, adjustments, region, width, height, guides, false)
     }
 
-    /// `render`, or with `deep` the same frame as four little-endian f32s a
-    /// pixel, each 0..1.
+    /// `render`, or with `deep` the same frame in the deep pipeline's format.
     #[allow(clippy::too_many_arguments)]
     fn draw_frame(
         &self,
@@ -675,10 +698,14 @@ impl Gpu {
             wgpu::Extent3d { width: 256, height: 1, depth_or_array_layers: 1 },
         );
 
-        let (format, pipeline, bindings, pixel_bytes) = match deep {
-            false => (OUTPUT_FORMAT, &self.develop, &coverages.bind_group, 4),
-            true => (DEEP_FORMAT, &self.develop_deep, &coverages.deep_bind_group, 16),
+        let (format, pipeline, bindings) = match deep {
+            false => (OUTPUT_FORMAT, &self.develop, &coverages.bind_group),
+            true => match (&self.develop_deep, &coverages.deep_bind_group) {
+                (Some((format, pipeline)), Some(bindings)) => (*format, pipeline, bindings),
+                _ => return Err(anyhow!(NO_DEEP)),
+            },
         };
+        let pixel_bytes = format.block_copy_size(None).context("a frame format without a pixel size")?;
         let target = self.texture("frame", width, height, 1, format);
         // Rows in a readback buffer must be padded to a multiple of 256 bytes.
         let row = width * pixel_bytes;
@@ -729,13 +756,17 @@ impl Gpu {
     /// `render_image` with 16 bits a channel: the picture before it is
     /// rounded to 256 levels, so smooth tones stay smooth through more editing.
     pub fn render_deep_image(&self, session: &Session, adjustments: &Adjustments, long_edge: u32) -> Result<DeepImage> {
+        let Some((format, _)) = self.develop_deep else { return Err(anyhow!(NO_DEEP)) };
+        let channel_bytes = format.block_copy_size(None).unwrap_or(16) as usize / 4;
+        // Bands of the same number of bytes as 8-bit ones.
+        let band_pixels = BAND_PIXELS / channel_bytes as u32;
         let mut rgb = Vec::new();
-        let (width, height) = self.render_in_bands(session, adjustments, long_edge, DEEP_BAND_PIXELS, true, |rgba| {
-            let level = |bytes: &[u8]| {
-                let value = f32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
-                (value.clamp(0.0, 1.0) * 65535.0).round() as u16
-            };
-            rgb.extend(rgba.as_chunks::<16>().0.iter().flat_map(|p| [level(&p[0..4]), level(&p[4..8]), level(&p[8..12])]));
+        let (width, height) = self.render_in_bands(session, adjustments, long_edge, band_pixels, true, |rgba| {
+            let level = |bytes: &[u8]| deep_level(format, bytes);
+            rgb.extend(rgba.chunks_exact(channel_bytes * 4).flat_map(|pixel| {
+                let channel = |i: usize| level(&pixel[i * channel_bytes..(i + 1) * channel_bytes]);
+                [channel(0), channel(1), channel(2)]
+            }));
         })?;
         DeepImage::from_raw(width, height, rgb).context("frame has the wrong size")
     }
@@ -761,6 +792,25 @@ impl Gpu {
         }
         Ok((width, height))
     }
+}
+
+/// Why there is no 16-bit picture on a device that can't draw one.
+const NO_DEEP: &str = "This graphics driver can't draw 16-bit pictures, so it can't export TIFF. Export as JPEG or PNG instead.";
+
+/// The first of `DEEP_FORMATS` that the device can draw into and read back,
+/// by `drawable`.
+fn deep_format(drawable: impl Fn(wgpu::TextureFormat) -> bool) -> Option<wgpu::TextureFormat> {
+    DEEP_FORMATS.into_iter().find(|&format| drawable(format))
+}
+
+/// One channel of a deep frame, read back in `format`, as a 16-bit level.
+fn deep_level(format: wgpu::TextureFormat, bytes: &[u8]) -> u16 {
+    let value = match format {
+        wgpu::TextureFormat::Rgba16Unorm => return u16::from_le_bytes([bytes[0], bytes[1]]),
+        wgpu::TextureFormat::Rgba16Float => f16::from_le_bytes([bytes[0], bytes[1]]).to_f32(),
+        _ => f32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]),
+    };
+    (value.clamp(0.0, 1.0) * 65535.0).round() as u16
 }
 
 /// The size a `width` x `height` photo is held at on a device whose largest
@@ -917,6 +967,11 @@ mod tests {
     #[test]
     fn a_deep_picture_is_the_same_picture_with_finer_steps() {
         let Some(gpu) = gpu() else { return };
+        deep_matches_plain(gpu);
+    }
+
+    /// Draws a picture both ways and checks the deep one rounds to the plain one.
+    fn deep_matches_plain(gpu: &Gpu) {
         let session = gradient(gpu);
         let edit = Adjustments { contrast: 20.0, ..Default::default() };
         let plain = gpu.render_image(&session, &edit, u32::MAX).unwrap();
@@ -930,6 +985,41 @@ mod tests {
         let reds: std::collections::HashSet<u16> = deep.pixels().map(|pixel| pixel.0[0]).collect();
         let coarse: std::collections::HashSet<u8> = plain.pixels().map(|pixel| pixel.0[0]).collect();
         assert!(reds.len() > coarse.len(), "{} levels where 8 bits gave {}", reds.len(), coarse.len());
+    }
+
+    #[test]
+    fn deep_pictures_use_the_finest_format_the_device_can_draw_into() {
+        use wgpu::TextureFormat::*;
+        assert_eq!(deep_format(|_| true), Some(Rgba32Float));
+        assert_eq!(deep_format(|format| format != Rgba32Float), Some(Rgba16Unorm));
+        assert_eq!(deep_format(|format| format == Rgba16Float || format == Rgba8Unorm), Some(Rgba16Float));
+        assert_eq!(deep_format(|format| format == Rgba8Unorm), None);
+    }
+
+    #[test]
+    fn every_deep_format_reads_back_as_the_same_levels() {
+        use wgpu::TextureFormat::*;
+        for value in [0.0f32, 0.25, 0.5, 1.0, 1.5, -0.25] {
+            let level = (value.clamp(0.0, 1.0) * 65535.0).round() as u16;
+            assert_eq!(deep_level(Rgba32Float, &value.to_le_bytes()), level);
+            assert_eq!(deep_level(Rgba16Unorm, &level.to_le_bytes()), level);
+            assert_eq!(deep_level(Rgba16Float, &f16::from_f32(value).to_le_bytes()), level);
+        }
+    }
+
+    #[test]
+    fn the_editor_draws_through_opengl() {
+        // Some drivers wgpu only reaches through OpenGL can't draw into
+        // 32-bit float textures; the editor and 16-bit exports still work (#79).
+        let mut instance = wgpu::InstanceDescriptor::new_without_display_handle();
+        instance.backends = wgpu::Backends::GL;
+        let gpu = match Gpu::on(instance) {
+            Ok(gpu) => gpu,
+            Err(error) => return eprintln!("skipping, no OpenGL adapter: {error:#}"),
+        };
+        let (format, _) = gpu.develop_deep.as_ref().expect("no format to draw 16-bit pictures in");
+        eprintln!("drawing 16-bit pictures through OpenGL in {format:?}");
+        deep_matches_plain(&gpu);
     }
 
     #[test]
