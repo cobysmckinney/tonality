@@ -279,6 +279,22 @@ fn originals_moved_or_deleted_outside_the_app_are_noticed() {
 }
 
 #[test]
+fn a_damaged_original_says_so_in_plain_words() {
+    let f = fixture();
+    import_all(&f.library, &scan(&f.library, std::slice::from_ref(&f.card)));
+    // The pair's RAW isn't really one, as if it had been damaged after import.
+    let photos = f.library.list_photos(View::Library).unwrap();
+    let damaged = photos.iter().find(|p| p.file_name == "IMG_0002.CR2").unwrap().id;
+    // What the editor and every export of the photo are told.
+    let error = format!("{:#}", thumbs::open_session(&f.library, damaged).err().unwrap());
+    assert_eq!(
+        error,
+        "The original file (IMG_0002.CR2) is damaged, or isn't a photo Tonality can read. \
+         If it's still on the camera card, deleting this photo permanently and importing it again may help."
+    );
+}
+
+#[test]
 fn purging_a_photo_whose_original_is_already_gone_finishes_the_job() {
     let f = fixture();
     import_all(&f.library, &scan(&f.library, std::slice::from_ref(&f.card)));
