@@ -85,6 +85,8 @@ fn vertex(@builtin(vertex_index) index: u32) -> VertexOutput {
 
 const LUMA = vec3f(0.2126, 0.7152, 0.0722);
 const MID_GRAY = 0.18;
+// The Exposure slider's limit in stops, either way. MAX_EXPOSURE in edit.rs.
+const MAX_EXPOSURE = 5.0;
 
 // The built-in look for RAW files. Exposure and saturation were fitted so the
 // brightness distribution and colourfulness of unedited photos match the
@@ -298,7 +300,7 @@ fn fragment(in: VertexOutput) -> @location(0) vec4f {
             detail += applied * mask.detail;
         }
         // Each slider still ends at its own limits, however many masks add up.
-        light = vec4f(light.x, clamp(light.yzw, vec3f(-1.0), vec3f(1.0)));
+        light = clamp(light, vec4f(-MAX_EXPOSURE, -1.0, -1.0, -1.0), vec4f(MAX_EXPOSURE, 1.0, 1.0, 1.0));
         tone = clamp(tone, vec4f(-1.0), vec4f(1.0));
         color = clamp(color, vec4f(-1.0), vec4f(1.0));
         detail = clamp(detail, vec4f(-1.0), vec4f(1.0));
