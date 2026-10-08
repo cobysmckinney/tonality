@@ -1,6 +1,6 @@
 import { FlipHorizontal2, FlipVertical2, RotateCcw, RotateCw } from "lucide-react";
 import { DEFAULTS, GEOMETRY, same } from "../../adjustments";
-import { flipped, heldAspect, quarterTurn, Rect, shrinkToFit, straightened, toCrop, toRect, turnedSize, withAspect } from "../../crop";
+import { flipped, heldAspect, isTall, quarterTurn, Rect, shapeAspect, shrinkToFit, straightened, toCrop, toRect, turnedSize, withAspect } from "../../crop";
 import { useStore } from "../../store";
 import { Slider } from "./Slider";
 
@@ -54,9 +54,8 @@ export function CropPanel() {
       s.setCropShape(label, null);
       return;
     }
-    // Keep the crop the way up it already is: a tall crop stays tall.
-    const tall = rect.height > rect.width;
-    const next = ratio === "original" ? turned.width / turned.height : tall ? 1 / ratio : ratio;
+    // Keep the crop the way up it already is: a tall crop stays tall, even for "Original".
+    const next = shapeAspect(ratio === "original" ? turned.width / turned.height : ratio, rect, turned);
     s.setCropShape(label, next);
     setRect(withAspect(rect, next, adjustments.straighten, turned));
   };
@@ -89,7 +88,7 @@ export function CropPanel() {
     s.setCropShape("Free", null);
   };
 
-  const tall = rect.height > rect.width;
+  const tall = isTall(rect, turned);
   const square = aspect !== null && Math.abs(aspect - 1) < 1e-6;
   const ratioOf = (option: (typeof SHAPES)[number]) =>
     option.ratio === "original" ? turned.width / turned.height : option.ratio;
