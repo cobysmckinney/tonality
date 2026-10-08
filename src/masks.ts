@@ -94,6 +94,17 @@ export function frameToSource(photo: Size, a: Adjustments): Affine {
   return then(then(then(onTurned, scale(1 / w, 1 / h)), flip), unturn);
 }
 
+/**
+ * Where a point of the edited picture (0..1 across and down) is on the
+ * original. The original is shown uncropped and unturned, so it is the photo
+ * file itself.
+ */
+export const onOriginal = (photo: Size, a: Adjustments, point: Point): Point => apply(frameToSource(photo, a), point);
+
+/** The point of the edited picture over a point of the original: `onOriginal` the other way. */
+export const fromOriginal = (photo: Size, a: Adjustments, point: Point): Point =>
+  apply(invert(frameToSource(photo, a)), point);
+
 /** What the screen shows: which part of the cropped picture, at what size in CSS pixels. */
 export interface ScreenView {
   photo: Size;
