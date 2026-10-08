@@ -101,6 +101,10 @@ const BASE_EXPOSURE = 1.4;
 const BASE_SATURATION = 1.05;
 const BASE_SHARPENING = 0.25;
 
+// Dehaze +100 adds 0.6 stops of contrast under the thickest haze (0.9 of
+// white), half as many at +50. DEHAZE_STRENGTH in gpu.rs's tests.
+const DEHAZE_STRENGTH = 0.6 / 0.9;
+
 fn luma(c: vec3f) -> f32 {
     return dot(c, LUMA);
 }
@@ -111,6 +115,7 @@ fn tonal_position(l: f32) -> f32 {
 }
 
 // Lifts a veil of haze off a colour, or lays one on when dehaze is negative.
+// Values are as the file holds them, before exposure, with 1.0 its white.
 fn lift_veil(c: vec3f, haze: f32, dehaze: f32) -> vec3f {
     var h = haze;
     if (dehaze > 0.0) {
@@ -118,8 +123,11 @@ fn lift_veil(c: vec3f, haze: f32, dehaze: f32) -> vec3f {
         // without this limit, dark detail in a bright area turns black.
         h = min(h, min(c.r, min(c.g, c.b)));
     }
-    let veil = dehaze * 0.6 * h;
-    return max((c - veil) / (1.0 - veil), vec3f(0.0));
+    // How much of the light behind the haze gets through it. Contrast under
+    // the haze grows by its inverse, which climbs in even steps (in stops)
+    // along the slider rather than racing away near the end.
+    let clear = exp2(-dehaze * DEHAZE_STRENGTH * h);
+    return max((c - (1.0 - clear)) / clear, vec3f(0.0));
 }
 
 fn srgb_encode(c: vec3f) -> vec3f {
@@ -360,15 +368,16 @@ fn fragment(in: VertexOutput) -> @location(0) vec4f {
     // magenta, keeping overall brightness where it was.
     var gains = vec3f(exp2(tone.z * 0.6), exp2(-tone.w * 0.35), exp2(-tone.z * 0.6));
     gains /= luma(gains);
-    let gain = gains * exp2(light.x);
-    c *= gain;
-    var medium = max(textureSampleLevel(blur_medium, linear_sampler, uv, 0.0).rgb, vec3f(0.0)) * gain;
-    var large = max(textureSampleLevel(blur_large, linear_sampler, uv, 0.0).rgb, vec3f(0.0)) * gain;
+    c *= gains;
+    var medium = max(textureSampleLevel(blur_medium, linear_sampler, uv, 0.0).rgb, vec3f(0.0)) * gains;
+    var large = max(textureSampleLevel(blur_large, linear_sampler, uv, 0.0).rgb, vec3f(0.0)) * gains;
 
     // Dehaze: haze is a veil of light, strongest where even the darkest
     // channel of the neighbourhood is bright. Lift it off (or lay it on).
-    // The blurs lose the same veil, so clarity and shadows/highlights
-    // compare the pixel with surroundings that are as dehazed as it is.
+    // It is judged before exposure, so brightening the photo doesn't make
+    // the same haze look thicker. The blurs lose the same veil, so clarity
+    // and shadows/highlights compare the pixel with surroundings that are
+    // as dehazed as it is.
     let dehaze = color.w;
     if (dehaze != 0.0) {
         let haze = min(min(large.r, min(large.g, large.b)), 0.9);
@@ -376,6 +385,11 @@ fn fragment(in: VertexOutput) -> @location(0) vec4f {
         medium = lift_veil(medium, haze, dehaze);
         large = lift_veil(large, haze, dehaze);
     }
+
+    let exposure = exp2(light.x);
+    c *= exposure;
+    medium *= exposure;
+    large *= exposure;
 
     // Clarity: exaggerate (or soften) how each pixel differs from its
     // surroundings, mostly in the midtones.

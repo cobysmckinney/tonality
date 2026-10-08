@@ -23,7 +23,7 @@ use crate::segment::{self, Found};
 /// shader's input (`edit.rs`, `masks.rs`, `segment.rs`). On its next start a
 /// library then redraws the thumbnails and previews of its edited photos, so
 /// the grid keeps matching the editor (`thumbs::forget_old_looks`).
-pub const LOOK_VERSION: u32 = 1;
+pub const LOOK_VERSION: u32 = 2;
 
 const WORKING_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 const OUTPUT_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
@@ -916,19 +916,88 @@ mod tests {
         }
     }
 
+    /// `DEHAZE_STRENGTH` in develop.wgsl.
+    const DEHAZE_STRENGTH: f32 = 0.6 / 0.9;
+
+    /// What dehaze at `dehaze` (-1..1) makes of a flat grey `value` with no
+    /// haze around it but its own.
+    fn dehazed_flat(value: f32, dehaze: f32) -> f32 {
+        let clear = (-dehaze * DEHAZE_STRENGTH * value).exp2();
+        (value - (1.0 - clear)) / clear
+    }
+
+    #[test]
+    fn the_shader_dehazes_as_strongly_as_the_tests_expect() {
+        let shader = include_str!("shaders/develop.wgsl");
+        assert!(shader.contains("const DEHAZE_STRENGTH = 0.6 / 0.9;"));
+    }
+
     #[test]
     fn shadows_and_highlights_judge_a_dehazed_picture_by_how_it_now_looks() {
         let Some(gpu) = gpu() else { return };
-        // Dehaze +100 takes a veil of 0.6 x 0.3 off a flat 0.3 grey.
-        let veil = 0.6 * 0.3;
         let hazy = flat(gpu, 0.3);
-        let clear = flat(gpu, (0.3 - veil) / (1.0 - veil));
+        let clear = flat(gpu, dehazed_flat(0.3, 1.0));
         for (shadows, highlights) in [(100.0, 0.0), (0.0, -100.0)] {
             let edit = Adjustments { shadows, highlights, ..Default::default() };
             let dehazed = gpu.render_image(&hazy, &Adjustments { dehaze: 100.0, ..edit.clone() }, u32::MAX).unwrap();
             let already_clear = gpu.render_image(&clear, &edit, u32::MAX).unwrap();
             let difference = largest_difference(&dehazed, &already_clear);
             assert!(difference <= 1, "shadows {shadows} and highlights {highlights} differ by {difference} steps");
+        }
+    }
+
+    #[test]
+    fn exposure_does_not_change_how_much_haze_dehaze_finds() {
+        let Some(gpu) = gpu() else { return };
+        // Brightening a hazy photo used to make the same haze look thicker,
+        // so the same slider took more off (#33).
+        for scene_referred in [false, true] {
+            let (width, height) = (64u32, 48u32);
+            let open = |value: f32| {
+                let pixels = vec![[value; 3]; (width * height) as usize];
+                gpu.open(LinearImage { width, height, pixels, scene_referred }).unwrap()
+            };
+            let hazy = open(0.3);
+            for dehaze in [100.0f32, -100.0] {
+                let clear = open(dehazed_flat(0.3, dehaze / 100.0));
+                for exposure in [-1.0, 0.0, 1.0] {
+                    let edit = Adjustments { exposure, ..Default::default() };
+                    let dehazed = gpu.render_image(&hazy, &Adjustments { dehaze, ..edit.clone() }, u32::MAX).unwrap();
+                    let already_clear = gpu.render_image(&clear, &edit, u32::MAX).unwrap();
+                    let difference = largest_difference(&dehazed, &already_clear);
+                    assert!(
+                        difference <= 1,
+                        "dehaze {dehaze} at exposure {exposure} (RAW: {scene_referred}) is {difference} steps off"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn dehaze_adds_contrast_in_even_steps_and_gently() {
+        let Some(gpu) = gpu() else { return };
+        // Fine stripes of 0.92 and 1.0 under haze as thick as it is ever
+        // taken to be (0.9 of white): dehaze lifts the same veil off both,
+        // so the gap between them grows by exactly its contrast gain.
+        let (width, height) = (64u32, 48u32);
+        let pixels = (0..width * height).map(|i| [if i % 2 == 0 { 0.92 } else { 1.0 }; 3]).collect();
+        let session = gpu.open(LinearImage { width, height, pixels, scene_referred: false }).unwrap();
+        let gap = |edit: &Adjustments| {
+            let picture = gpu.render_deep_image(&session, edit, u32::MAX).unwrap();
+            let linear = |x: u32| {
+                let v = picture.get_pixel(x, height / 2).0[1] as f32 / 65535.0;
+                if v <= 0.04045 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) }
+            };
+            linear(width / 2 + 1) - linear(width / 2)
+        };
+        for exposure in [0.0, -1.0] {
+            let plain = gap(&Adjustments { exposure, ..Default::default() });
+            for (dehaze, expected) in [(50.0, 2f32.powf(0.3)), (100.0, 2f32.powf(0.6))] {
+                let gain = gap(&Adjustments { exposure, dehaze, ..Default::default() }) / plain;
+                // It used to reach 2.2 at +100, most of it in the last stretch.
+                assert!((gain - expected).abs() < 0.03, "dehaze {dehaze} at exposure {exposure}: {gain:.3}, not {expected:.3}");
+            }
         }
     }
 
