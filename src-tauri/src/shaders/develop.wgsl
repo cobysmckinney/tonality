@@ -107,6 +107,18 @@ fn tonal_position(l: f32) -> f32 {
     return l / (l + MID_GRAY);
 }
 
+// Lifts a veil of haze off a colour, or lays one on when dehaze is negative.
+fn lift_veil(c: vec3f, haze: f32, dehaze: f32) -> vec3f {
+    var h = haze;
+    if (dehaze > 0.0) {
+        // A colour can't carry more veil than its own darkest channel;
+        // without this limit, dark detail in a bright area turns black.
+        h = min(h, min(c.r, min(c.g, c.b)));
+    }
+    let veil = dehaze * 0.6 * h;
+    return max((c - veil) / (1.0 - veil), vec3f(0.0));
+}
+
 fn srgb_encode(c: vec3f) -> vec3f {
     let low = c * 12.92;
     let high = 1.055 * pow(max(c, vec3f(0.0)), vec3f(1.0 / 2.4)) - 0.055;
@@ -347,21 +359,19 @@ fn fragment(in: VertexOutput) -> @location(0) vec4f {
     gains /= luma(gains);
     let gain = gains * exp2(light.x);
     c *= gain;
-    let medium = max(textureSampleLevel(blur_medium, linear_sampler, uv, 0.0).rgb, vec3f(0.0)) * gain;
-    let large = max(textureSampleLevel(blur_large, linear_sampler, uv, 0.0).rgb, vec3f(0.0)) * gain;
+    var medium = max(textureSampleLevel(blur_medium, linear_sampler, uv, 0.0).rgb, vec3f(0.0)) * gain;
+    var large = max(textureSampleLevel(blur_large, linear_sampler, uv, 0.0).rgb, vec3f(0.0)) * gain;
 
     // Dehaze: haze is a veil of light, strongest where even the darkest
     // channel of the neighbourhood is bright. Lift it off (or lay it on).
+    // The blurs lose the same veil, so clarity and shadows/highlights
+    // compare the pixel with surroundings that are as dehazed as it is.
     let dehaze = color.w;
     if (dehaze != 0.0) {
-        var haze = min(min(large.r, min(large.g, large.b)), 0.9);
-        if (dehaze > 0.0) {
-            // A pixel can't carry more veil than its own darkest channel;
-            // without this limit, dark detail in a bright area turns black.
-            haze = min(haze, min(c.r, min(c.g, c.b)));
-        }
-        let veil = dehaze * 0.6 * haze;
-        c = max((c - veil) / (1.0 - veil), vec3f(0.0));
+        let haze = min(min(large.r, min(large.g, large.b)), 0.9);
+        c = lift_veil(c, haze, dehaze);
+        medium = lift_veil(medium, haze, dehaze);
+        large = lift_veil(large, haze, dehaze);
     }
 
     // Clarity: exaggerate (or soften) how each pixel differs from its

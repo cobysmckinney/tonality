@@ -831,6 +831,49 @@ mod tests {
         shared().inspect_err(|error| eprintln!("skipping: {error:#}")).ok()
     }
 
+    /// A picture of one flat grey, which has no local contrast anywhere.
+    fn flat(gpu: &Gpu, value: f32) -> Session {
+        let (width, height) = (64u32, 48u32);
+        let pixels = vec![[value; 3]; (width * height) as usize];
+        gpu.open(LinearImage { width, height, pixels, scene_referred: false }).unwrap()
+    }
+
+    /// The largest difference between two renders, in 8-bit steps.
+    fn largest_difference(a: &image::RgbImage, b: &image::RgbImage) -> u8 {
+        assert_eq!(a.dimensions(), b.dimensions());
+        a.as_raw().iter().zip(b.as_raw()).map(|(a, b)| a.abs_diff(*b)).max().unwrap()
+    }
+
+    #[test]
+    fn clarity_leaves_a_flat_dehazed_picture_alone() {
+        let Some(gpu) = gpu() else { return };
+        let session = flat(gpu, 0.3);
+        for dehaze in [100.0, -100.0] {
+            let dehazed = Adjustments { dehaze, ..Default::default() };
+            let with_clarity = Adjustments { clarity: 100.0, ..dehazed.clone() };
+            let dehazed = gpu.render_image(&session, &dehazed, u32::MAX).unwrap();
+            let with_clarity = gpu.render_image(&session, &with_clarity, u32::MAX).unwrap();
+            let difference = largest_difference(&dehazed, &with_clarity);
+            assert!(difference <= 1, "clarity moved a flat picture with dehaze {dehaze} by {difference} steps");
+        }
+    }
+
+    #[test]
+    fn shadows_and_highlights_judge_a_dehazed_picture_by_how_it_now_looks() {
+        let Some(gpu) = gpu() else { return };
+        // Dehaze +100 takes a veil of 0.6 x 0.3 off a flat 0.3 grey.
+        let veil = 0.6 * 0.3;
+        let hazy = flat(gpu, 0.3);
+        let clear = flat(gpu, (0.3 - veil) / (1.0 - veil));
+        for (shadows, highlights) in [(100.0, 0.0), (0.0, -100.0)] {
+            let edit = Adjustments { shadows, highlights, ..Default::default() };
+            let dehazed = gpu.render_image(&hazy, &Adjustments { dehaze: 100.0, ..edit.clone() }, u32::MAX).unwrap();
+            let already_clear = gpu.render_image(&clear, &edit, u32::MAX).unwrap();
+            let difference = largest_difference(&dehazed, &already_clear);
+            assert!(difference <= 1, "shadows {shadows} and highlights {highlights} differ by {difference} steps");
+        }
+    }
+
     #[test]
     fn a_picture_drawn_in_bands_has_no_seams() {
         let Some(gpu) = gpu() else { return };
