@@ -85,8 +85,11 @@ export interface ScanItem {
   size: number;
   /** When it was taken, as near as the scan could tell: `YYYY-MM-DDTHH:MM:SS`, camera-local. */
   takenAt: string;
-  /** `deleted` means the photo is in Recently Deleted; importing it recovers it. */
-  status: "new" | "duplicate" | "deleted";
+  /**
+   * `deleted` means the photo is in Recently Deleted; importing it recovers it.
+   * `missing` means it is in the library but its original has gone; importing copies the file back.
+   */
+  status: "new" | "duplicate" | "deleted" | "missing";
 }
 
 export interface Scan {

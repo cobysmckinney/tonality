@@ -26,6 +26,8 @@ pub enum Status {
     Duplicate,
     /// Already in the library, but sitting in Recently Deleted.
     Deleted(i64),
+    /// Already in the library, but its original has gone from the library folder.
+    Missing(i64),
 }
 
 #[derive(Debug)]
@@ -86,6 +88,7 @@ impl ScanSession {
                     Status::New => "new",
                     Status::Duplicate => "duplicate",
                     Status::Deleted(_) => "deleted",
+                    Status::Missing(_) => "missing",
                 },
             })
             .collect();
@@ -207,10 +210,20 @@ pub fn scan(
     for item in &mut items {
         item.status = match known.get(&item.fingerprint) {
             Some(&(id, true)) => Status::Deleted(id),
-            Some(_) => Status::Duplicate,
+            Some(&(id, false)) => Status::Missing(id),
             None if !seen.insert(item.fingerprint.clone()) => Status::Duplicate,
             None => Status::New,
         };
+    }
+    // Photos already in the library are duplicates, unless their original
+    // has gone; then importing copies it back.
+    let in_library: Vec<i64> =
+        items.iter().filter_map(|item| if let Status::Missing(id) = item.status { Some(id) } else { None }).collect();
+    let missing = library.missing_originals(&in_library)?;
+    for item in &mut items {
+        if matches!(item.status, Status::Missing(id) if !missing.contains(&id)) {
+            item.status = Status::Duplicate;
+        }
     }
 
     Ok(ScanSession { id: session_id, source: source.unwrap_or_else(|| describe_source(paths)), items })
@@ -345,6 +358,33 @@ fn free_names(dir: &Path, primary: &Path, jpeg: Option<&Path>) -> (PathBuf, Opti
         .expect("an unbounded search always finds a free name")
 }
 
+/// Copies a photo already in the library back in from `item`, to where the
+/// library expects it, if its original (or its paired JPEG) has gone from the
+/// library folder. One that was only moved within it is followed instead.
+fn put_back(library: &Library, id: i64, item: &ScanItem, import_id: i64, index: usize) -> Result<()> {
+    library.missing_originals(&[id])?;
+    let files = library.expected_files(id)?;
+    let copies = [(Some(&item.path), Some(files.path), ""), (item.jpeg.as_ref(), files.jpeg_path, "-pair")];
+    for (from, to, tag) in copies {
+        let (Some(from), Some(to)) = (from, to) else { continue };
+        if to.exists() {
+            continue;
+        }
+        let ext = to.extension().unwrap_or_default().to_string_lossy();
+        let holding = library.incoming_dir().join(format!("{import_id}-{index}{tag}.{ext}"));
+        let dir = to.parent().context("the library has no folder for this photo")?;
+        let copied = copy_file(from, &holding)
+            .and_then(|()| fs::create_dir_all(dir).context("making its folder"))
+            .and_then(|()| fs::rename(&holding, &to).context("moving into the library"));
+        if let Err(error) = copied {
+            let _ = fs::remove_file(&holding);
+            return Err(error);
+        }
+        sync_dir(dir);
+    }
+    Ok(())
+}
+
 fn import_one(
     library: &Library,
     session_id: u64,
@@ -355,7 +395,12 @@ fn import_one(
 ) -> Result<Outcome> {
     match item.status {
         Status::Deleted(id) => {
+            put_back(library, id, item, import_id, index)?;
             library.restore(&[id])?;
+            return Ok(Outcome::Restored);
+        }
+        Status::Missing(id) => {
+            put_back(library, id, item, import_id, index)?;
             return Ok(Outcome::Restored);
         }
         Status::Duplicate => bail!("already in the library"),

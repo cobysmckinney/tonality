@@ -281,6 +281,89 @@ fn originals_moved_or_deleted_outside_the_app_are_noticed() {
 }
 
 #[test]
+fn originals_moved_within_the_library_folder_are_followed() {
+    let f = fixture();
+    import_all(&f.library, &scan(&f.library, std::slice::from_ref(&f.card)));
+    let photos = f.library.list_photos(View::Library).unwrap();
+    let id_of = |name: &str| photos.iter().find(|p| p.file_name == name).unwrap().id;
+    let (single, pair) = (id_of("IMG_0001.JPG"), id_of("IMG_0002.CR2"));
+    let sorted = f.library.originals_dir().join("Sorted/Best");
+    fs::create_dir_all(&sorted).unwrap();
+
+    // A different photo that only shares the name is not taken for it.
+    let original = f.library.photo_files(single).unwrap().path;
+    let impostor = f.library.originals_dir().join("Other/IMG_0001.JPG");
+    write_image(&impostor, 99);
+    fs::remove_file(&original).unwrap();
+    assert!(f.library.list_photos(View::Library).unwrap().iter().find(|p| p.id == single).unwrap().missing);
+
+    // The real one, moved to another folder, is.
+    fs::copy(f.card.join("DCIM/100CANON/IMG_0001.JPG"), sorted.join("IMG_0001.JPG")).unwrap();
+    assert!(f.library.list_photos(View::Library).unwrap().iter().all(|p| !p.missing));
+    assert_eq!(f.library.photo_files(single).unwrap().path, sorted.join("IMG_0001.JPG"));
+
+    // A RAW and its JPEG moved together are followed together, even when
+    // the editor asks before the grid has looked.
+    let files = f.library.photo_files(pair).unwrap();
+    fs::rename(&files.path, sorted.join("IMG_0002.CR2")).unwrap();
+    fs::rename(files.jpeg_path.unwrap(), sorted.join("IMG_0002.JPG")).unwrap();
+    let files = f.library.photo_files(pair).unwrap();
+    assert_eq!(files.path, sorted.join("IMG_0002.CR2"));
+    assert_eq!(files.jpeg_path, Some(sorted.join("IMG_0002.JPG")));
+    assert_eq!(f.library.photo_info(pair).unwrap().path, sorted.join("IMG_0002.CR2").to_string_lossy());
+    assert!(impostor.exists(), "nothing else is moved or touched");
+}
+
+#[test]
+fn importing_again_copies_back_a_missing_original() {
+    let f = fixture();
+    import_all(&f.library, &scan(&f.library, std::slice::from_ref(&f.card)));
+    let photos = f.library.list_photos(View::Library).unwrap();
+    let id_of = |name: &str| photos.iter().find(|p| p.file_name == name).unwrap().id;
+    let (single, pair) = (id_of("IMG_0001.JPG"), id_of("IMG_0002.CR2"));
+
+    // Deleted outside the app, but still in the library.
+    let original = f.library.photo_files(single).unwrap().path;
+    fs::remove_file(&original).unwrap();
+    let session = scan(&f.library, std::slice::from_ref(&f.card));
+    let mut statuses: Vec<_> = session.view().items.iter().map(|i| (i.file_name.clone(), i.status)).collect();
+    statuses.sort();
+    assert_eq!(
+        statuses,
+        [
+            ("IMG_0001.JPG".to_string(), "missing"),
+            ("IMG_0002.CR2".to_string(), "duplicate"),
+            ("screenshot.png".to_string(), "duplicate")
+        ]
+    );
+    let missing = session.items.iter().position(|i| i.path.ends_with("IMG_0001.JPG")).unwrap();
+    let summary = import::run(&f.library, &session, &[missing], &AtomicBool::new(false), &|_, _| {}).unwrap();
+    assert_eq!((summary.imported, summary.restored, summary.failed.len()), (0, 1, 0));
+    assert_eq!(fs::read(&original).unwrap(), fs::read(f.card.join("DCIM/100CANON/IMG_0001.JPG")).unwrap());
+    assert_eq!(f.library.list_photos(View::Library).unwrap().len(), 3, "the same photo, not a second one");
+    assert!(f.library.list_photos(View::Library).unwrap().iter().all(|p| !p.missing));
+
+    // In Recently Deleted, with its files gone and their folder too.
+    let files = f.library.photo_files(pair).unwrap();
+    f.library.trash(&[pair]).unwrap();
+    fs::remove_file(&files.path).unwrap();
+    fs::remove_file(files.jpeg_path.as_ref().unwrap()).unwrap();
+    let day = files.path.parent().unwrap();
+    if fs::read_dir(day).unwrap().next().is_none() {
+        fs::remove_dir(day).unwrap();
+    }
+    let session = scan(&f.library, std::slice::from_ref(&f.card));
+    let deleted = session.view().items.iter().position(|i| i.status == "deleted").unwrap();
+    let summary = import::run(&f.library, &session, &[deleted], &AtomicBool::new(false), &|_, _| {}).unwrap();
+    assert_eq!((summary.imported, summary.restored, summary.failed.len()), (0, 1, 0));
+    assert_eq!(fs::read(&files.path).unwrap(), b"not really a raw file");
+    assert!(files.jpeg_path.unwrap().is_file());
+    let back = f.library.list_photos(View::Library).unwrap();
+    assert!(back.iter().any(|p| p.id == pair && !p.missing));
+    assert!(fs::read_dir(f.library.incoming_dir()).is_err(), "nothing left in the holding folder");
+}
+
+#[test]
 fn a_damaged_original_says_so_in_plain_words() {
     let f = fixture();
     import_all(&f.library, &scan(&f.library, std::slice::from_ref(&f.card)));

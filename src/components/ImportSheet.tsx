@@ -92,7 +92,7 @@ function Review({ state }: { state: Extract<ImportState, { phase: "review" | "im
 
   const groups = useMemo(() => {
     const by = (status: ScanItem["status"]) => scan.items.filter((item) => item.status === status);
-    return { fresh: by("new"), deleted: by("deleted"), duplicate: by("duplicate") };
+    return { fresh: by("new"), deleted: by("deleted"), missing: by("missing"), duplicate: by("duplicate") };
   }, [scan]);
 
   const sections = useMemo(() => {
@@ -116,11 +116,17 @@ function Review({ state }: { state: Extract<ImportState, { phase: "review" | "im
       `${count(groups.deleted.length)} in Recently Deleted`,
       "Importing these puts them back in your library",
     );
+    add(
+      "missing",
+      groups.missing,
+      `${count(groups.missing.length)} missing from your library folder`,
+      "Importing these copies the files back",
+    );
     add("duplicate", groups.duplicate, `${count(groups.duplicate.length)} already in your library`);
     return list;
   }, [groups]);
 
-  const selectable = [...groups.fresh, ...groups.deleted].map((item) => item.index);
+  const selectable = [...groups.fresh, ...groups.deleted, ...groups.missing].map((item) => item.index);
   const chosenCount = chosen?.size ?? 0;
   const progress = importing ? state.progress : null;
 
