@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Check, ChevronRight, X } from "lucide-react";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { MenuEntry, useStore } from "../store";
+import { canStartImport } from "../sheets";
 
 function MenuList({ entries, x, y }: { entries: MenuEntry[]; x: number; y: number }) {
   const element = useRef<HTMLDivElement>(null);
@@ -154,6 +155,8 @@ function Toasts() {
 /** Dropping files or folders anywhere on the window starts an import. */
 function DropTarget() {
   const [over, setOver] = useState(false);
+  // Not offered while another sheet or a question is open; a drop then says why it did nothing.
+  const offered = useStore(canStartImport);
   useEffect(() => {
     const stop = getCurrentWebview().onDragDropEvent(({ payload }) => {
       if (payload.type === "enter" || payload.type === "over") setOver(true);
@@ -163,7 +166,7 @@ function DropTarget() {
     return () => void stop.then((unlisten) => unlisten());
   }, []);
 
-  if (!over) return null;
+  if (!over || !offered) return null;
   return (
     <div className="drop-target">
       <div>

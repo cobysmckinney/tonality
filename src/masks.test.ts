@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { Adjustments, defaultAdjustments, Point } from "./adjustments";
-import { apply, canAdd, circleShape, foundCount, frameToSource, fromOriginal, MAX_FOUND, newMask, newShape, onOriginal, screenMap } from "./masks";
+import { apply, canAdd, circleShape, foundCount, frameToSource, fromOriginal, MAX_FOUND, newMask, newShape, onOriginal, screenMap, stillHeld } from "./masks";
 
 const photo = { width: 300, height: 200 };
 const edited = (change: Partial<Adjustments>): Adjustments => ({ ...defaultAdjustments(), ...change });
@@ -127,5 +127,23 @@ describe("new masks", () => {
     const subjects = [newMask([], "subject", photo, defaultAdjustments()), newMask([], "background", photo, defaultAdjustments())];
     expect(foundCount(subjects)).toBe(1);
     expect(canAdd(subjects, "subject")).toBe(true);
+  });
+});
+
+describe("a drag on the photo", () => {
+  const start = { maskId: 1, partIndex: 0 };
+
+  test("keeps hold while the same mask and part are chosen", () => {
+    expect(stillHeld(start, { maskId: 1, partIndex: 0, circling: false })).toBe(true);
+  });
+
+  test("lets go when the mask is let go of or another is chosen", () => {
+    expect(stillHeld(start, { maskId: null, partIndex: null, circling: false })).toBe(false);
+    expect(stillHeld(start, { maskId: 2, partIndex: 0, circling: false })).toBe(false);
+  });
+
+  test("lets go when another part is chosen or a loop is drawn", () => {
+    expect(stillHeld(start, { maskId: 1, partIndex: 1, circling: false })).toBe(false);
+    expect(stillHeld(start, { maskId: 1, partIndex: 0, circling: true })).toBe(false);
   });
 });

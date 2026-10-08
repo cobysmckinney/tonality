@@ -165,6 +165,10 @@ impl Default for Mask {
     }
 }
 
+/// How far Exposure goes either way, in stops: the photo's own slider, each
+/// mask's, and all of them added together.
+pub const MAX_EXPOSURE: f32 = 5.0;
+
 /// Every slider in the editor. Zero everywhere means "as shot".
 /// Exposure is in stops (-5..5); everything else runs -100..100 or 0..100.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]

@@ -26,7 +26,7 @@ function NewMask({ first }: { first: boolean }) {
   const [chosen, setChosen] = useState<MaskStart | null>(null);
   const s = useStore.getState();
   const full = masks.length >= MAX_MASKS;
-  const drawing = circling !== null && circling.mode === null && !finding;
+  const drawing = circling !== null && circling.mode === null && !circling.points;
   const hint = full
     ? `A photo can have ${MAX_MASKS} masks. Delete one to start another.`
     : drawing
@@ -50,8 +50,8 @@ function NewMask({ first }: { first: boolean }) {
               key={start}
               className={`new-mask-tile ${waiting ? "engaged" : ""}`}
               title={about}
-              disabled={full || finding !== null || (drawing && start !== "object") || !canAdd(masks, kind)}
-              aria-busy={waiting && finding !== null}
+              disabled={full || (finding !== null && !drawing) || (drawing && start !== "object") || !canAdd(masks, kind)}
+              aria-busy={waiting && finding !== null && !drawing}
               aria-pressed={drawing && start === "object"}
               onClick={() => {
                 if (drawing) return s.cancelCircle();
@@ -59,7 +59,7 @@ function NewMask({ first }: { first: boolean }) {
                 s.addMask(start);
               }}
             >
-              {waiting && finding !== null ? <span className="spinner" /> : <Icon size={18} strokeWidth={1.6} />}
+              {waiting && finding !== null && !drawing ? <span className="spinner" /> : <Icon size={18} strokeWidth={1.6} />}
               <span>{name}</span>
             </button>
           );

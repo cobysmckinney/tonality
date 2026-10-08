@@ -258,6 +258,20 @@ export function describeLocal(mask: Mask, before: LocalAdjustments): string {
   return `${mask.name}: ${LABELS[key]} ${formatValue(mask.adjustments[key], key === "exposure" ? 0.01 : 1)}`;
 }
 
+/** Which mask and part are chosen. */
+export interface Chosen {
+  maskId: number | null;
+  partIndex: number | null;
+}
+
+/**
+ * Whether a drag on the photo still has hold of the part it started on: the
+ * same mask and part are still chosen, and no loop is being drawn. Anything
+ * else takes the handles away, and the drag ends there.
+ */
+export const stillHeld = (start: Chosen, now: Chosen & { circling: boolean }) =>
+  !now.circling && start.maskId !== null && start.maskId === now.maskId && start.partIndex === now.partIndex;
+
 /** How many brush parts there are across all masks. */
 export const brushCount = (masks: Mask[]) =>
   masks.reduce((n, mask) => n + mask.parts.filter((part) => part.shape.kind === "brush").length, 0);
