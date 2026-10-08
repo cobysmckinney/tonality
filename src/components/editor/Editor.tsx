@@ -238,7 +238,7 @@ function Stage({ photo, onZoomChange }: { photo: Photo; onZoomChange: (label: st
   const showClipping = useStore((s) => s.editor.showClipping && !s.editor.showOriginal);
   const uncropped = useStore((s) => s.sidePanel === "crop" && !s.editor.showOriginal);
   const masking = useStore((s) => s.sidePanel === "masks" && !s.editor.showOriginal);
-  const circling = useStore((s) => s.sidePanel === "masks" && s.editor.circling !== null && s.editor.finding === null);
+  const circling = useStore((s) => s.sidePanel === "masks" && s.editor.circling !== null && !s.editor.circling.points);
   const maskOverlay = useStore((s) =>
     s.sidePanel === "masks" && s.editor.showMask && !s.editor.showOriginal ? s.editor.maskId : null,
   );
@@ -547,12 +547,13 @@ export function Editor({ photo, inert }: { photo: Photo; inert: boolean }) {
         if (onSlider) return;
         event.preventDefault();
         const list = visiblePhotos(state);
-        const next = list[list.findIndex((p) => p.id === open) + (key === "ArrowLeft" ? -1 : 1)];
+        const at = list.findIndex((p) => p.id === open);
+        const next = at < 0 ? undefined : list[at + (key === "ArrowLeft" ? -1 : 1)];
         if (next) state.openPhoto(next.id);
       } else if (key === "Escape" || (key === "Enter" && state.sidePanel === "crop" && !target.closest("button"))) {
         // Escape backs out one level at a time: off a slider, out of a circle being drawn, off the chosen mask, out of the crop or mask tools, out of the photo.
         if (onSlider) target.blur();
-        else if (state.editor.circling && !state.editor.finding) state.cancelCircle();
+        else if (state.editor.circling && !state.editor.circling.points) state.cancelCircle();
         else if (state.sidePanel === "masks" && state.editor.maskId !== null) state.selectMask(null);
         else if (state.sidePanel === "crop" || state.sidePanel === "masks") state.setSidePanel("adjust");
         else state.closePhoto();

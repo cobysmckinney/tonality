@@ -128,7 +128,7 @@ function PartRow(props: { mask: Mask; part: MaskPart; index: number; selected: b
 function MaskParts({ mask, partIndex }: { mask: Mask; partIndex: number | null }) {
   const masks = useStore((s) => s.editor.adjustments.masks);
   const finding = useStore((s) => s.editor.finding !== null);
-  const circling = useStore((s) => s.editor.circling !== null);
+  const circling = useStore((s) => s.editor.circling !== null && !s.editor.circling.points);
   const s = useStore.getState();
   const partMenu = (mode: MaskMode) => (event: React.MouseEvent) =>
     menuBelow(
@@ -142,7 +142,7 @@ function MaskParts({ mask, partIndex }: { mask: Mask; partIndex: number | null }
           <PartRow key={index} mask={mask} part={part} index={index} selected={index === partIndex} />
         ))}
       </ul>
-      {circling && !finding ? (
+      {circling ? (
         <div className="mask-part-actions">
           <span className="layer-note">Draw a loop on the photo</span>
           <button className="button quiet" onClick={() => s.cancelCircle()}>

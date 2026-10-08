@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { dragged, Handle, heldAspect, Rect, Size, toCrop, toFrame, toRect, turnedSize } from "../../crop";
 import { useStore } from "../../store";
 
@@ -68,6 +68,8 @@ export function CropOverlay({ photo, scale, width, height }: Props) {
   const move = (event: React.PointerEvent) => {
     const held = drag.current;
     if (!held) return;
+    // The button let go somewhere the frame never heard it: hovering alone never moves the crop.
+    if ((event.buttons & 1) === 0) return end();
     const delta: [number, number] = [(event.clientX - held.x) / scale, (event.clientY - held.y) / scale];
     const next = dragged(held.start, held.handle, delta, adjustments.straighten, turned, held.aspect);
     useStore.getState().adjust({ crop: toCrop(next, turned) });
@@ -84,6 +86,10 @@ export function CropOverlay({ photo, scale, width, height }: Props) {
     if (held.aspect === null && chosen !== null && moved) s.setCropShape("Free", null);
     s.commitAdjust();
   };
+  // Leaving the crop tool mid-drag (C, M, Esc, holding \) still records the drag as its own step.
+  const ending = useRef(end);
+  ending.current = end;
+  useLayoutEffect(() => () => ending.current(), []);
 
   const grid = (parts: number) =>
     Array.from({ length: parts - 1 }, (_, i) => {
