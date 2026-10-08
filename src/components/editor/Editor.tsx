@@ -632,6 +632,14 @@ export function Editor({ photo, inert }: { photo: Photo; inert: boolean }) {
               onPointerDown={() => s.setShowOriginal(true)}
               onPointerUp={() => s.setShowOriginal(false)}
               onPointerLeave={() => s.setShowOriginal(false)}
+              // Holding Space or Enter on it works like holding the pointer down.
+              onKeyDown={(event) => {
+                if (event.key !== " " && event.key !== "Enter") return;
+                event.preventDefault();
+                if (!event.repeat) s.setShowOriginal(true);
+              }}
+              onKeyUp={(event) => (event.key === " " || event.key === "Enter") && s.setShowOriginal(false)}
+              onBlur={() => s.setShowOriginal(false)}
             >
               <SquareSplitHorizontal size={16} />
             </button>
