@@ -12,7 +12,7 @@ use std::ops::Range;
 
 use rayon::prelude::*;
 
-use crate::edit::{LocalAdjustments, Mask, Mode, Shape, Stroke};
+use crate::edit::{LocalAdjustments, Mask, Mode, Shape, Stroke, MAX_EXPOSURE};
 use crate::segment::Found;
 
 /// The most masks a recipe can use; any more are left out of the picture.
@@ -72,7 +72,7 @@ pub fn found(masks: &[Mask]) -> Vec<Found> {
 fn local_rows(a: &LocalAdjustments) -> [[f32; 4]; 4] {
     let unit = |value: f32| (value / 100.0).clamp(-1.0, 1.0);
     [
-        [a.exposure.clamp(-5.0, 5.0), unit(a.contrast), unit(a.highlights), unit(a.shadows)],
+        [a.exposure.clamp(-MAX_EXPOSURE, MAX_EXPOSURE), unit(a.contrast), unit(a.highlights), unit(a.shadows)],
         [unit(a.whites), unit(a.blacks), unit(a.temperature), unit(a.tint)],
         [unit(a.vibrance), unit(a.saturation), unit(a.clarity), unit(a.dehaze)],
         [unit(a.sharpening), unit(a.noise_reduction), 0.0, 0.0],

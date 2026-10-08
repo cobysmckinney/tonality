@@ -25,9 +25,10 @@ Tonality keeps one managed library, like Apple Photos. Importing copies photos i
 - **One window.** Opening Tonality while it's already running brings up the open window rather than starting a second copy.
 - **Library, Favorites, Imports, Recently Deleted, Albums** in the sidebar. Deleted photos are kept for 30 days. If a file can't be deleted at the end of that (it's open in another program, say), its photo stays in Recently Deleted until it can be.
 - **Import** from files, folders, drag and drop, or a camera card (any mounted volume with a `DCIM` folder). You review what was found before anything is copied, grouped by the day it was taken: a day's heading selects or clears the whole day, so one shoot can be imported and the rest of the card left. Photos already in the library are marked and skipped. Each copy is read back and checked against the original before the photo is added, so a failing card shows up as an error, not a damaged photo.
-- **Moving or deleting files in `Originals` yourself**: a photo whose original is gone keeps its thumbnail but gets a crossed-out file mark in the grid, and can't be edited or exported until the file is put back where it was.
+- **Moving or deleting files in `Originals` yourself**: a photo whose original is gone keeps its thumbnail but gets a crossed-out file mark in the grid, and can't be edited or exported until the file is put back where it was. Opening it in the editor says what's wrong in place of the photo, and the same goes for a file that's damaged and can't be read.
 - **RAW + JPEG pairs** shot together are one photo.
-- **Culling**: `F` favorite, `P` pick, `X` reject, `U` unflag, `Delete` to delete. Arrows move, Shift extends, Enter opens, Escape goes back.
+- **A damaged original**, or a file that isn't a photo Tonality can read, can't be edited or exported, and trying says so. If the photo is still on the camera card, deleting it permanently and importing it again may help.
+- **Culling**: `F` favorite, `P` pick, `X` reject, `U` unflag, `Delete` to delete. Arrows move, Shift extends, Enter opens, Escape goes back. When a photo leaves the grid (deleted, or hidden by the filter after you reject it under Hide rejected, say), the next one is selected, so you can keep going without reaching for the mouse; in the editor, the next photo opens.
 - **If the library can't open** (say the folder can't be changed), the window says why. Fix the problem and choose Try again.
 
 ## The editor
@@ -35,7 +36,7 @@ Tonality keeps one managed library, like Apple Photos. Importing copies photos i
 Opening a photo (double-click or Enter) loads it at full resolution onto the graphics card, and every slider change redraws it straight away. A photo larger than the graphics card can hold (16,384 pixels a side on most, 8,192 on some) is scaled down just enough to fit, and that is the largest it can be exported at. Editing never touches the original: your edits are stored in the library, and the photo's thumbnail is redrawn with them so the grid matches.
 
 - **Adjust**: light (exposure, contrast, highlights, shadows, whites, blacks), color (temperature, tint, vibrance, saturation), tone curve with per-channel curves, an eight-band color mixer, detail (sharpening, noise reduction, clarity, dehaze), effects (vignette, grain).
-- **Crop** (`C`): the photo is shown whole with an upright crop frame over it. Shapes (free, original, 1:1, 5:4, 4:3, 3:2, 16:9), a straighten slider that turns the photo under the frame and keeps the frame on the photo, quarter-turns and flips. Pasting edits onto another photo leaves that photo's own crop alone.
+- **Crop** (`C`): the photo is shown whole with an upright crop frame over it. Shapes (free, original, 1:1, 5:4, 4:3, 3:2, 16:9) keep the crop the way up it already is, and a square crop takes the photo's way up. A shape holds while you drag the frame (undo back to a crop of another shape and it is free again). A straighten slider turns the photo under the frame and keeps the frame on the photo, and there are quarter-turns and flips. A vignette frames the crop, and moves with the frame as you drag it. Pasting edits onto another photo leaves that photo's own crop alone.
 - **Starting look**: RAW files open with a built-in tone curve fitted to match camera JPEGs.
 - **Histogram** with clipping markers; `J` shows clipped areas on the photo.
 - **Tools** sit in a rail of icons along the right edge; `A` adjust, `C` crop, `M` masks, `Shift+P` presets, `H` history, `I` info; `Ctrl+Z` / `Ctrl+Shift+Z` undo and redo, hold `\` for the original, `Z` or double-click for 100%, scroll to zoom, `Ctrl+C` / `Ctrl+V` copy and paste edits (in the grid too, onto a whole selection), double-click a slider to reset it.
@@ -44,7 +45,7 @@ Opening a photo (double-click or Enter) loads it at full resolution onto the gra
 
 A preset is a named look to lay over a photo's edits. Each one *covers* some settings and leaves the rest alone, so a look keeps the exposure you already corrected, and a grain preset goes on top of a look. No preset touches the crop.
 
-- **The Presets tool** (`Shift+P`) shows each preset as a small picture of the open photo wearing it, drawn over the photo's current edits. Point at one, or walk the grid with the arrow keys, to see it large; click or Enter applies it. An outline marks the presets the photo is wearing.
+- **The Presets tool** (`Shift+P`) shows each preset as a small picture of the open photo wearing it, drawn over the photo's current edits. Point at one, or walk the grid with the arrow keys, to see it large; click or Enter applies it. Tab stops at one preset, then at its star and, on your own, its "…" menu. An outline marks the presets the photo is wearing.
 - **Favorites**: the star on a preset lists it again in a Favorites group at the top, in the order you starred them. Stars are kept in the library.
 - **Applying is a step** in the history ("Preset: Warm fade"), so it undoes and branches like any other edit.
 - **Amount**: once applied, a slider under the list fades the preset from none of it (0%) to double (200%). It stays for as long as the settings the preset covers are left as it set them, and comes back when undo or redo lands on a step it made. Applying the same preset again, or another look in its place, keeps the amount measured from the photo as it was before either.
@@ -55,11 +56,11 @@ A preset is a named look to lay over a photo's edits. Each one *covers* some set
 
 ## Masks
 
-Masks change one part of the photo. Each mask is an area, built from parts, with its own sliders (light, color, clarity, dehaze, sharpening, noise reduction) that add to the photo's own wherever it covers.
+Masks change one part of the photo. Each mask is an area, built from parts, with its own sliders (light, color, clarity, dehaze, sharpening, noise reduction) that add to the photo's own wherever it covers. Added up, each still stops at its own limit, so overlapping masks can't take exposure past +5 or -5. A mask's sharpening can also go below zero to soften its area slightly, such as skin or a background.
 
 - **The Masks tool** (`M`) is one column: the photo's masks at the top, then a tile for each way to start one (subject, background, sky, object, brush, linear gradient, radial gradient, brightness range; hover a tile for what it picks out), or, once a mask is chosen, its settings and sliders.
 - **Subject, background and sky**: small models find the photo's main subject (a person, an animal, a building) and its sky; the background is everything but the subject. The subject takes about six seconds the first time and the sky about four; after that it is kept in the library. They are parts like any other, so they can be added, subtracted or intersected ("the sky, less the subject"), and a pasted mask finds each photo's own.
-- **Select object**: draw a rough loop around something on the photo and its outline is found. The first loop on a photo takes a few seconds while the model looks the photo over (it starts as soon as you choose to draw); after that each loop takes a moment. **Draw again** replaces the loop; Esc cancels one being drawn. A loop pasted onto a much smaller photo may be too small to find anything in; that part is left empty, the editor says so, and you can draw it again.
+- **Select object**: draw a rough loop around something on the photo and its outline is found. The first loop on a photo takes a few seconds while the model looks the photo over (it starts as soon as you choose to draw); after that each loop takes a moment. **Draw again** replaces the loop; Esc cancels one being drawn. A loop drawn, or edits pasted, while another part is being found waits its turn. A loop pasted onto a much smaller photo may be too small to find anything in; that part is left empty, the editor says so, and you can draw it again.
 - **The list**: each mask has a black-and-white thumbnail of what it covers. The eye hides a mask's effect without removing it; **…** (or a right-click) renames, inverts or deletes it. Clicking the chosen mask again, **New mask**, or Esc lets go of it, back to the tiles.
 - **Parts**: the chosen mask opens to list its parts. **Add**, **Subtract** and **Intersect** put another one on: it adds to the area, takes from it, or keeps only what both cover ("the sky, but only its bright part"). The mark after a part changes how it combines, and the button at the end of the row inverts the whole mask. The chosen part's settings (a brush's size, a radial's feather, a range's ends) come first under the list.
 - **On the photo**: a gradient's ends and a radial's edges, centre and turning knob are dragged into place. With a brush part chosen, dragging paints; Alt erases, `[` and `]` change the size. `O` (or **Overlay**) tints the chosen mask red.
@@ -105,10 +106,10 @@ Exports are sRGB and carry the capture date, camera, lens and exposure.
 | Grid, editor | `Ctrl+C` / `Ctrl+V` | Copy / paste edits (in the grid, onto every selected photo) |
 | Grid, editor | `Ctrl+E` | Export |
 | Editor | `Esc` | Back to the grid |
-| Editor | Left / Right | Previous / next photo |
+| Editor | Left / Right | Previous / next photo. On a slider they nudge it, and on a row of tabs (the tool rail, the curve's channels, the mixer's colours) they move along it |
 | Editor | `A` / `C` / `M` / `Shift+P` / `H` / `I` | Adjust / crop / masks / presets / history / info |
 | Editor | `Ctrl+Z` / `Ctrl+Shift+Z` or `Ctrl+Y` | Undo / redo |
-| Editor | hold `\` | Show the original |
+| Editor | hold `\`, or hold Space or Enter on the Show original button | Show the original |
 | Editor | `Z`, double-click | Fit / 100% |
 | Editor | `J` | Show clipped areas |
 | Editor | `O` | Mask overlay |

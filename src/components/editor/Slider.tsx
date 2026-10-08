@@ -2,6 +2,9 @@ import { CSSProperties, useRef } from "react";
 import { formatValue } from "../../adjustments";
 import { useStore } from "../../store";
 
+/** About as long as a double-click can take. */
+const DOUBLE_CLICK = 400;
+
 interface Props {
   label: string;
   value: number;
@@ -32,7 +35,20 @@ export function Slider({ label, value, min, max, step = 1, origin = 0, track, fo
     clearTimeout(pause.current);
     pause.current = setTimeout(commit, 600);
   };
+  // A click on the track jumps the slider there. Its step waits a moment, in
+  // case it is the first half of a double-click to reset: then the reset
+  // makes one step from where the slider started, not two.
+  const pressed = useRef<{ x: number; y: number } | null>(null);
+  const click = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const endPress = (event: React.PointerEvent) => {
+    const from = pressed.current;
+    pressed.current = null;
+    clearTimeout(click.current);
+    if (from && Math.hypot(event.clientX - from.x, event.clientY - from.y) < 4) click.current = setTimeout(commit, DOUBLE_CLICK);
+    else commit();
+  };
   const reset = () => {
+    clearTimeout(click.current);
     onChange(origin);
     commit();
   };
@@ -58,9 +74,13 @@ export function Slider({ label, value, min, max, step = 1, origin = 0, track, fo
         value={value}
         style={fill}
         onChange={(event) => onChange(Number(event.currentTarget.value))}
-        onPointerUp={commit}
+        onPointerDown={(event) => (pressed.current = { x: event.clientX, y: event.clientY })}
+        onPointerUp={endPress}
         onKeyUp={commitAfterPause}
-        onBlur={commit}
+        onBlur={() => {
+          clearTimeout(click.current);
+          commit();
+        }}
         onDoubleClick={reset}
       />
     </label>

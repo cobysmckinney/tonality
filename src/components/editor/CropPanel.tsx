@@ -1,6 +1,6 @@
 import { FlipHorizontal2, FlipVertical2, RotateCcw, RotateCw } from "lucide-react";
 import { DEFAULTS, GEOMETRY, same } from "../../adjustments";
-import { flipped, quarterTurn, Rect, shrinkToFit, straightened, toCrop, toRect, turnedSize, withAspect } from "../../crop";
+import { flipped, heldAspect, isTall, quarterTurn, Rect, shapeAspect, shrinkToFit, straightened, toCrop, toRect, turnedSize, withAspect } from "../../crop";
 import { useStore } from "../../store";
 import { Slider } from "./Slider";
 
@@ -32,14 +32,17 @@ export function CropPanel() {
   const adjustments = useStore((s) => s.editor.adjustments);
   const photo = useStore((s) => s.editor.size);
   const ready = useStore((s) => s.editor.ready);
-  const shape = useStore((s) => s.cropShape);
-  const aspect = useStore((s) => s.cropAspect);
+  const chosenShape = useStore((s) => s.cropShape);
+  const chosenAspect = useStore((s) => s.cropAspect);
   const s = useStore.getState();
   if (!photo || !ready) return <div className="crop-panel waiting" />;
 
   const turned = turnedSize(photo, adjustments.rotation);
   const rect = toRect(adjustments.crop, turned);
   const changed = GEOMETRY.some((key) => !same(adjustments[key], DEFAULTS[key]));
+  // The chosen shape only holds while the crop still has it: undo can put back a crop of another shape.
+  const aspect = heldAspect(rect, chosenAspect);
+  const shape = aspect === null ? "Free" : chosenShape;
 
   const setRect = (next: Rect) => {
     s.adjust({ crop: toCrop(next, turned) });
@@ -51,9 +54,8 @@ export function CropPanel() {
       s.setCropShape(label, null);
       return;
     }
-    // Keep the crop the way up it already is: a tall crop stays tall.
-    const tall = rect.height > rect.width;
-    const next = ratio === "original" ? turned.width / turned.height : tall ? 1 / ratio : ratio;
+    // Keep the crop the way up it already is: a tall crop stays tall, even for "Original".
+    const next = shapeAspect(ratio === "original" ? turned.width / turned.height : ratio, rect, turned);
     s.setCropShape(label, next);
     setRect(withAspect(rect, next, adjustments.straighten, turned));
   };
@@ -63,6 +65,8 @@ export function CropPanel() {
       s.setCropShape(shape, 1 / aspect);
       setRect(withAspect(rect, 1 / aspect, adjustments.straighten, turned));
     } else {
+      // Let go of a shape that no longer held, so the swapped crop can't take it up again.
+      if (chosenAspect !== null) s.setCropShape("Free", null);
       setRect(shrinkToFit({ ...rect, width: rect.height, height: rect.width }, adjustments.straighten, turned));
     }
   };
@@ -70,7 +74,7 @@ export function CropPanel() {
   const turn = (clockwise: boolean) => {
     s.adjust(quarterTurn(adjustments, clockwise));
     s.commitAdjust();
-    if (aspect !== null) s.setCropShape(shape, 1 / aspect);
+    s.setCropShape(shape, aspect === null ? null : 1 / aspect);
   };
 
   const flip = (horizontal: boolean) => {
@@ -84,7 +88,7 @@ export function CropPanel() {
     s.setCropShape("Free", null);
   };
 
-  const tall = rect.height > rect.width;
+  const tall = isTall(rect, turned);
   const square = aspect !== null && Math.abs(aspect - 1) < 1e-6;
   const ratioOf = (option: (typeof SHAPES)[number]) =>
     option.ratio === "original" ? turned.width / turned.height : option.ratio;

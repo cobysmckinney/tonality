@@ -122,6 +122,9 @@ function PresetTile(props: {
   favorite: boolean;
   renaming: boolean;
   onRename: (renaming: boolean) => void;
+  /** The one tile Tab stops at; the arrow keys move between the rest. */
+  reachable: boolean;
+  onFocus: () => void;
 }) {
   const { preset, on, favorite } = props;
   const s = useStore.getState();
@@ -157,11 +160,13 @@ function PresetTile(props: {
       ]
     : [star];
 
+  const tabIndex = props.reachable ? 0 : -1;
   return (
-    <li className={`preset-tile ${on ? "on" : ""}`}>
+    <li className={`preset-tile ${on ? "on" : ""}`} onFocus={props.onFocus}>
       <button
         className="preset-main"
         aria-pressed={on}
+        tabIndex={tabIndex}
         title={preset.name}
         // Pointing at a preset, or reaching it with the keyboard, tries it on
         // the photo. Once applied the photo shows what was made, not the trial.
@@ -183,7 +188,7 @@ function PresetTile(props: {
         title={favorite ? "Remove from favorites" : "Add to favorites"}
         aria-label={favorite ? `Remove ${preset.name} from favorites` : `Add ${preset.name} to favorites`}
         aria-pressed={favorite}
-        tabIndex={-1}
+        tabIndex={tabIndex}
         onClick={() => void s.toggleFavoritePreset(preset.id)}
       >
         <Star size={13} fill={favorite ? "currentColor" : "none"} />
@@ -193,7 +198,7 @@ function PresetTile(props: {
           className="preset-more"
           title="Rename, update, export or delete"
           aria-label={`More for ${preset.name}`}
-          tabIndex={-1}
+          tabIndex={tabIndex}
           onClick={(event) => menuBelow(event, entries)}
         >
           <Ellipsis size={13} />
@@ -240,6 +245,8 @@ export function PresetsPanel() {
   const previews = usePreviews();
   const [adding, setAdding] = useState(false);
   const [renaming, setRenaming] = useState<string | null>(null);
+  // Tab stops at one tile, with its star and "…", rather than at every preset.
+  const [reached, setReached] = useState<string | null>(null);
   const list = useRef<HTMLDivElement>(null);
   const s = useStore.getState();
 
@@ -255,6 +262,11 @@ export function PresetsPanel() {
     ].filter((group) => group.presets.length > 0);
   }, [presets, favorites]);
   const own = presets.filter((preset) => preset.group === null);
+  const keys = [
+    ...groups.flatMap((group) => group.presets.map((preset) => `${group.title}:${preset.id}`)),
+    ...own.map((preset) => `Yours:${preset.id}`),
+  ];
+  const reachable = reached !== null && keys.includes(reached) ? reached : keys[0];
 
   // Renaming is keyed by group too: a favorite appears twice, and only the one clicked becomes a field.
   const tile = (group: string) => (preset: Preset) => {
@@ -268,6 +280,8 @@ export function PresetsPanel() {
         favorite={favorites.includes(preset.id)}
         renaming={renaming === key}
         onRename={(yes) => setRenaming(yes ? key : null)}
+        reachable={reachable === key}
+        onFocus={() => setReached(key)}
       />
     );
   };
@@ -276,8 +290,9 @@ export function PresetsPanel() {
   const onKeyDown = (event: React.KeyboardEvent) => {
     if (!["ArrowDown", "ArrowUp", "ArrowLeft", "ArrowRight"].includes(event.key)) return;
     const tiles = [...list.current!.querySelectorAll<HTMLButtonElement>(".preset-main")];
-    const from = document.activeElement as HTMLButtonElement;
-    if (!tiles.includes(from)) return;
+    // From a tile's star or "…" too, as from the tile.
+    const from = (document.activeElement as HTMLElement).closest(".preset-tile")?.querySelector<HTMLButtonElement>(".preset-main");
+    if (!from || !tiles.includes(from)) return;
     event.preventDefault();
     // Left and right would otherwise change photo.
     event.stopPropagation();

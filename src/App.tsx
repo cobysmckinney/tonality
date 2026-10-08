@@ -78,11 +78,16 @@ export default function App() {
   const modal = useStore((s) => s.importState !== null || s.exportState !== null || s.confirmRequest !== null);
 
   useEffect(() => {
-    void useStore.getState().init();
+    const { subscribe, init } = useStore.getState();
+    const unsubscribe = subscribe();
+    void init();
     // The app draws its own menus.
     const block = (event: MouseEvent) => event.preventDefault();
     window.addEventListener("contextmenu", block);
-    return () => window.removeEventListener("contextmenu", block);
+    return () => {
+      unsubscribe();
+      window.removeEventListener("contextmenu", block);
+    };
   }, []);
 
   if (libraryProblem) {
