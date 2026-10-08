@@ -37,6 +37,7 @@ import {
 import { plural } from "./format";
 import { canAdd, circleShape, foundShapes, isFound, MaskStart, MAX_MASKS, newMask, newShape, SHAPE_NAMES, startKind } from "./masks";
 import { blend, holds, Preset, settingsFrom } from "./presets";
+import { forget } from "./selection";
 
 export type Filter = "all" | "picks" | "unrejected" | "rejects";
 
@@ -586,22 +587,8 @@ export const useStore = create<State>((set, get) => {
   const removeFromView = (ids: number[]) => {
     const gone = new Set(ids);
     const state = get();
-    let openId = state.openId;
-    if (openId !== null && gone.has(openId)) {
-      // Step to the nearest surviving neighbour, preferring the next photo.
-      const visible = visiblePhotos(state);
-      const at = visible.findIndex((p) => p.id === openId);
-      const next = visible.slice(at + 1).find((p) => !gone.has(p.id));
-      const previous = visible.slice(0, at).reverse().find((p) => !gone.has(p.id));
-      openId = (next ?? previous)?.id ?? null;
-    }
-    set({
-      photos: state.photos.filter((p) => !gone.has(p.id)),
-      selection: new Set([...state.selection].filter((id) => !gone.has(id))),
-      cursor: state.cursor !== null && gone.has(state.cursor) ? openId : state.cursor,
-      anchor: state.anchor !== null && gone.has(state.anchor) ? null : state.anchor,
-      openId,
-    });
+    const visible = visiblePhotos(state).map((p) => p.id);
+    set({ photos: state.photos.filter((p) => !gone.has(p.id)), ...forget(visible, gone, state) });
   };
 
   return {
@@ -1167,7 +1154,12 @@ export const useStore = create<State>((set, get) => {
       const chosen = get().photos.filter((p) => ids.includes(p.id));
       if (chosen.length === 0) return;
       const next: Flag = flag !== 0 && chosen.every((p) => p.flag === flag) ? 0 : flag;
+      const before = visiblePhotos(get()).map((p) => p.id);
       patch(ids, (p) => ({ ...p, flag: next }));
+      // Photos the filter now hides leave the selection, as if removed.
+      const shown = new Set(visiblePhotos(get()).map((p) => p.id));
+      const hidden = new Set(before.filter((id) => !shown.has(id)));
+      if (hidden.size > 0) set((s) => forget(before, hidden, s));
       await attempt(() => api.setFlag(ids, next));
     },
 
