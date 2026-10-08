@@ -27,7 +27,7 @@ Tonality keeps one managed library, like Apple Photos. Importing copies photos i
 - **Import** from files, folders, drag and drop, or a camera card (any mounted volume with a `DCIM` folder). You review what was found before anything is copied, grouped by the day it was taken: a day's heading selects or clears the whole day, so one shoot can be imported and the rest of the card left. Photos already in the library are marked and skipped. Each copy is read back and checked against the original before the photo is added, so a failing card shows up as an error, not a damaged photo.
 - **Moving or deleting files in `Originals` yourself**: a photo whose original is gone keeps its thumbnail but gets a crossed-out file mark in the grid, and can't be edited or exported until the file is put back where it was.
 - **RAW + JPEG pairs** shot together are one photo.
-- **Culling**: `F` favorite, `P` pick, `X` reject, `U` unflag, `Delete` to delete. Arrows move, Shift extends, Enter opens, Escape goes back.
+- **Culling**: `F` favorite, `P` pick, `X` reject, `U` unflag, `Delete` to delete. Arrows move, Shift extends, Enter opens, Escape goes back. When a photo leaves the grid (deleted, or hidden by the filter after you reject it under Hide rejected, say), the next one is selected, so you can keep going without reaching for the mouse; in the editor, the next photo opens.
 - **If the library can't open** (say the folder can't be changed), the window says why. Fix the problem and choose Try again.
 
 ## The editor
