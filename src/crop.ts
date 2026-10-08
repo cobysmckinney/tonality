@@ -109,6 +109,21 @@ export function withAspect(rect: Rect, aspect: number, angle: number, turned: Si
   return shrinkToFit({ ...rect, width: generous * aspect, height: generous }, angle, turned);
 }
 
+/**
+ * Whether a crop stands tall. A crop within a pixel of square has no way up of
+ * its own (rounding in the stored crop would decide it), so it follows the photo.
+ */
+export function isTall(rect: Rect, turned: Size): boolean {
+  if (Math.abs(rect.width - rect.height) < 1) return turned.height > turned.width;
+  return rect.height > rect.width;
+}
+
+/** The width over height a shape gives the crop, kept the way up the crop already is. `ratio` may be either way up. */
+export function shapeAspect(ratio: number, rect: Rect, turned: Size): number {
+  const long = Math.max(ratio, 1 / ratio);
+  return isTall(rect, turned) ? 1 / long : long;
+}
+
 /** Whether a crop is simply "as much as fits": then straightening may grow it again, not only shrink it. */
 function isLargest(rect: Rect, angle: number, turned: Size): boolean {
   const full = largest(rect.width / rect.height, angle, turned);

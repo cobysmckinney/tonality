@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { defaultAdjustments } from "./adjustments";
-import { dragged, fits, flipped, frameSize, largest, quarterTurn, Rect, shrinkToFit, straightened, toFrame, toPhoto, withAspect } from "./crop";
+import { dragged, fits, flipped, frameSize, largest, quarterTurn, Rect, shapeAspect, shrinkToFit, straightened, toFrame, toPhoto, withAspect } from "./crop";
 
 const photo = { width: 600, height: 400 };
 const whole: Rect = { x: 300, y: 200, width: 600, height: 400 };
@@ -147,6 +147,33 @@ describe("dragging the frame", () => {
         const next = dragged({ ...tilted, width: tilted.width / 2, height: tilted.height / 2 }, handle, delta, angle, photo, null);
         expect(onPhoto(next, angle)).toBe(true);
       }
+    }
+  });
+});
+
+describe("choosing a shape", () => {
+  const tall: Rect = { x: 300, y: 200, width: 200, height: 300 };
+  const square: Rect = { x: 300, y: 200, width: 300, height: 300 };
+
+  test("keeps the crop the way up it already is", () => {
+    expect(shapeAspect(3 / 2, whole, photo)).toBeCloseTo(3 / 2);
+    expect(shapeAspect(3 / 2, tall, photo)).toBeCloseTo(2 / 3);
+  });
+
+  test("turns the photo's own shape to match a tall crop", () => {
+    // "Original" on a wide photo, with a tall crop, is the photo's shape stood up.
+    expect(shapeAspect(photo.width / photo.height, tall, photo)).toBeCloseTo(2 / 3);
+    // And on a tall photo, a wide crop gets the photo's shape laid down.
+    const portrait = { width: 400, height: 600 };
+    expect(shapeAspect(portrait.width / portrait.height, { x: 200, y: 300, width: 300, height: 200 }, portrait)).toBeCloseTo(3 / 2);
+  });
+
+  test("a square crop follows the photo, however it rounds", () => {
+    const portrait = { width: 400, height: 600 };
+    for (const nudge of [-0.01, 0, 0.01]) {
+      const rect = { ...square, height: square.height + nudge };
+      expect(shapeAspect(3 / 2, rect, photo)).toBeCloseTo(3 / 2);
+      expect(shapeAspect(3 / 2, rect, portrait)).toBeCloseTo(2 / 3);
     }
   });
 });
