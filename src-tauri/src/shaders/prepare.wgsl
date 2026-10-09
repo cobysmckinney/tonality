@@ -55,7 +55,8 @@ struct Film {
     low: vec4f,
     // How far each channel's density runs from there to the densest point.
     span: vec4f,
-    // Where the densest point lands in scene light, and the scene's range in stops.
+    // Where the densest point lands in scene light, the scene's range in
+    // stops, then where the highlights start to roll off and how much.
     out: vec4f,
 }
 
@@ -75,6 +76,11 @@ fn film_positive(in: VertexOutput) -> @location(0) vec4f {
     }
     let density = -log2(through) * 0.30102999566;
     let position = (density - film.low.rgb) / film.span.rgb;
+    let light = film.out.x * exp2(film.out.y * (position - 1.0));
+    // Highlights rolled off above the knee: `over` stops over it come out
+    // over / (1 + shoulder * over) stops over, as a print's paper does.
+    let over = log2(max(light, vec3f(darkest)) / film.out.z);
+    let rolled = film.out.z * exp2(over / (1.0 + film.out.w * max(over, vec3f(0.0))));
     // Capped far past white, where the black of a holder would otherwise overflow.
-    return vec4f(min(film.out.x * exp2(film.out.y * (position - 1.0)), vec3f(64.0)), 1.0);
+    return vec4f(min(select(light, rolled, over > vec3f(0.0)), vec3f(64.0)), 1.0);
 }

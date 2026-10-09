@@ -15,6 +15,9 @@
 //! 4. Density is proportional to the scene's light in stops, so that range
 //!    becomes light again: the positive is scene-referred, like a RAW, and
 //!    the rest of the editor works on it unchanged.
+//! 5. How bright: the frame's average lands where an ordinary RAW's does,
+//!    as a camera's meter would put it, and highlights that would land near
+//!    white are rolled off below it, as a print does (`Look::reach`, `Look::shoulder`).
 //!
 //! The develop pipeline does the arithmetic on the GPU (`film_positive` in
 //! shaders/prepare.wgsl); `Look::invert` here is its CPU twin, for the tests.
@@ -44,6 +47,11 @@ pub enum Kind {
 pub struct Range {
     pub low: [f32; 3],
     pub high: [f32; 3],
+    /// The frame's average, as a share of the way from the thin end to the
+    /// dense end (in stops of light). None in ranges kept before it was
+    /// measured: it is measured from the frame then.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key: Option<f32>,
 }
 
 /// A photo's film settings, as the recipe stores them.
@@ -66,9 +74,20 @@ impl Film {
     }
 }
 
-/// The densest point of the frame lands here, in scene light (1.0 is where a
-/// RAW clips): just below white, as the brightest part of a well exposed RAW does.
-pub const TOP: f32 = 0.9;
+/// The frame's average (the mean of its light in stops) lands here, in scene
+/// light (1.0 is where a RAW clips): where an ordinary RAW's average sits,
+/// so a negative opens about as bright as one.
+pub const KEY: f32 = 0.08;
+/// The densest point of the frame lands at most here: a stop under clipping,
+/// where the starting look still draws detail (about 234 of 255). Anything
+/// that would land brighter is rolled off from `KNEE` up, as a print's paper
+/// does, so a bright sky or a lit wall isn't pressed against white.
+pub const TOP: f32 = 0.5;
+const KNEE: f32 = 0.18;
+/// Where the densest point would land before that, in scene light, is kept
+/// within these: a frame that is nearly all sky isn't made grey, and a
+/// night scene, mostly shadow, isn't brightened into a day.
+const REACH: (f32, f32) = (0.4, 2.0);
 /// How steeply typical negative film builds density with light, per decade.
 /// The frame's density range divided by this is the scene's range.
 const GAMMA: f32 = 0.6;
@@ -116,13 +135,33 @@ impl Look {
         std::array::from_fn(|c| (self.range.high[c] - self.range.low[c]).max(NARROWEST))
     }
 
+    /// Where the densest point of the frame lands, in scene light, before
+    /// the highlights are rolled off: wherever puts the frame's average on
+    /// `KEY`, within `REACH`.
+    pub fn reach(&self) -> f32 {
+        let average = self.range.key.unwrap_or(0.5).clamp(0.0, 1.0);
+        (KEY * (self.stops() * (1.0 - average)).exp2()).clamp(REACH.0, REACH.1)
+    }
+
+    /// How much the highlights are rolled off above `KNEE`, so that the
+    /// densest point lands on `TOP` rather than at `reach`: 0 when it lands
+    /// there or lower anyway. Above the knee, a pixel `x` stops over it ends
+    /// up `x / (1 + shoulder * x)` stops over.
+    pub fn shoulder(&self) -> f32 {
+        let (over, wanted) = ((self.reach() / KNEE).log2(), (TOP / KNEE).log2());
+        if over <= wanted { 0.0 } else { (over / wanted - 1.0) / over }
+    }
+
     /// The positive of one scan pixel, in scene light.
     pub fn invert(&self, pixel: [f32; 3]) -> [f32; 3] {
-        let stops = self.stops();
+        let (stops, reach, shoulder) = (self.stops(), self.reach(), self.shoulder());
         let spans = self.spans();
         let light = |density: f32, c: usize| {
             let position = (density - self.range.low[c]) / spans[c];
-            (TOP * (stops * (position - 1.0)).exp2()).min(BRIGHTEST)
+            let light = reach * (stops * (position - 1.0)).exp2();
+            let over = (light.max(DARKEST) / KNEE).log2();
+            let light = if over > 0.0 { KNEE * (over / (1.0 + shoulder * over)).exp2() } else { light };
+            light.min(BRIGHTEST)
         };
         match self.kind {
             Kind::BlackAndWhite => {
@@ -137,21 +176,21 @@ impl Look {
     }
 
     /// The look as the film pass in prepare.wgsl reads it: base and kind,
-    /// low ends, spans, then the top and the range in stops.
+    /// low ends, spans, then the reach, the range in stops, the knee and the shoulder.
     pub fn uniform(&self) -> [[f32; 4]; 4] {
         let [r, g, b] = self.base;
         let kind = if self.kind == Kind::BlackAndWhite { 2.0 } else { 1.0 };
         let spans = self.spans();
         let [l0, l1, l2] = self.range.low;
-        [[r, g, b, kind], [l0, l1, l2, 0.0], [spans[0], spans[1], spans[2], 0.0], [TOP, self.stops(), 0.0, 0.0]]
+        [[r, g, b, kind], [l0, l1, l2, 0.0], [spans[0], spans[1], spans[2], 0.0], [self.reach(), self.stops(), KNEE, self.shoulder()]]
     }
 
     /// The settings that change what the models see: the kind of film and
-    /// its base, written into found mattes' names. The range is left out:
-    /// it moves with the crop, and the subject's outline doesn't.
+    /// its base, written into found mattes' names, with `MATTE_TAG`. The
+    /// range is left out: it moves with the crop, and the subject's outline doesn't.
     pub fn matte_name(&self) -> String {
         let base = self.base.map(|v| format!("{:.4}", v)).join(",");
-        let hash = blake3::hash(format!("{:?}-{base}", self.kind).as_bytes()).to_hex();
+        let hash = blake3::hash(format!("{:?}-{base}-{MATTE_TAG}", self.kind).as_bytes()).to_hex();
         format!("-film-{}", &hash[..10])
     }
 }
@@ -331,7 +370,7 @@ pub fn guess_base<'a>(pixels: impl IntoIterator<Item = &'a [f32; 3]>) -> [f32; 3
 /// density faster has its thin end further from clear film in proportion.
 pub fn measure_range(kind: Kind, base: [f32; 3], pixels: &[[f32; 3]]) -> Range {
     if pixels.is_empty() {
-        return Range { low: [0.0; 3], high: [1.0; 3] };
+        return Range { low: [0.0; 3], high: [1.0; 3], key: Some(0.5) };
     }
     let channels: Vec<Vec<f32>> = match kind {
         Kind::BlackAndWhite => vec![pixels.par_iter().map(|&p| density_bw(p, base)).collect()],
@@ -349,8 +388,33 @@ pub fn measure_range(kind: Kind, base: [f32; 3], pixels: &[[f32; 3]]) -> Range {
     let pick = |c: usize| ends[c.min(ends.len() - 1)];
     let high: [f32; 3] = std::array::from_fn(|c| pick(c).1);
     let share = ends.iter().map(|(low, high)| low / high).sum::<f32>() / ends.len() as f32;
-    Range { low: high.map(|h| share * h), high }
+    let mut range = Range { low: high.map(|h| share * h), high, key: None };
+    range.key = Some(average(kind, base, &range, pixels));
+    range
 }
+
+/// How far up `range` `pixels` are on average, from 0 at its thin end to 1
+/// at its dense end: the mean of their light in stops, as the positive has it.
+fn average(kind: Kind, base: [f32; 3], range: &Range, pixels: &[[f32; 3]]) -> f32 {
+    let spans: [f32; 3] = std::array::from_fn(|c| (range.high[c] - range.low[c]).max(NARROWEST));
+    let position = |density: f32, c: usize| ((density - range.low[c]) / spans[c]).clamp(0.0, 1.0) as f64;
+    let sum: f64 = pixels
+        .par_iter()
+        .map(|&p| match kind {
+            Kind::BlackAndWhite => position(density_bw(p, base), 0),
+            _ => {
+                let d = densities(p, base);
+                (0..3).map(|c| position(d[c], c)).sum::<f64>() / 3.0
+            }
+        })
+        .sum();
+    (sum / pixels.len().max(1) as f64) as f32
+}
+
+/// Names the way a positive is drawn for the models to look at. Part of
+/// each found matte's name, so changing how bright or contrasty a positive
+/// comes out (the constants above) finds every matte of a negative again.
+const MATTE_TAG: &str = "key-shoulder-1";
 
 /// What a frame's film settings come to, measured where they are left to
 /// be: the base from the whole scan, the range from inside the crop.
@@ -360,7 +424,12 @@ pub fn resolve(sample: &Sample, adjustments: &Adjustments) -> Option<Look> {
         return None;
     }
     let base = film.base.unwrap_or_else(|| sample.guessed_base());
-    let range = film.range.unwrap_or_else(|| measure_range(film.kind, base, &sample.inside(adjustments)));
+    let range = match film.range {
+        Some(range @ Range { key: Some(_), .. }) => range,
+        // Balanced with a roll before the average was kept: the frame's own.
+        Some(range) => Range { key: Some(average(film.kind, base, &range, &sample.inside(adjustments))), ..range },
+        None => measure_range(film.kind, base, &sample.inside(adjustments)),
+    };
     Some(Look { kind: film.kind, base, range })
 }
 
@@ -409,24 +478,49 @@ mod tests {
 
     #[test]
     fn the_ends_of_the_range_land_on_black_and_the_top() {
-        let look = Look { kind: Kind::Colour, base: [0.8, 0.5, 0.3], range: Range { low: [0.1, 0.2, 0.3], high: [1.1, 1.4, 1.5] } };
+        let look = Look { kind: Kind::Colour, base: [0.8, 0.5, 0.3], range: Range { low: [0.1, 0.2, 0.3], high: [1.1, 1.4, 1.5], key: Some(0.5) } };
         let at = |d: [f32; 3]| look.invert(std::array::from_fn(|c| look.base[c] * 10f32.powf(-d[c])));
         for v in at(look.range.high) {
             assert!((v - TOP).abs() < 1e-4, "{v}");
         }
-        let bottom = TOP * (-look.stops()).exp2();
+        let bottom = look.reach() * (-look.stops()).exp2();
         for v in at(look.range.low) {
             assert!((v - bottom).abs() < 1e-5, "{v}");
         }
-        // Halfway in density is halfway in stops, in every channel alike.
+        // Halfway in density is halfway in stops, in every channel alike:
+        // the frame's average, which lands where an ordinary RAW's does.
         let middle = at(std::array::from_fn(|c| (look.range.low[c] + look.range.high[c]) / 2.0));
         assert!(middle.iter().all(|v| (v - middle[0]).abs() < 1e-5), "{middle:?}");
-        assert!(middle[0] > bottom && middle[0] < TOP);
+        assert!((middle[0] - KEY).abs() < 1e-4, "{middle:?}");
+    }
+
+    #[test]
+    fn highlights_are_rolled_off_below_white_and_keep_their_order() {
+        let range = Range { low: [0.1; 3], high: [1.3; 3], key: Some(0.3) };
+        let look = Look { kind: Kind::BlackAndWhite, base: [0.6; 3], range };
+        // A dark frame: its average on KEY would put its densest point past white...
+        assert!(look.reach() > 1.0 && look.shoulder() > 0.0);
+        let at = |d: f32| look.invert([0.6 * 10f32.powf(-d); 3])[0];
+        // ...so the highlights are rolled off to land on TOP, in order.
+        assert!((at(1.3) - TOP).abs() < 1e-4, "{}", at(1.3));
+        let mut last = 0.0;
+        for step in 0..=40 {
+            let v = at(0.1 + 1.2 * step as f32 / 40.0);
+            assert!(v > last, "step {step}: {v} after {last}");
+            last = v;
+        }
+        // The rest of the frame is left as it was.
+        let below = look.reach() * (look.stops() * -0.6).exp2();
+        assert!(below < KNEE && (at(0.1 + 1.2 * 0.4) - below).abs() < 1e-5);
+
+        // A bright frame (nearly all sky) isn't made grey.
+        let sky = Look { range: Range { key: Some(0.9), ..range }, ..look };
+        assert_eq!((sky.reach(), sky.shoulder()), (REACH.0, 0.0));
     }
 
     #[test]
     fn black_and_white_comes_out_grey() {
-        let look = Look { kind: Kind::BlackAndWhite, base: [0.7, 0.6, 0.75], range: Range { low: [0.1; 3], high: [1.2; 3] } };
+        let look = Look { kind: Kind::BlackAndWhite, base: [0.7, 0.6, 0.75], range: Range { low: [0.1; 3], high: [1.2; 3], key: Some(0.5) } };
         for pixel in [[0.3, 0.2, 0.35], [0.05, 0.04, 0.06], [0.7, 0.6, 0.75]] {
             let [r, g, b] = look.invert(pixel);
             assert!(r == g && g == b);
@@ -505,6 +599,13 @@ mod tests {
         // The roll spans both frames: wider than either alone.
         assert!(range.high[1] > alone.range.high[1] + 0.3, "{range:?} vs {:?}", alone.range);
         assert!((roll_base[0] / base[0] - 1.0).abs() < 0.01);
+        // So does its average, so every frame is drawn as bright as the roll is.
+        assert!(range.key.is_some());
+        let reach = |sample: &Sample| {
+            let balanced = Adjustments { film: Film { range: Some(range), ..film }, ..adjustments.clone() };
+            resolve(sample, &balanced).unwrap().reach()
+        };
+        assert_eq!(reach(&frames[0].0), reach(&frames[1].0));
 
         // A base picked by hand on one frame goes to the whole roll.
         let mut picked = adjustments.clone();

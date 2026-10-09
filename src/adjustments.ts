@@ -88,8 +88,11 @@ export interface Film {
   kind: FilmKind;
   /** The clear film's colour in the scan; null while it is guessed. */
   base: Rgb | null;
-  /** Each channel's density range; null while it is measured from the frame alone. Set when a roll is balanced together. */
-  range: { low: Rgb; high: Rgb } | null;
+  /**
+   * Each channel's density range, and the frame's average within it (which sets how bright it is drawn); null while
+   * they are measured from the frame alone. Set when a roll is balanced together.
+   */
+  range: { low: Rgb; high: Rgb; key?: number } | null;
 }
 
 /** The film types, as the Film setting lists them. */

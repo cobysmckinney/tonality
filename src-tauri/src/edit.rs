@@ -322,7 +322,7 @@ mod tests {
     fn film_settings_are_kept_and_old_recipes_have_none() {
         use crate::film::{Kind, Range};
         assert_eq!(Adjustments::from_json(Some(r#"{"exposure":0.5}"#)).film, Film::default());
-        let range = Range { low: [0.1, 0.2, 0.3], high: [1.0, 1.1, 1.2] };
+        let range = Range { low: [0.1, 0.2, 0.3], high: [1.0, 1.1, 1.2], key: Some(0.4) };
         let film = Film { kind: Kind::BlackAndWhite, base: Some([0.6, 0.5, 0.55]), range: Some(range) };
         let scan = Adjustments { film, ..Default::default() };
         let json = scan.to_json().unwrap();
@@ -331,6 +331,9 @@ mod tests {
         // The interface sends a guessed base and an unbalanced range as null.
         let guessed = Adjustments::from_json(Some(r#"{"film":{"kind":"colour","base":null,"range":null}}"#));
         assert_eq!(guessed.film, Film { kind: Kind::Colour, base: None, range: None });
+        // A roll balanced before the frame's average was kept still loads, without one.
+        let older = Adjustments::from_json(Some(r#"{"film":{"kind":"colour","range":{"low":[0,0,0],"high":[1,1,1]}}}"#));
+        assert_eq!(older.film.range, Some(Range { low: [0.0; 3], high: [1.0; 3], key: None }));
     }
 
     #[test]
