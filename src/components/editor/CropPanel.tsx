@@ -1,11 +1,26 @@
+import { useRef, useState } from "react";
 import { FlipHorizontal2, FlipVertical2, RotateCcw, RotateCw } from "lucide-react";
 import { DEFAULTS, GEOMETRY, same } from "../../adjustments";
-import { flipped, heldAspect, isTall, quarterTurn, Rect, shapeAspect, shrinkToFit, straightened, toCrop, toRect, turnedSize, withAspect } from "../../crop";
+import {
+  flipped,
+  heldAspect,
+  isTall,
+  parseRatio,
+  quarterTurn,
+  Rect,
+  shapeAspect,
+  shrinkToFit,
+  straightened,
+  toCrop,
+  toRect,
+  turnedSize,
+  withAspect,
+} from "../../crop";
 import { useStore } from "../../store";
 import { Slider } from "./Slider";
 
-/** Shapes to crop to, as width over height the long way. `null` leaves the shape free. */
-const SHAPES: { label: string; ratio: number | null | "original" }[] = [
+/** Shapes to crop to, as width over height the long way. `null` leaves the shape free; Custom is whatever is typed. */
+const SHAPES: { label: string; ratio: number | null | "original" | "custom" }[] = [
   { label: "Original", ratio: "original" },
   { label: "Free", ratio: null },
   { label: "1:1", ratio: 1 },
@@ -13,6 +28,7 @@ const SHAPES: { label: string; ratio: number | null | "original" }[] = [
   { label: "3:2", ratio: 3 / 2 },
   { label: "5:4", ratio: 5 / 4 },
   { label: "16:9", ratio: 16 / 9 },
+  { label: "Custom", ratio: "custom" },
 ];
 
 /** A small picture of a shape, drawn the way up the crop is. */
@@ -34,6 +50,13 @@ export function CropPanel() {
   const ready = useStore((s) => s.editor.ready);
   const chosenShape = useStore((s) => s.cropShape);
   const chosenAspect = useStore((s) => s.cropAspect);
+  const custom = useStore((s) => s.cropCustom);
+  // The field for a shape of your own shows once Custom is clicked, and while it is the shape.
+  const [typing, setTyping] = useState(false);
+  const [draft, setDraft] = useState(custom);
+  const field = useRef<HTMLInputElement>(null);
+  // Escape in the field leaves what was typed unused.
+  const reverting = useRef(false);
   const s = useStore.getState();
   if (!photo || !ready) return <div className="crop-panel waiting" />;
 
@@ -44,12 +67,14 @@ export function CropPanel() {
   const aspect = heldAspect(rect, chosenAspect);
   const shape = aspect === null ? "Free" : chosenShape;
 
+  // Each change is a step for undo in the crop tool; the history gets one step for the whole visit, on Done.
   const setRect = (next: Rect) => {
     s.adjust({ crop: toCrop(next, turned) });
-    s.commitAdjust();
+    s.markCrop();
   };
 
   const chooseShape = (label: string, ratio: number | null | "original") => {
+    if (label !== "Custom") setTyping(false);
     if (ratio === null) {
       s.setCropShape(label, null);
       return;
@@ -71,27 +96,52 @@ export function CropPanel() {
     }
   };
 
+  /** Crops to the shape typed for Custom, if it is one. */
+  const applyCustom = (text: string) => {
+    const ratio = parseRatio(text);
+    if (ratio === null) return;
+    s.setCropCustom(text.trim());
+    chooseShape("Custom", ratio);
+  };
+
+  // Leaving the field as it was doesn't reshape a crop already that shape.
+  const keepDraft = () => {
+    if (reverting.current) reverting.current = false;
+    else if (draft.trim() !== custom || shape !== "Custom") applyCustom(draft);
+  };
+
+  const chooseCustom = () => {
+    setTyping(true);
+    setDraft(custom);
+    applyCustom(custom);
+    // The field appears with this click; focus it once it has.
+    requestAnimationFrame(() => field.current?.select());
+  };
+
   const turn = (clockwise: boolean) => {
     s.adjust(quarterTurn(adjustments, clockwise));
-    s.commitAdjust();
+    s.markCrop();
     s.setCropShape(shape, aspect === null ? null : 1 / aspect);
   };
 
   const flip = (horizontal: boolean) => {
     s.adjust(flipped(adjustments, horizontal));
-    s.commitAdjust();
+    s.markCrop();
   };
 
   const reset = () => {
     s.adjust(Object.fromEntries(GEOMETRY.map((key) => [key, DEFAULTS[key]])));
-    s.commitAdjust();
+    s.markCrop();
     s.setCropShape("Free", null);
   };
 
   const tall = isTall(rect, turned);
   const square = aspect !== null && Math.abs(aspect - 1) < 1e-6;
+  const customRatio = parseRatio(custom);
   const ratioOf = (option: (typeof SHAPES)[number]) =>
-    option.ratio === "original" ? turned.width / turned.height : option.ratio;
+    option.ratio === "original" ? turned.width / turned.height : option.ratio === "custom" ? customRatio : option.ratio;
+  const showField = typing || shape === "Custom";
+  const draftWrong = draft.trim() !== "" && parseRatio(draft) === null;
   const angle = adjustments.straighten;
 
   return (
@@ -105,13 +155,46 @@ export function CropPanel() {
               role="radio"
               aria-checked={shape === option.label}
               className={`shape ${shape === option.label ? "active" : ""}`}
-              onClick={() => chooseShape(option.label, option.ratio)}
+              onClick={() =>
+                option.ratio === "custom" ? chooseCustom() : chooseShape(option.label, option.ratio)
+              }
             >
               <ShapeIcon ratio={ratioOf(option)} tall={tall} />
               {option.label}
             </button>
           ))}
         </div>
+        {showField && (
+          <form
+            className="crop-custom"
+            onSubmit={(event) => {
+              event.preventDefault();
+              keepDraft();
+            }}
+          >
+            <label htmlFor="crop-custom">Width : height</label>
+            <input
+              ref={field}
+              id="crop-custom"
+              className={`film-input ${draftWrong ? "wrong" : ""}`}
+              value={draft}
+              placeholder="6:7"
+              spellCheck={false}
+              aria-invalid={draftWrong}
+              title="A shape of your own, such as 6:7 or 65:24"
+              onChange={(event) => setDraft(event.currentTarget.value)}
+              onBlur={keepDraft}
+              onKeyDown={(event) => {
+                // Escape leaves the field as it was, without leaving the crop tool.
+                if (event.key === "Escape") {
+                  reverting.current = true;
+                  setDraft(custom);
+                  event.currentTarget.blur();
+                }
+              }}
+            />
+          </form>
+        )}
         <div className="segmented" role="radiogroup" aria-label="Orientation">
           {[false, true].map((portrait) => (
             <button
@@ -138,6 +221,7 @@ export function CropPanel() {
           step={0.1}
           format={(value) => `${value.toFixed(1)}°`}
           onChange={(next) => s.adjust({ straighten: next, crop: toCrop(straightened(rect, angle, next, turned), turned) })}
+          onCommit={s.markCrop}
         />
       </section>
 
@@ -168,9 +252,14 @@ export function CropPanel() {
         <button className="button quiet" disabled={!changed} onClick={reset}>
           Reset
         </button>
-        <button className="button primary" title="Done (Enter)" onClick={() => s.setSidePanel("adjust")}>
-          Done
-        </button>
+        <div className="crop-finish">
+          <button className="button" title="Put the crop back as it was (Esc)" onClick={s.cancelCrop}>
+            Cancel
+          </button>
+          <button className="button primary" title="Keep the crop (Enter)" onClick={() => s.setSidePanel("adjust")}>
+            Done
+          </button>
+        </div>
       </div>
     </div>
   );

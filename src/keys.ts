@@ -66,7 +66,9 @@ export const SHORTCUTS: ShortcutGroup[] = [
   {
     title: "Crop and masks",
     shortcuts: [
-      { keys: ["Enter"], does: "Finish cropping" },
+      { keys: ["Enter"], does: "Keep the crop" },
+      { keys: ["Esc"], does: "Cancel the crop" },
+      { keys: ["Space+Drag"], does: "Move around a zoomed photo" },
       { keys: ["O"], does: "Mask overlay" },
       { keys: ["[", "]"], does: "Smaller or larger brush" },
       { keys: ["Alt+Drag"], does: "Erase with the brush" },

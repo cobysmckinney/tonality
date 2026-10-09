@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { dragged, Handle, heldAspect, Rect, Size, toCrop, toFrame, toRect, turnedSize } from "../../crop";
+import type { Region } from "../../api";
+import { dragged, Handle, heldAspect, onCanvas, Rect, Size, toCrop, toFrame, toRect, turnedSize } from "../../crop";
 import { arrowOffset } from "../../nudge";
 import { useStore } from "../../store";
 
@@ -24,8 +25,9 @@ const BRACKET = 18;
 interface Props {
   /** The photo's full size in pixels. */
   photo: Size;
-  /** Screen pixels per photo pixel. */
-  scale: number;
+  /** The size of the whole tilted photo in photo pixels, and the part of it on screen (0..1 across and down). */
+  frame: Size;
+  region: Region;
   /** The size on screen of the canvas this lies over. */
   width: number;
   height: number;
@@ -37,7 +39,7 @@ interface Props {
  * edge to resize, drag inside to move. From the keyboard the frame and its
  * corners take the focus, and the arrow keys move them.
  */
-export function CropOverlay({ photo, scale, width, height }: Props) {
+export function CropOverlay({ photo, frame, region, width, height }: Props) {
   const adjustments = useStore((s) => s.editor.adjustments);
   const chosen = useStore((s) => s.cropAspect);
   const drag = useRef<{ handle: Handle; start: Rect; aspect: number | null; x: number; y: number } | null>(null);
@@ -62,10 +64,13 @@ export function CropOverlay({ photo, scale, width, height }: Props) {
   const aspect = heldAspect(rect, chosen);
   // Where the crop sits on screen: its offset from the photo's centre, as seen in the tilted view.
   const [offsetX, offsetY] = toFrame([rect.x - turned.width / 2, rect.y - turned.height / 2], adjustments.straighten);
+  // Zoomed in, the photo's centre may be anywhere, even off the canvas.
+  const centre = onCanvas(frame, region, { width, height });
+  const scale = centre.scale;
   const w = rect.width * scale;
   const h = rect.height * scale;
-  const left = width / 2 + offsetX * scale - w / 2;
-  const top = height / 2 + offsetY * scale - h / 2;
+  const left = centre.x + offsetX * scale - w / 2;
+  const top = centre.y + offsetY * scale - h / 2;
 
   const begin = (handle: Handle) => (event: React.PointerEvent<SVGElement>) => {
     if (event.button !== 0) return;
@@ -83,14 +88,14 @@ export function CropOverlay({ photo, scale, width, height }: Props) {
     const next = dragged(held.start, held.handle, delta, adjustments.straighten, turned, held.aspect);
     useStore.getState().adjust({ crop: toCrop(next, turned) });
   };
-  /** Records a drag or a run of nudges from `start` as one step. */
+  /** Records a drag or a run of nudges from `start` as one step, for undo in the crop tool. */
   const record = (start: Rect, held: number | null) => {
     const s = useStore.getState();
     // A shape that no longer held is let go once the crop is changed freely.
     const now = toRect(s.editor.adjustments.crop, turned);
     const moved = (["x", "y", "width", "height"] as const).some((key) => start[key] !== now[key]);
     if (held === null && s.cropAspect !== null && moved) s.setCropShape("Free", null);
-    s.commitAdjust();
+    s.markCrop();
   };
   const end = () => {
     const held = drag.current;
@@ -105,7 +110,7 @@ export function CropOverlay({ photo, scale, width, height }: Props) {
     nudging.current = null;
     if (held) record(held.start, held.aspect);
   };
-  // Leaving the crop tool mid-drag (C, M, Esc, holding \) still records the drag as its own step.
+  // Ending up out of the crop tool mid-drag still ends the drag: leaving keeps it, Esc cancels it, and holding \ makes it a step to undo.
   const ending = useRef(end);
   ending.current = end;
   const endingNudges = useRef(endNudges);
@@ -154,7 +159,6 @@ export function CropOverlay({ photo, scale, width, height }: Props) {
       onPointerMove={move}
       onPointerUp={end}
       onPointerCancel={end}
-      onDoubleClick={(event) => event.stopPropagation()}
     >
       <path className="crop-shade" fillRule="evenodd" d={`M0 0H${width}V${height}H0ZM${left} ${top}h${w}v${h}h${-w}Z`} />
       <rect

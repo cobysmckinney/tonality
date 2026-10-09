@@ -854,6 +854,15 @@ button {
 .stage-image.zoomed:active {
   cursor: grabbing;
 }
+/* Holding Space, the whole picture is for moving around, crop frame and masks included. */
+.stage-image.zoomed.space-held,
+.stage-image.zoomed.space-held * {
+  cursor: grab !important;
+}
+.stage-image.zoomed.space-held:active,
+.stage-image.zoomed.space-held:active * {
+  cursor: grabbing !important;
+}
 .stage-image img {
   position: absolute;
   inset: 0;
@@ -1193,6 +1202,27 @@ button {
   justify-content: space-between;
   gap: 8px;
   margin-top: -10px;
+}
+.crop-finish {
+  display: flex;
+  gap: 8px;
+}
+/* A shape of your own, typed as width and height. */
+.crop-custom {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.crop-custom label {
+  flex: none;
+  color: var(--muted);
+  font-size: 12px;
+}
+/* Not a shape yet: a broken outline rather than a colour. */
+.crop-custom .film-input.wrong {
+  box-shadow: none;
+  outline: 1.5px dashed var(--muted);
+  outline-offset: -1.5px;
 }
 .stage-note {
   position: absolute;

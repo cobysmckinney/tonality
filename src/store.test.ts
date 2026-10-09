@@ -145,3 +145,50 @@ test("a loop still being drawn when another find ends is kept", async () => {
   await finishFinding();
   expect(state().editor.circling).toEqual({ mode: "add" });
 });
+
+/** Opens the crop tool and moves the crop twice, each a change of its own as a drag would make. */
+const cropTwice = () => {
+  useStore.setState({ sidePanel: "adjust", cropSteps: null });
+  state().setSidePanel("crop");
+  state().adjust({ crop: { x: 0.4, y: 0.5, width: 0.5, height: 0.5 } });
+  state().markCrop();
+  state().adjust({ crop: { x: 0.3, y: 0.5, width: 0.5, height: 0.5 } });
+  state().markCrop();
+};
+const crop = () => state().editor.adjustments.crop;
+
+test("cancelling the crop tool puts the crop back and leaves no step", async () => {
+  cropTwice();
+  state().cancelCrop();
+  await settle();
+  expect(crop()).toEqual(DEFAULTS.crop);
+  // Nothing is left over to undo.
+  expect(state().editor.adjustments).toBe(state().editor.committed);
+  expect(state().sidePanel).toBe("adjust");
+  expect(steps).toEqual([]);
+});
+
+test("leaving the crop tool keeps everything done in it as one step", async () => {
+  cropTwice();
+  state().setSidePanel("adjust");
+  await settle();
+  expect(crop().x).toBe(0.3);
+  expect(steps).toEqual(["Crop"]);
+});
+
+test("undo in the crop tool takes back one change at a time, outside the history", async () => {
+  cropTwice();
+  await state().undo();
+  expect(crop().x).toBe(0.4);
+  await state().redo();
+  expect(crop().x).toBe(0.3);
+  await state().undo();
+  await state().undo();
+  expect(crop()).toEqual(DEFAULTS.crop);
+  await settle();
+  expect(steps).toEqual([]);
+  // Done after undoing everything is no change at all.
+  state().setSidePanel("adjust");
+  await settle();
+  expect(steps).toEqual([]);
+});
