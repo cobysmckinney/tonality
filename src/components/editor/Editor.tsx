@@ -31,6 +31,7 @@ import { onTabKey } from "../../tabs";
 import { menuBelow, useTitle } from "../Toolbar";
 import { frameSize, Size } from "../../crop";
 import { fromOriginal, onOriginal } from "../../masks";
+import { FIT, heldFrame, pannedView, place as placeOn, View, zoomedView } from "../../zoom";
 import { AdjustPanel } from "./AdjustPanel";
 import { CropOverlay } from "./CropOverlay";
 import { CropPanel } from "./CropPanel";
@@ -42,7 +43,6 @@ import { PresetsPanel } from "./PresetsPanel";
 
 const STRIP_ITEM = 54;
 const STRIP_GAP = 4;
-const MAX_ZOOM = 4;
 
 /** The row of neighbouring photos under the open one. Mounts only what is on screen. */
 function Filmstrip({ photos, current }: { photos: Photo[]; current: number }) {
@@ -197,16 +197,6 @@ function Info({ photo }: { photo: Photo }) {
   );
 }
 
-/** How far in the picture is zoomed (screen pixels per photo pixel; null fits it to the stage) and where it's centred. */
-interface View {
-  zoom: number | null;
-  x: number;
-  y: number;
-}
-
-const FIT: View = { zoom: null, x: 0.5, y: 0.5 };
-const clamp = (v: number, low: number, high: number) => Math.min(high, Math.max(low, v));
-
 interface FrameRequest {
   id: number;
   adjustments: Adjustments;
@@ -272,20 +262,8 @@ function Stage({ photo, onZoomChange }: { photo: Photo; onZoomChange: (label: st
     if (!ready || !frame || area.width === 0 || area.height === 0) return null;
     const ratio = window.devicePixelRatio || 1;
     const available = { width: Math.floor(area.width * ratio), height: Math.floor(area.height * ratio) };
-    const place = (shown: Size, x: number, y: number) => {
-      const fit = Math.min(available.width / shown.width, available.height / shown.height, 1);
-      // The crop tool always shows everything.
-      const zoom = view.zoom === null || uncropped ? fit : clamp(view.zoom, fit, MAX_ZOOM);
-      const width = Math.max(1, Math.min(available.width, Math.round(shown.width * zoom)));
-      const height = Math.max(1, Math.min(available.height, Math.round(shown.height * zoom)));
-      const span = { width: width / (shown.width * zoom), height: height / (shown.height * zoom) };
-      const region: Region = {
-        x: clamp(x - span.width / 2, 0, 1 - span.width),
-        y: clamp(y - span.height / 2, 0, 1 - span.height),
-        ...span,
-      };
-      return { fit, zoom, width, height, region };
-    };
+    // The crop tool always shows everything.
+    const place = (shown: Size, x: number, y: number) => placeOn(available, shown, uncropped ? null : view.zoom, x, y);
     let placed = place(frame, view.x, view.y);
     // The view is kept on the edited picture. The original is framed
     // differently (uncropped, unturned), so it is centred on the same spot of
@@ -364,22 +342,8 @@ function Stage({ photo, onZoomChange }: { photo: Photo; onZoomChange: (label: st
       // The box, not the canvas: a waiting frame may sit off it.
       const shown = canvas.current!.closest(".canvas-box")!.getBoundingClientRect();
       const stage = box.current!.getBoundingClientRect();
-      // The point of the picture under the pointer…
-      const u = geometry.region.x + clamp((clientX - shown.left) / shown.width, 0, 1) * geometry.region.width;
-      const v = geometry.region.y + clamp((clientY - shown.top) / shown.height, 0, 1) * geometry.region.height;
-      if (zoom === null || zoom <= geometry.fit * 1.001) {
-        setView(FIT);
-        return;
-      }
-      // …should sit at the same place on the stage after zooming.
-      const next = clamp(zoom, geometry.fit, MAX_ZOOM);
-      const span = {
-        width: Math.min(1, (stage.width * geometry.ratio) / (frame.width * next)),
-        height: Math.min(1, (stage.height * geometry.ratio) / (frame.height * next)),
-      };
-      const fx = clamp((clientX - stage.left) / stage.width, 0, 1);
-      const fy = clamp((clientY - stage.top) / stage.height, 0, 1);
-      setView(kept({ zoom: next, x: u + (0.5 - fx) * span.width, y: v + (0.5 - fy) * span.height }));
+      const next = zoomedView(geometry, frame, geometry.ratio, shown, stage, zoom, clientX, clientY);
+      setView(next === FIT ? FIT : kept(next));
     },
     [geometry, frame, uncropped, kept],
   );
@@ -415,17 +379,9 @@ function Stage({ photo, onZoomChange }: { photo: Photo; onZoomChange: (label: st
   const drag = useRef<{ x: number; y: number } | null>(null);
   const onPointerMove = (event: React.PointerEvent) => {
     if (!drag.current || !geometry || !frame) return;
-    const dx = ((event.clientX - drag.current.x) * geometry.ratio) / (frame.width * geometry.zoom);
-    const dy = ((event.clientY - drag.current.y) * geometry.ratio) / (frame.height * geometry.zoom);
+    const [dx, dy] = [event.clientX - drag.current.x, event.clientY - drag.current.y];
     drag.current = { x: event.clientX, y: event.clientY };
-    const { region } = geometry;
-    setView(
-      kept({
-        zoom: geometry.zoom,
-        x: clamp(region.x + region.width / 2 - dx, region.width / 2, 1 - region.width / 2),
-        y: clamp(region.y + region.height / 2 - dy, region.height / 2, 1 - region.height / 2),
-      }),
-    );
+    setView(kept(pannedView(geometry, frame, geometry.ratio, dx, dy)));
   };
 
   const live = painted?.id === photo.id && geometry !== null;
@@ -434,12 +390,7 @@ function Stage({ photo, onZoomChange }: { photo: Photo; onZoomChange: (label: st
   // to where its part of the picture now sits, rather than stretched to fit.
   const placed =
     live && shown && painted.uncropped === uncropped && painted.original === showOriginal
-      ? {
-          left: ((painted.region.x - geometry.region.x) / geometry.region.width) * shown.width,
-          top: ((painted.region.y - geometry.region.y) / geometry.region.height) * shown.height,
-          width: (painted.region.width / geometry.region.width) * shown.width,
-          height: (painted.region.height / geometry.region.height) * shown.height,
-        }
+      ? heldFrame(painted.region, geometry.region, shown)
       : undefined;
   return (
     <div

@@ -1,18 +1,24 @@
 import { describe, expect, test } from "bun:test";
-import { Adjustments, defaultAdjustments, Point, Shape } from "./adjustments";
+import { readFileSync } from "node:fs";
+import { Adjustments, defaultAdjustments, Mask, MaskPart, Point, Shape } from "./adjustments";
 import {
   apply,
+  brushCount,
   canAdd,
   circleShape,
   foundCount,
   frameToSource,
   fromOriginal,
   matteKey,
+  MAX_BRUSHES,
   MAX_FOUND,
+  MAX_MASKS,
+  MAX_PARTS,
   newMask,
   newShape,
   nudge,
   onOriginal,
+  partCount,
   screenMap,
   stillHeld,
 } from "./masks";
@@ -180,6 +186,57 @@ describe("a drag on the photo", () => {
   test("lets go when another part is chosen or a loop is drawn", () => {
     expect(stillHeld(start, { maskId: 1, partIndex: 1, circling: false })).toBe(false);
     expect(stillHeld(start, { maskId: 1, partIndex: 0, circling: true })).toBe(false);
+  });
+});
+
+describe("limits", () => {
+  const brush: MaskPart = { mode: "add", shape: { kind: "brush", strokes: [] } };
+  const linear: MaskPart = { mode: "add", shape: { kind: "linear", from: [0.5, 0.3], to: [0.5, 0.6] } };
+  const subject: MaskPart = { mode: "add", shape: { kind: "subject" } };
+  const masksOf = (...parts: MaskPart[][]): Mask[] =>
+    parts.map((list, i) => ({ ...newMask([], "linear", photo, defaultAdjustments()), id: i + 1, parts: list }));
+
+  test("are the ones the backend draws", () => {
+    const rust = readFileSync(new URL("../src-tauri/src/masks.rs", import.meta.url), "utf8");
+    const limit = (name: string) => Number(rust.match(new RegExp(`pub const ${name}: usize = (\\d+);`))?.[1]);
+    expect({ MAX_MASKS, MAX_PARTS, MAX_BRUSHES, MAX_FOUND }).toEqual({
+      MAX_MASKS: limit("MAX_MASKS"),
+      MAX_PARTS: limit("MAX_PARTS"),
+      MAX_BRUSHES: limit("MAX_BRUSHES"),
+      MAX_FOUND: limit("MAX_FOUND"),
+    });
+  });
+
+  test("parts are counted across every mask", () => {
+    const full = masksOf(Array(MAX_PARTS / 2).fill(linear), Array(MAX_PARTS / 2).fill(linear));
+    expect(partCount(full)).toBe(MAX_PARTS);
+    for (const kind of ["linear", "radial", "luminance", "brush", "subject", "object"] as const) {
+      expect(canAdd(full, kind)).toBe(false);
+    }
+    const short = masksOf(Array(MAX_PARTS / 2).fill(linear), Array(MAX_PARTS / 2 - 1).fill(linear));
+    expect(canAdd(short, "linear")).toBe(true);
+  });
+
+  test("brushes have a limit of their own, across every mask", () => {
+    expect(canAdd(masksOf(Array(MAX_BRUSHES - 1).fill(brush), [linear]), "brush")).toBe(true);
+    const full = masksOf(Array(MAX_BRUSHES - 1).fill(brush), [linear, brush]);
+    expect(brushCount(full)).toBe(MAX_BRUSHES);
+    expect(canAdd(full, "brush")).toBe(false);
+    expect(canAdd(full, "linear")).toBe(true);
+    expect(canAdd(full, "subject")).toBe(true);
+  });
+
+  test("with found parts full, the subject can be used again but nothing new can be found", () => {
+    const objects: MaskPart[] = Array.from({ length: MAX_FOUND - 1 }, (_, i) => ({
+      mode: "add",
+      shape: { kind: "object", points: [[i / 10, 0], [0.5, 0.5], [0, 0.5]] },
+    }));
+    const full = masksOf(objects, [subject, linear], [subject]);
+    expect(foundCount(full)).toBe(MAX_FOUND);
+    expect(canAdd(full, "subject")).toBe(true);
+    expect(canAdd(full, "sky")).toBe(false);
+    expect(canAdd(full, "object")).toBe(false);
+    expect(canAdd(full, "radial")).toBe(true);
   });
 });
 
