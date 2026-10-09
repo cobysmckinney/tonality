@@ -1,6 +1,30 @@
 import { describe, expect, test } from "bun:test";
 import { defaultAdjustments } from "./adjustments";
-import { dragged, fits, flipped, frameSize, heldAspect, largest, quarterTurn, Rect, shapeAspect, shrinkToFit, straightened, toCrop, toFrame, toPhoto, toRect, withAspect } from "./crop";
+import {
+  dragged,
+  fits,
+  flipped,
+  frameSize,
+  geometryOf,
+  heldAspect,
+  largest,
+  markStep,
+  onCanvas,
+  parseRatio,
+  quarterTurn,
+  Rect,
+  redoStep,
+  shapeAspect,
+  shrinkToFit,
+  straightened,
+  toCrop,
+  toFrame,
+  toPhoto,
+  toRect,
+  undoStep,
+  visitName,
+  withAspect,
+} from "./crop";
 
 const photo = { width: 600, height: 400 };
 const whole: Rect = { x: 300, y: 200, width: 600, height: 400 };
@@ -243,5 +267,76 @@ describe("a chosen shape holds only while the crop has it", () => {
     expect(heldAspect(tall, 3 / 2)).toBe(2 / 3);
     expect(heldAspect(tall, 2 / 3)).toBe(2 / 3);
     expect(heldAspect(tall, 4 / 3)).toBeNull();
+  });
+});
+
+describe("a shape typed by hand", () => {
+  test("reads width and height however they are written", () => {
+    expect(parseRatio("6:7")).toBeCloseTo(6 / 7);
+    expect(parseRatio(" 65 : 24 ")).toBeCloseTo(65 / 24);
+    expect(parseRatio("6x7")).toBeCloseTo(6 / 7);
+    expect(parseRatio("6 × 4.5")).toBeCloseTo(6 / 4.5);
+    expect(parseRatio("4,5/6")).toBeCloseTo(4.5 / 6);
+    expect(parseRatio("1.5")).toBeCloseTo(1.5);
+  });
+
+  test("refuses what isn't a shape", () => {
+    for (const text of ["", "6:", ":7", "6:0", "0:7", "a:b", "6:7:8", "-6:7", "1:50"]) expect(parseRatio(text)).toBeNull();
+  });
+});
+
+describe("the crop tool's own undo", () => {
+  const start = geometryOf(defaultAdjustments());
+  const at = (x: number) => ({ ...start, crop: { ...start.crop, x } });
+
+  test("each change can be taken back and done again, down to how it opened", () => {
+    let steps = markStep(null, start, at(0.4));
+    steps = markStep(steps, start, at(0.3));
+    expect(steps.past).toEqual([start, at(0.4)]);
+    const back = undoStep(steps)!;
+    expect(back.now).toEqual(at(0.4));
+    const first = undoStep(back)!;
+    expect(first.now).toEqual(start);
+    expect(undoStep(first)).toBeNull();
+    expect(redoStep(first)!.now).toEqual(at(0.4));
+    expect(redoStep(redoStep(first)!)!.now).toEqual(at(0.3));
+  });
+
+  test("a change after undo drops what was undone, and no change is no step", () => {
+    const steps = undoStep(markStep(markStep(null, start, at(0.4)), start, at(0.3)))!;
+    const next = markStep(steps, start, at(0.2));
+    expect(next.future).toEqual([]);
+    expect(redoStep(next)).toBeNull();
+    expect(markStep(next, start, at(0.2))).toBe(next);
+    expect(markStep(null, start, start).past).toEqual([]);
+  });
+
+  test("the history names one change after itself, and several simply Crop", () => {
+    const before = defaultAdjustments();
+    const turned = { ...before, ...quarterTurn(before, true) };
+    const once = markStep(null, geometryOf(before), geometryOf(turned));
+    expect(visitName(once, before, turned)).toBe("Rotate");
+    const moved = { ...turned, crop: { ...turned.crop, width: 0.5 } };
+    const twice = markStep(once, geometryOf(before), geometryOf(moved));
+    expect(visitName(twice, before, moved)).toBe("Crop");
+    expect(visitName(twice, moved, before)).toBe("Reset all");
+    const exposed = (a: typeof before) => ({ ...a, exposure: 1 });
+    expect(visitName(twice, exposed(moved), exposed(before))).toBe("Reset crop");
+  });
+});
+
+describe("the crop frame on a zoomed picture", () => {
+  const frame = { width: 1000, height: 500 };
+
+  test("fitted, the frame's centre is the canvas's", () => {
+    expect(onCanvas(frame, { x: 0, y: 0, width: 1, height: 1 }, { width: 400, height: 200 })).toEqual({ x: 200, y: 100, scale: 0.4 });
+  });
+
+  test("zoomed in on the top left, the centre is off to the lower right and everything is bigger", () => {
+    // A fifth across and two fifths down: 200 photo pixels across at 400 CSS pixels.
+    const zoomed = onCanvas(frame, { x: 0, y: 0, width: 0.2, height: 0.4 }, { width: 400, height: 400 });
+    expect(zoomed.scale).toBeCloseTo(2);
+    expect(zoomed.x).toBeCloseTo(1000);
+    expect(zoomed.y).toBeCloseTo(500);
   });
 });

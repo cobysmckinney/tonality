@@ -33,6 +33,7 @@ import {
   View,
   Volume,
 } from "./api";
+import { CropSteps, Geometry, geometryOf, markStep, redoStep, undoStep, visitName } from "./crop";
 import { listenAll, settleEach } from "./events";
 import { FilmPhoto, FilmSuggestions } from "./filmDetails";
 import { plural } from "./format";
@@ -234,6 +235,10 @@ interface State {
   /** The crop tool's chosen shape: its name, and width over height (null leaves it free). */
   cropShape: string;
   cropAspect: number | null;
+  /** The shape last typed for Custom, as typed ("6:7"). Kept from photo to photo, as a roll of film is all one shape. */
+  cropCustom: string;
+  /** What has changed in the crop tool since it opened, for undo there. Null until something changes. */
+  cropSteps: CropSteps | null;
   brush: BrushSettings;
   volumes: Volume[];
   importState: ImportState | null;
@@ -261,8 +266,14 @@ interface State {
   setFilter: (filter: Filter) => void;
   setThumbSize: (size: number) => void;
   toggleSquareThumbs: () => void;
+  /** Shows a tool. Leaving the crop tool keeps what was done in it, as one step. */
   setSidePanel: (panel: SidePanel) => void;
   setCropShape: (shape: string, aspect: number | null) => void;
+  setCropCustom: (text: string) => void;
+  /** Ends a change in the crop tool: one step for undo there, not yet a step in the history. */
+  markCrop: () => void;
+  /** Leaves the crop tool, putting the crop back as it was when the tool opened. */
+  cancelCrop: () => void;
   setBrush: (change: Partial<BrushSettings>) => void;
 
   /** Replaces the open photo's masks, live; with a label the change is also a step in the history. */
@@ -606,6 +617,14 @@ export const useStore = create<State>((set, get) => {
     });
   };
 
+  /** Puts the crop tool's part of the edits back to `geometry`; back where it was recorded, nothing is left to undo or keep. */
+  const setGeometry = (geometry: Geometry) => {
+    const { adjustments, committed, ready } = get().editor;
+    if (!ready) return;
+    const next = { ...adjustments, ...geometry };
+    setEditor({ adjustments: sameAdjustments(next, committed) ? committed : next });
+  };
+
   /** Before the editor moves on: record what is pending and bring the thumbnail up to date. */
   const settle = () => {
     get().commitAdjust();
@@ -644,6 +663,8 @@ export const useStore = create<State>((set, get) => {
     favoritePresets: [],
     cropShape: "Free",
     cropAspect: null,
+    cropCustom: "",
+    cropSteps: null,
     brush: { size: 30, feather: 50, strength: 100, erase: false },
     volumes: [],
     importState: null,
@@ -731,8 +752,32 @@ export const useStore = create<State>((set, get) => {
     setFilter: (filter) => set({ filter, selection: new Set(), anchor: null, cursor: null }),
     setThumbSize: (thumbSize) => set({ thumbSize }),
     toggleSquareThumbs: () => set((s) => ({ squareThumbs: !s.squareThumbs })),
-    setSidePanel: (sidePanel) => set({ sidePanel }),
+    setSidePanel(sidePanel) {
+      // Everything done in the crop tool becomes one step as you leave it.
+      // Anything still pending on the way in is a step of its own, so Cancel can't take it back.
+      if ((get().sidePanel === "crop") !== (sidePanel === "crop")) {
+        const { cropSteps, editor } = get();
+        get().commitAdjust(get().sidePanel === "crop" ? visitName(cropSteps, editor.committed, editor.adjustments) : undefined);
+        set({ cropSteps: null });
+      }
+      set({ sidePanel });
+    },
     setCropShape: (cropShape, cropAspect) => set({ cropShape, cropAspect }),
+    setCropCustom: (cropCustom) => set({ cropCustom }),
+
+    markCrop() {
+      const { sidePanel, editor, cropSteps } = get();
+      // A drag that ends as the tool closes has already been kept, or cancelled.
+      if (sidePanel !== "crop" || !editor.ready) return;
+      set({ cropSteps: markStep(cropSteps, geometryOf(editor.committed), geometryOf(editor.adjustments)) });
+    },
+
+    cancelCrop() {
+      const { sidePanel, editor } = get();
+      if (sidePanel !== "crop") return;
+      setGeometry(geometryOf(editor.committed));
+      set({ cropSteps: null, sidePanel: "adjust" });
+    },
     setBrush: (change) => set((s) => ({ brush: { ...s.brush, ...change } })),
 
     setMasks(masks, label) {
@@ -864,7 +909,7 @@ export const useStore = create<State>((set, get) => {
         if (get().openId !== id) return;
         const { showClipping, showMask } = get().editor;
         // A crop shape chosen for one photo doesn't carry over to the next.
-        set({ editor: { ...idleEditor, photoId: id, showClipping, showMask }, cropShape: "Free", cropAspect: null });
+        set({ editor: { ...idleEditor, photoId: id, showClipping, showMask }, cropShape: "Free", cropAspect: null, cropSteps: null });
         try {
           const photo = await api.openEditor(id);
           if (get().openId !== id) return;
@@ -906,6 +951,8 @@ export const useStore = create<State>((set, get) => {
       const name = label ?? describeChange(committed, adjustments);
       const applied = adjustablePreset(get());
       setEditor({ committed: adjustments });
+      // Undo in the crop tool doesn't reach back past a step in the history.
+      if (get().cropSteps) set({ cropSteps: null });
       void inTurn(async () => {
         try {
           const history = await api.historyCommit(photoId, adjustments, name);
@@ -917,17 +964,36 @@ export const useStore = create<State>((set, get) => {
       });
     },
 
-    undo: () =>
-      changeHistory(async (photoId, history) => {
+    undo() {
+      // In the crop tool, undo first takes back what was done since it opened, one change at a time.
+      const back = get().sidePanel === "crop" ? undoStep(get().cropSteps) : null;
+      if (back) {
+        setGeometry(back.now);
+        set({ cropSteps: back });
+        return Promise.resolve();
+      }
+      return changeHistory(async (photoId, history) => {
         const target = neighbours(history).undo;
         return target === null ? null : api.historyGoto(photoId, target);
-      }),
+      });
+    },
 
-    redo: () =>
-      changeHistory(async (photoId, history) => {
+    redo() {
+      const { sidePanel, cropSteps, editor } = get();
+      if (sidePanel === "crop") {
+        const forward = redoStep(cropSteps);
+        if (forward) {
+          setGeometry(forward.now);
+          set({ cropSteps: forward });
+        }
+        // With changes made in the crop tool there is nothing in the history to redo yet.
+        if (forward || !sameAdjustments(editor.adjustments, editor.committed)) return Promise.resolve();
+      }
+      return changeHistory(async (photoId, history) => {
         const target = neighbours(history).redo;
         return target === null ? null : api.historyGoto(photoId, target);
-      }),
+      });
+    },
 
     goToStep: (stepId) => changeHistory((photoId) => api.historyGoto(photoId, stepId)),
 

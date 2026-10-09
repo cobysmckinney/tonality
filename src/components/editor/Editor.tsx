@@ -299,8 +299,8 @@ function Stage({ photo, onZoomChange }: { photo: Photo; onZoomChange: (label: st
     if (!ready || !frame || area.width === 0 || area.height === 0) return null;
     const ratio = window.devicePixelRatio || 1;
     const available = { width: Math.floor(area.width * ratio), height: Math.floor(area.height * ratio) };
-    // The crop tool always shows everything.
-    const place = (shown: Size, x: number, y: number) => placeOn(available, shown, uncropped ? null : view.zoom, x, y);
+    // Picking the film base always shows everything.
+    const place = (shown: Size, x: number, y: number) => placeOn(available, shown, pickingBase ? null : view.zoom, x, y);
     let placed = place(frame, view.x, view.y);
     // The view is kept on the edited picture. The original is framed
     // differently (uncropped, unturned), so it is centred on the same spot of
@@ -311,7 +311,7 @@ function Stage({ photo, onZoomChange }: { photo: Photo; onZoomChange: (label: st
       placed = place(frame, x, y);
     }
     return { ratio, ...placed, fitted: placed.zoom <= placed.fit };
-  }, [ready, frame, area, view, uncropped, showOriginal, photoSize, current]);
+  }, [ready, frame, area, view, pickingBase, showOriginal, photoSize, current]);
 
   /** A view of the picture on screen as a view of the edited picture, which is how it is kept. */
   const kept = useCallback(
@@ -375,14 +375,14 @@ function Stage({ photo, onZoomChange }: { photo: Photo; onZoomChange: (label: st
   /** Zooms to `zoom`, keeping the point under the pointer where it is. */
   const zoomAt = useCallback(
     (zoom: number | null, clientX: number, clientY: number) => {
-      if (!geometry || !frame || uncropped) return;
+      if (!geometry || !frame || pickingBase) return;
       // The box, not the canvas: a waiting frame may sit off it.
       const shown = canvas.current!.closest(".canvas-box")!.getBoundingClientRect();
       const stage = box.current!.getBoundingClientRect();
       const next = zoomedView(geometry, frame, geometry.ratio, shown, stage, zoom, clientX, clientY);
       setView(next === FIT ? FIT : kept(next));
     },
-    [geometry, frame, uncropped, kept],
+    [geometry, frame, pickingBase, kept],
   );
 
   const toggleZoom = useCallback(
@@ -412,8 +412,34 @@ function Stage({ photo, onZoomChange }: { photo: Photo; onZoomChange: (label: st
     };
   }, [geometry, zoomAt, toggleZoom]);
 
+  // Holding Space, a drag anywhere moves a zoomed picture, even over the crop frame or a mask.
+  const [spaceHeld, setSpaceHeld] = useState(false);
+  useEffect(() => {
+    const down = (event: KeyboardEvent) => {
+      if (event.key !== " " || event.repeat) return;
+      // Space still presses a focused button, and types in a field.
+      if ((event.target as HTMLElement).closest("button, input, textarea, select")) return;
+      event.preventDefault();
+      setSpaceHeld(true);
+    };
+    const up = (event: KeyboardEvent) => event.key === " " && setSpaceHeld(false);
+    const away = () => setSpaceHeld(false);
+    window.addEventListener("keydown", down);
+    window.addEventListener("keyup", up);
+    window.addEventListener("blur", away);
+    return () => {
+      window.removeEventListener("keydown", down);
+      window.removeEventListener("keyup", up);
+      window.removeEventListener("blur", away);
+    };
+  }, []);
+
   // Drag to pan while zoomed in.
   const drag = useRef<{ x: number; y: number } | null>(null);
+  const startPan = (event: React.PointerEvent<HTMLDivElement>) => {
+    drag.current = { x: event.clientX, y: event.clientY };
+    event.currentTarget.setPointerCapture(event.pointerId);
+  };
   const onPointerMove = (event: React.PointerEvent) => {
     if (!drag.current || !geometry || !frame) return;
     const [dx, dy] = [event.clientX - drag.current.x, event.clientY - drag.current.y];
@@ -432,12 +458,18 @@ function Stage({ photo, onZoomChange }: { photo: Photo; onZoomChange: (label: st
   return (
     <div
       ref={box}
-      className={`stage-image ${geometry && !geometry.fitted ? "zoomed" : ""}`}
+      className={`stage-image ${geometry && !geometry.fitted ? "zoomed" : ""} ${spaceHeld ? "space-held" : ""}`}
       onDoubleClick={(event) => toggleZoom(event.clientX, event.clientY)}
+      // With Space held, or with the middle button, the drag pans before the crop frame or a mask can take it.
+      onPointerDownCapture={(event) => {
+        if (!geometry || geometry.fitted || !(event.button === 1 || (event.button === 0 && spaceHeld))) return;
+        event.stopPropagation();
+        event.preventDefault();
+        startPan(event);
+      }}
       onPointerDown={(event) => {
         if (event.button !== 0 || !geometry || geometry.fitted) return;
-        drag.current = { x: event.clientX, y: event.clientY };
-        event.currentTarget.setPointerCapture(event.pointerId);
+        startPan(event);
       }}
       onPointerMove={onPointerMove}
       onPointerUp={() => (drag.current = null)}
@@ -456,7 +488,7 @@ function Stage({ photo, onZoomChange }: { photo: Photo; onZoomChange: (label: st
         </div>
         {/* The frame goes on only once the canvas really shows the uncropped photo underneath it. */}
         {live && cropping && painted?.uncropped && shown && frame && photoSize && (
-          <CropOverlay photo={photoSize} scale={shown.width / frame.width} width={shown.width} height={shown.height} />
+          <CropOverlay photo={photoSize} frame={frame} region={geometry.region} width={shown.width} height={shown.height} />
         )}
         {live && masking && shown && photoSize && (
           <MaskOverlay photo={photoSize} region={geometry.region} width={shown.width} height={shown.height} />
@@ -560,7 +592,10 @@ export function Editor({ photo, inert }: { photo: Photo; inert: boolean }) {
   const canUndo = useStore(
     (s) => neighbours(s.editor.history).undo !== null || s.editor.adjustments !== s.editor.committed,
   );
-  const canRedo = useStore((s) => neighbours(s.editor.history).redo !== null);
+  // Once something has changed in the crop tool, redo there only redoes what was undone in it.
+  const canRedo = useStore((s) =>
+    s.sidePanel === "crop" && s.cropSteps ? s.cropSteps.future.length > 0 : neighbours(s.editor.history).redo !== null,
+  );
   const edited = useStore((s) => s.editor.ready && !isAsShot(s.editor.adjustments));
   const showOriginal = useStore((s) => s.editor.showOriginal);
   const hasClipboard = useStore((s) => s.clipboard !== null);
@@ -607,10 +642,12 @@ export function Editor({ photo, inert }: { photo: Photo; inert: boolean }) {
         if (next) state.openPhoto(next.id);
       } else if (key === "Escape" || (key === "Enter" && state.sidePanel === "crop" && !target.closest("button"))) {
         // Escape backs out one level at a time: off a slider, out of a circle being drawn, off the chosen mask, out of the crop or mask tools, out of the photo.
+        // In the crop tool Escape cancels and Enter keeps the crop.
         if (onSlider) target.blur();
         else if (state.editor.circling && !state.editor.circling.points) state.cancelCircle();
         else if (state.editor.pickingBase) state.setPickingBase(false);
         else if (state.sidePanel === "masks" && state.editor.maskId !== null) state.selectMask(null);
+        else if (state.sidePanel === "crop" && key === "Escape") state.cancelCrop();
         else if (state.sidePanel === "crop" || state.sidePanel === "masks") state.setSidePanel("adjust");
         else state.closePhoto();
       } else if (key === "\\") state.setShowOriginal(true);

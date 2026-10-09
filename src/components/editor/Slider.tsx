@@ -20,14 +20,16 @@ interface Props {
   onChange: (value: number) => void;
   /** What the history calls the step a change makes, when not the usual name for it; read as the change is recorded. */
   commitLabel?: () => string | undefined;
+  /** What ends a change, when not recording it as a step in the history (the crop tool records its own). */
+  onCommit?: () => void;
 }
 
 /**
  * One adjustment. Dragging changes the photo live; letting go makes the
  * whole drag a single undo step.
  */
-export function Slider({ label, value, min, max, step = 1, origin = 0, track, format, onChange, commitLabel }: Props) {
-  const commit = () => useStore.getState().commitAdjust(commitLabel?.());
+export function Slider({ label, value, min, max, step = 1, origin = 0, track, format, onChange, commitLabel, onCommit }: Props) {
+  const commit = () => (onCommit ? onCommit() : useStore.getState().commitAdjust(commitLabel?.()));
   // Arrow-key nudges arrive one at a time; a short pause ends the run, so a
   // burst of them undoes together rather than press by press.
   const pause = useRef<ReturnType<typeof setTimeout>>(undefined);

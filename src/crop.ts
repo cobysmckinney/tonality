@@ -7,7 +7,8 @@
  * by the straighten angle; "frame" directions are what you see on screen in
  * the crop tool, "photo" directions are along the turned photo's own edges.
  */
-import type { Adjustments, Crop } from "./adjustments";
+import { Adjustments, Crop, describeChange, GEOMETRY, same } from "./adjustments";
+import type { Region } from "./api";
 
 export interface Size {
   width: number;
@@ -222,7 +223,16 @@ export function dragged(
   return attempt(reached);
 }
 
-type Geometry = Pick<Adjustments, "crop" | "straighten" | "rotation" | "flipHorizontal" | "flipVertical">;
+/** Everything the crop tool changes. */
+export type Geometry = Pick<Adjustments, (typeof GEOMETRY)[number]>;
+
+export const geometryOf = (a: Geometry): Geometry => ({
+  crop: a.crop,
+  straighten: a.straighten,
+  rotation: a.rotation,
+  flipHorizontal: a.flipHorizontal,
+  flipVertical: a.flipVertical,
+});
 
 /** Turns the picture a quarter-turn, carrying the crop round with it. */
 export function quarterTurn(a: Geometry, clockwise: boolean): Geometry {
@@ -246,4 +256,71 @@ export function flipped(a: Geometry, horizontal: boolean): Geometry {
     straighten: -a.straighten,
     crop: horizontal ? { ...a.crop, x: 1 - a.crop.x } : { ...a.crop, y: 1 - a.crop.y },
   };
+}
+
+/**
+ * Where the frame's centre sits on a canvas `shown` CSS pixels big that shows
+ * part `region` of it (0..1 across and down), and how many CSS pixels a photo
+ * pixel takes there. `frame` is the frame's size in photo pixels.
+ */
+export function onCanvas(frame: Size, region: Region, shown: Size): { x: number; y: number; scale: number } {
+  return {
+    x: ((0.5 - region.x) / region.width) * shown.width,
+    y: ((0.5 - region.y) / region.height) * shown.height,
+    scale: shown.width / (region.width * frame.width),
+  };
+}
+
+/**
+ * A shape typed by hand, as width over height: "6:7", "6x7", "65 × 24",
+ * "4,5:6" or a single number like "1.5". Null if it isn't one, or is too long
+ * and thin to crop to.
+ */
+export function parseRatio(text: string): number | null {
+  const parts = text.trim().replace(/,/g, ".").split(/\s*[:x×/]\s*/i);
+  if (parts.length > 2 || parts.some((part) => !/^(\d+\.?\d*|\.\d+)$/.test(part))) return null;
+  const [width, height = 1] = parts.map(Number);
+  const ratio = width / height;
+  if (!Number.isFinite(ratio) || ratio <= 0) return null;
+  return Math.max(ratio, 1 / ratio) <= 20 ? ratio : null;
+}
+
+/**
+ * The crop tool's own steps, so undo works inside it without each drag
+ * becoming a step in the photo's history: the whole visit is recorded as one
+ * step when you're done, or none if you cancel.
+ */
+export interface CropSteps {
+  past: Geometry[];
+  now: Geometry;
+  future: Geometry[];
+}
+
+/** Notes a change made in the crop tool. `start` is how the photo was framed when the tool opened. */
+export function markStep(steps: CropSteps | null, start: Geometry, now: Geometry): CropSteps {
+  const base = steps ?? { past: [], now: start, future: [] };
+  if (same(base.now, now)) return base;
+  return { past: [...base.past, base.now], now, future: [] };
+}
+
+/**
+ * What the history calls a visit to the crop tool: one change keeps its own
+ * name ("Rotate", "Straighten 2.0°"), several are simply "Crop", and
+ * putting everything back is a reset.
+ */
+export function visitName(steps: CropSteps | null, before: Adjustments, after: Adjustments): string {
+  const name = describeChange(before, after);
+  return steps && steps.past.length > 1 && !name.startsWith("Reset") ? "Crop" : name;
+}
+
+/** One change back, or null if there is nothing left to take back in the crop tool. */
+export function undoStep(steps: CropSteps | null): CropSteps | null {
+  if (!steps || steps.past.length === 0) return null;
+  return { past: steps.past.slice(0, -1), now: steps.past[steps.past.length - 1], future: [steps.now, ...steps.future] };
+}
+
+/** One change forward again, or null if there is none. */
+export function redoStep(steps: CropSteps | null): CropSteps | null {
+  if (!steps || steps.future.length === 0) return null;
+  return { past: [...steps.past, steps.now], now: steps.future[0], future: steps.future.slice(1) };
 }
