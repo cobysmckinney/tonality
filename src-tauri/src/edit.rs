@@ -167,6 +167,29 @@ impl Default for Mask {
     }
 }
 
+/// A fix for a speck of dust, a hair or a scratch: the area it covers, and
+/// the patch of the photo its texture is taken from. Positions are on the
+/// photo file, 0..1 across and down, so a spot stays on its speck whatever
+/// the crop, turn or flip.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Spot {
+    /// The area covered: one point for a spot, more for a line brushed over
+    /// a hair or a scratch.
+    pub points: Vec<[f32; 2]>,
+    /// How far the area reaches from those points, as a share of the photo's longer side.
+    pub radius: f32,
+    /// Where the patch is: the place the first point takes its texture
+    /// from. The rest of the area takes it from the same distance away.
+    pub source: [f32; 2],
+}
+
+impl Default for Spot {
+    fn default() -> Self {
+        Self { points: Vec::new(), radius: 0.01, source: [0.0, 0.0] }
+    }
+}
+
 /// How far Exposure goes either way, in stops: the photo's own slider, each
 /// mask's, and all of them added together.
 pub const MAX_EXPOSURE: f32 = 5.0;
@@ -214,6 +237,9 @@ pub struct Adjustments {
 
     /// For scans of film negatives: turns them into positives before anything else.
     pub film: Film,
+
+    /// Dust, hairs and scratches covered over, in the order they were made.
+    pub spots: Vec<Spot>,
 }
 
 impl Adjustments {
@@ -331,6 +357,16 @@ mod tests {
         // The interface sends a guessed base and an unbalanced range as null.
         let guessed = Adjustments::from_json(Some(r#"{"film":{"kind":"colour","base":null,"range":null}}"#));
         assert_eq!(guessed.film, Film { kind: Kind::Colour, base: None, range: None });
+    }
+
+    #[test]
+    fn spots_are_kept_and_old_recipes_have_none() {
+        assert!(Adjustments::from_json(Some(r#"{"exposure":0.5}"#)).spots.is_empty());
+        let spot = Spot { points: vec![[0.25, 0.5], [0.3, 0.55]], radius: 0.004, source: [0.2, 0.5] };
+        let healed = Adjustments { spots: vec![spot], ..Default::default() };
+        let json = healed.to_json().unwrap();
+        assert!(json.contains(r#""spots":[{"points":[[0.25,0.5],[0.3,0.55]],"radius":0.004,"source":[0.2,0.5]}]"#), "{json}");
+        assert_eq!(Adjustments::from_json(Some(&json)), healed);
     }
 
     #[test]

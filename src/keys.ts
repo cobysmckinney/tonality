@@ -58,18 +58,21 @@ export const SHORTCUTS: ShortcutGroup[] = [
       { keys: ["A"], does: "Adjust" },
       { keys: ["C"], does: "Crop" },
       { keys: ["M"], does: "Masks" },
+      { keys: ["Shift+H"], does: "Heal" },
       { keys: ["Shift+P"], does: "Presets" },
       { keys: ["H"], does: "History" },
       { keys: ["I"], does: "Info" },
     ],
   },
   {
-    title: "Crop and masks",
+    title: "Crop, masks and heal",
     shortcuts: [
       { keys: ["Enter"], does: "Finish cropping" },
       { keys: ["O"], does: "Mask overlay" },
-      { keys: ["[", "]"], does: "Smaller or larger brush" },
+      { keys: ["[", "]"], does: "Smaller or larger brush or spot" },
       { keys: ["Alt+Drag"], does: "Erase with the brush" },
+      { keys: ["Delete"], does: "Delete the chosen spot" },
+      { keys: ["Alt+Click"], does: "Leave a speck marked as dust" },
     ],
   },
 ];

@@ -1,6 +1,7 @@
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
-import type { Adjustments, Rgb, Shape } from "./adjustments";
+import type { Adjustments, Point, Rgb, Shape } from "./adjustments";
 import type { FilmDetails, FilmPhoto, FilmSuggestions } from "./filmDetails";
+import type { Speck } from "./heal";
 import type { Preset, PresetSettings } from "./presets";
 
 export type View =
@@ -358,6 +359,11 @@ export const api = {
   filmBase: (id: number, adjustments: Adjustments) => invoke<FilmBase>("film_base", { id, adjustments }),
   /** The film base at a point on the open photo's file (0..1 across and down). */
   pickFilmBase: (id: number, x: number, y: number) => invoke<FilmBase>("pick_film_base", { id, x, y }),
+  /** Where a new spot over these points (on the file) of this radius should take its texture from, clear of the spots already there. */
+  healSource: (id: number, adjustments: Adjustments, points: Point[], radius: number) =>
+    invoke<Point>("heal_source", { id, adjustments, points, radius }),
+  /** Specks in the open photo that look like dust, inside the crop and not yet covered, each with a patch to cover it. */
+  findDust: (id: number, adjustments: Adjustments) => invoke<Speck[]>("find_dust", { id, adjustments }),
   /** Balances these frames as one roll of film, as a step in each one's history, the way `applyEdits` goes. */
   balanceRoll: (ids: number[]) => invoke<AppliedEdits>("balance_roll", { ids }),
   /** Stops `applyEdits` after the photo it is on. */

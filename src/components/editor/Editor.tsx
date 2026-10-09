@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowLeft,
+  Bandage,
   Check,
   Crop,
   Download,
@@ -37,6 +38,8 @@ import { FIT, heldFrame, pannedView, place as placeOn, View, zoomedView } from "
 import { AdjustPanel } from "./AdjustPanel";
 import { CropOverlay } from "./CropOverlay";
 import { CropPanel } from "./CropPanel";
+import { HealOverlay } from "./HealOverlay";
+import { HealPanel } from "./HealPanel";
 import { Histogram } from "./Histogram";
 import { MaskOverlay } from "./MaskOverlay";
 import { MasksPanel } from "./MasksPanel";
@@ -271,6 +274,7 @@ function Stage({ photo, onZoomChange }: { photo: Photo; onZoomChange: (label: st
   const cropping = useStore((s) => s.sidePanel === "crop" && !s.editor.showOriginal);
   const uncropped = cropping || pickingBase;
   const masking = useStore((s) => s.sidePanel === "masks" && !s.editor.showOriginal);
+  const healing = useStore((s) => s.sidePanel === "heal" && !s.editor.showOriginal);
   const circling = useStore((s) => s.sidePanel === "masks" && s.editor.circling !== null && !s.editor.circling.points);
   const maskOverlay = useStore((s) =>
     s.sidePanel === "masks" && s.editor.showMask && !s.editor.showOriginal ? s.editor.maskId : null,
@@ -461,6 +465,9 @@ function Stage({ photo, onZoomChange }: { photo: Photo; onZoomChange: (label: st
         {live && masking && shown && photoSize && (
           <MaskOverlay photo={photoSize} region={geometry.region} width={shown.width} height={shown.height} />
         )}
+        {live && healing && painted?.uncropped === false && shown && photoSize && (
+          <HealOverlay photo={photoSize} region={geometry.region} width={shown.width} height={shown.height} />
+        )}
         {live && pickingBase && painted?.uncropped && shown && photoSize && (
           <div
             className="film-picker"
@@ -495,6 +502,7 @@ const TOOLS: { panel: SidePanelName; label: string; key: string; icon: LucideIco
   { panel: "adjust", label: "Adjust", key: "A", icon: SlidersHorizontal },
   { panel: "crop", label: "Crop", key: "C", icon: Crop },
   { panel: "masks", label: "Masks", key: "M", icon: Layers },
+  { panel: "heal", label: "Heal", key: "Shift+H", icon: Bandage },
   { panel: "presets", label: "Presets", key: "Shift+P", icon: SwatchBook },
   { panel: "history", label: "History", key: "H", icon: HistoryIcon },
   { panel: "info", label: "Info", key: "I", icon: InfoIcon },
@@ -546,6 +554,7 @@ function SidePanel({ photo }: { photo: Photo }) {
       {panel === "adjust" && <AdjustPanel />}
       {panel === "crop" && <CropPanel />}
       {panel === "masks" && <MasksPanel />}
+      {panel === "heal" && <HealPanel />}
       {panel === "presets" && <PresetsPanel />}
       {panel === "history" && <HistoryPanel />}
       {panel === "info" && <Info photo={photo} />}
@@ -606,12 +615,13 @@ export function Editor({ photo, inert }: { photo: Photo; inert: boolean }) {
         const next = at < 0 ? undefined : list[at + (key === "ArrowLeft" ? -1 : 1)];
         if (next) state.openPhoto(next.id);
       } else if (key === "Escape" || (key === "Enter" && state.sidePanel === "crop" && !target.closest("button"))) {
-        // Escape backs out one level at a time: off a slider, out of a circle being drawn, off the chosen mask, out of the crop or mask tools, out of the photo.
+        // Escape backs out one level at a time: off a slider, out of a circle being drawn, off the chosen mask or spot, out of the crop, mask or heal tools, out of the photo.
         if (onSlider) target.blur();
         else if (state.editor.circling && !state.editor.circling.points) state.cancelCircle();
         else if (state.editor.pickingBase) state.setPickingBase(false);
         else if (state.sidePanel === "masks" && state.editor.maskId !== null) state.selectMask(null);
-        else if (state.sidePanel === "crop" || state.sidePanel === "masks") state.setSidePanel("adjust");
+        else if (state.sidePanel === "heal" && state.editor.spotIndex !== null) state.selectSpot(null);
+        else if (state.sidePanel === "crop" || state.sidePanel === "masks" || state.sidePanel === "heal") state.setSidePanel("adjust");
         else state.closePhoto();
       } else if (key === "\\") state.setShowOriginal(true);
       else if (key === "j") state.toggleClipping();
@@ -622,14 +632,19 @@ export function Editor({ photo, inert }: { photo: Photo; inert: boolean }) {
       else if ((key === "[" || key === "]") && state.sidePanel === "masks") {
         state.setBrush({ size: Math.min(100, Math.max(1, state.brush.size + (key === "]" ? 4 : -4))) });
       }
+      else if ((key === "[" || key === "]") && state.sidePanel === "heal") state.nudgeHealSize(key === "]" ? 3 : -3);
       else if (key === "i") state.setSidePanel(state.sidePanel === "info" ? "adjust" : "info");
+      else if (key === "h" && event.shiftKey) state.setSidePanel(state.sidePanel === "heal" ? "adjust" : "heal");
       else if (key === "h") state.setSidePanel(state.sidePanel === "history" ? "adjust" : "history");
       else if (key === "p" && event.shiftKey) state.setSidePanel(state.sidePanel === "presets" ? "adjust" : "presets");
       else if (key === "f") void state.toggleFavorite([open]);
       else if (key === "p") void state.toggleFlag([open], 1);
       else if (key === "x") void state.toggleFlag([open], -1);
       else if (key === "u") void state.toggleFlag([open], 0);
-      else if (key === "Delete" || key === "Backspace") {
+      else if ((key === "Delete" || key === "Backspace") && state.sidePanel === "heal" && state.editor.spotIndex !== null) {
+        // The chosen spot, not the photo.
+        if (!target.closest("button, select, input")) state.deleteSpot(state.editor.spotIndex);
+      } else if (key === "Delete" || key === "Backspace") {
         // Only from the photo itself: with a tool's button or slider focused, a stray Backspace
         // shouldn't throw the photo away. The filmstrip counts as the photo.
         if (!target.closest("button:not(.strip-item), select, input")) void state.trash([open]);

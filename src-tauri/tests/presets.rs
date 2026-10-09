@@ -4,7 +4,7 @@ use std::collections::BTreeSet;
 
 use serde_json::json;
 use tempfile::TempDir;
-use tonality_lib::edit::{Adjustments, Crop};
+use tonality_lib::edit::{Adjustments, Crop, Spot};
 use tonality_lib::film::{Film, Kind};
 use tonality_lib::library::Library;
 use tonality_lib::presets::{self, Preset, Settings};
@@ -53,6 +53,9 @@ fn a_preset_changes_only_what_it_covers() {
     // A scan's film settings belong to it, like its framing.
     let scan = Adjustments { film: Film { kind: Kind::Colour, base: Some([0.7, 0.4, 0.2]), range: None }, ..photo };
     assert_eq!(presets::apply(&settings, &scan).film, scan.film);
+    // So are the spots healed on it.
+    let healed = Adjustments { spots: vec![Spot { points: vec![[0.3, 0.4]], radius: 0.01, source: [0.35, 0.4] }], ..scan };
+    assert_eq!(presets::apply(&settings, &healed).spots, healed.spots);
 }
 
 #[test]
@@ -63,6 +66,7 @@ fn a_preset_never_holds_framing_or_things_it_does_not_understand() {
         "rotation": 1,
         "flipHorizontal": true,
         "film": { "kind": "colour", "base": [0.7, 0.4, 0.2], "range": null },
+        "spots": [{ "points": [[0.3, 0.4]], "radius": 0.01, "source": [0.35, 0.4] }],
         "somethingFromTheFuture": 4,
     }))
     .unwrap();

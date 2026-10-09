@@ -6,6 +6,7 @@ pub mod film;
 pub mod geometry;
 pub mod grants;
 pub mod gpu;
+pub mod heal;
 pub mod history;
 pub mod import;
 pub mod library;
@@ -238,6 +239,8 @@ pub fn run() {
             commands::find_parts,
             commands::film_base,
             commands::pick_film_base,
+            commands::heal_source,
+            commands::find_dust,
             commands::balance_roll,
             commands::prepare_circles,
             commands::refresh_rendered,
