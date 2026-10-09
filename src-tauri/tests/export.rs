@@ -229,6 +229,19 @@ fn a_photo_that_was_exported_can_still_be_deleted() {
 }
 
 #[test]
+fn the_library_knows_which_files_its_exports_wrote() {
+    let f = fixture();
+    let elsewhere = f.dir.path().join("For the client");
+    let summary = f.export(&f.photos[..1], None, &Settings { folder: Some(elsewhere.clone()), ..png() });
+    let written = Path::new(&summary.exported[0].path);
+
+    assert!(f.library.exported(written).unwrap());
+    assert!(!f.library.exported(&elsewhere).unwrap(), "the folder around it");
+    assert!(!f.library.exported(&elsewhere.join("IMG_0463.png")).unwrap(), "never written");
+    assert!(!f.library.holds(written), "outside the library");
+}
+
+#[test]
 fn the_folder_and_settings_are_remembered() {
     let f = fixture();
     assert_eq!(f.library.export_settings().unwrap(), Settings::default());

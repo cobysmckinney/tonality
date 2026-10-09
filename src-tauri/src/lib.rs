@@ -227,6 +227,7 @@ pub fn run() {
             commands::choose_preset_files,
             commands::choose_preset_destination,
             commands::choose_export_folder,
+            commands::reveal,
             commands::scan_import,
             commands::discard_scan,
             commands::run_import,

@@ -19,7 +19,6 @@ import {
   Undo2,
   X,
 } from "lucide-react";
-import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { Adjustments, DEFAULTS, isAsShot } from "../../adjustments";
 import { withPreset } from "../../presets";
 import { api, Photo, PhotoInfo, previewUrl, Region, thumbUrl } from "../../api";
@@ -220,7 +219,7 @@ function Info({ photo }: { photo: Photo }) {
           <Fact label="Imported">{format.longDateTime(new Date(info.importedAt * 1000))}</Fact>
           {info.albums.length > 0 && <Fact label="Albums">{info.albums.join(", ")}</Fact>}
           <Fact label="Folder">
-            <button className="link" title={info.path} onClick={() => void revealItemInDir(info.path)}>
+            <button className="link" title={info.path} onClick={() => void useStore.getState().reveal(info.path)}>
               {folderOf(info.path)}
               <FolderOpen size={13} />
             </button>
