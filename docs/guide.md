@@ -47,7 +47,7 @@ Opening a photo (double-click or Enter) loads it at full resolution onto the gra
 
 A negative photographed on a light (a camera scan) or scanned opens as a negative: orange for colour film, grey for black and white. **Film**, at the top of Adjust, turns it into a picture.
 
-- **Choose the film**: *Colour negative* or *Black and white negative*. That is usually all it takes. Tonality takes off the clear film's own tint and balances the colours, so shadows and highlights both come out neutral. Black and white negatives come out grey, with no tint from the film or the light.
+- **Choose the film**: *Colour negative* or *Black and white negative*. That is usually all it takes. Tonality takes off the clear film's own tint and balances the colours, so shadows and highlights both come out neutral. Black and white negatives come out grey, with no tint from the film or the light. The picture opens about as bright as a RAW from a camera, with the brightest parts of the frame kept a little short of white, so a sky or a lit wall keeps its detail; Exposure and Whites take it further if you want.
 - **Crop to the frame.** The balance is measured inside the crop, so the film holder, sprocket holes and the light around the frame don't count. Until you crop, the middle of the scan is measured.
 - **After that the photo works like any other.** Exposure, temperature and tint, curves, masks, the histogram and clipping warnings all work on the positive, and the subject and sky are found in it.
 - **Film base**: the clear film between and around the frames. Tonality guesses it from the clearest film in the scan, and the swatch shows what it is using. If the colours look off, choose **Pick** and click the clear film at the edge of a frame; **Auto** goes back to the guess.

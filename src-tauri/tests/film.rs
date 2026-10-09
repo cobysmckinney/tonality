@@ -33,6 +33,11 @@ fn scene(x: u32, y: u32) -> [f32; 3] {
 /// The scan of a negative of `scene`: each channel's density climbs with
 /// log light at its own steepness, on top of the film's base.
 fn scan(gammas: [f32; 3], base: [f32; 3]) -> LinearImage {
+    scan_of(scene, gammas, base)
+}
+
+/// `scan`, of another scene the same size.
+fn scan_of(scene: fn(u32, u32) -> [f32; 3], gammas: [f32; 3], base: [f32; 3]) -> LinearImage {
     let border = REBATE + OUTSIDE;
     let (width, height) = (SCENE.0 + 2 * border, SCENE.1 + 2 * border);
     let pixels = (0..width * height)
@@ -89,8 +94,17 @@ fn grey([r, g, b]: [i32; 3]) -> i32 {
 
 /// The scene as an ordinary RAW of it would open.
 fn as_shot(gpu: &Gpu) -> RgbImage {
+    as_shot_of(gpu, scene)
+}
+
+/// `scene` as an ordinary RAW of it would open, exposed as a camera's meter
+/// would: its average (the mean of its light in stops) on `film::KEY`.
+fn as_shot_of(gpu: &Gpu, scene: fn(u32, u32) -> [f32; 3]) -> RgbImage {
     let (width, height) = SCENE;
-    let pixels = (0..width * height).map(|i| scene(i % width, i / width)).collect();
+    let pixels: Vec<[f32; 3]> = (0..width * height).map(|i| scene(i % width, i / width)).collect();
+    let average = pixels.iter().map(|p| p.iter().map(|v| v.log2()).sum::<f32>() / 3.0).sum::<f32>() / pixels.len() as f32;
+    let exposure = tonality_lib::film::KEY / average.exp2();
+    let pixels = pixels.into_iter().map(|p| p.map(|v| v * exposure)).collect();
     let session = gpu.open(LinearImage { width, height, pixels, scene_referred: true }).unwrap();
     gpu.render_image(&session, &Adjustments::default(), u32::MAX).unwrap()
 }
@@ -208,5 +222,68 @@ fn changing_the_film_redraws_the_working_image() {
     for column in 0..8 {
         let (small, full) = (grey(patch(&small, column, 0)), grey(patch(&colour, column, 0)));
         assert!((small - full).abs() <= 6, "step {column}: {small} small, {full} at full size");
+    }
+}
+
+/// A bright day: a sky across the top half, getting brighter to one side,
+/// over ground from deep shadow up through a grey card (column 4). Exposed
+/// for the whole frame, as a camera's meter would, the sky's bright end is
+/// near where a RAW clips.
+fn bright_day(x: u32, y: u32) -> [f32; 3] {
+    const SKY: [f32; 8] = [0.4, 0.45, 0.5, 0.56, 0.63, 0.71, 0.8, 1.0];
+    const GROUND: [f32; 8] = [0.002, 0.004, 0.008, 0.015, 0.03, 0.03, 0.05, 0.08];
+    let column = (x / PATCH) as usize;
+    [if y < PATCH { SKY[column] } else { GROUND[column] }; 3]
+}
+
+#[test]
+fn a_bright_sky_keeps_its_detail_and_the_rest_its_brightness() {
+    let Some(gpu) = gpu() else { return };
+    let shot = as_shot_of(gpu, bright_day);
+    let grey_card = grey(patch(&shot, 4, 1));
+    for (kind, gammas) in [(Kind::Colour, [0.55, 0.62, 0.7]), (Kind::BlackAndWhite, [0.62; 3])] {
+        let image = scan_of(bright_day, gammas, BASE);
+        let crop = frame_crop(&image);
+        let session = gpu.open(image).unwrap();
+        let picture = gpu.render_image(&session, &negative(kind, crop), u32::MAX).unwrap();
+        let sky: Vec<i32> = (0..8).map(|column| grey(patch(&picture, column, 0))).collect();
+        // The sky isn't pressed against white: its brightest part stays off
+        // it, and each of its steps is brighter than the last.
+        assert!(sky[7] < 242, "{kind:?}: the sky's brightest part came out {}", sky[7]);
+        assert!(sky.windows(2).all(|pair| pair[1] >= pair[0] + 2), "{kind:?}: the sky came out {sky:?}");
+        // The grey card is about as bright as an ordinary RAW of the scene opens.
+        let card = grey(patch(&picture, 4, 1));
+        assert!((card - grey_card).abs() <= 12, "{kind:?}: the grey card came out {card}, against {grey_card} as shot");
+    }
+}
+
+/// Converts camera scans of black and white negatives as they open, uncropped,
+/// and checks the frame's highlights aren't blown:
+/// `TONALITY_SAMPLES=/path/to/scans [TONALITY_OUT=/path] cargo test --test integration real_black_and_white_scans -- --ignored --nocapture`
+#[test]
+#[ignore = "needs TONALITY_SAMPLES pointing at camera scans of black and white negatives, and a GPU"]
+fn real_black_and_white_scans() {
+    let samples = std::path::PathBuf::from(std::env::var_os("TONALITY_SAMPLES").expect("set TONALITY_SAMPLES"));
+    let out = std::env::var_os("TONALITY_OUT").map(std::path::PathBuf::from);
+    let gpu = gpu().expect("a GPU");
+    for entry in walkdir::WalkDir::new(samples).into_iter().flatten().filter(|e| e.file_type().is_file()) {
+        let Some(kind) = tonality_lib::media::kind_of(entry.path()) else { continue };
+        let name = entry.path().file_stem().unwrap().to_string_lossy().into_owned();
+        let image = tonality_lib::develop::load(entry.path(), kind == tonality_lib::media::Kind::Raw).unwrap();
+        let session = gpu.open(image).unwrap();
+        let picture = gpu.render_image(&session, &negative(Kind::BlackAndWhite, Crop::default()), 1200).unwrap();
+        if let Some(out) = &out {
+            picture.save(out.join(format!("{name}-positive.jpg"))).unwrap();
+        }
+        // The middle of the scan, where the frame is.
+        let (w, h) = picture.dimensions();
+        let middle = image::imageops::crop_imm(&picture, w / 5, h / 5, w * 3 / 5, h * 3 / 5).to_image();
+        let mut tones: Vec<u8> = middle.pixels().map(|p| p[1]).collect();
+        tones.sort_unstable();
+        let at = |share: f64| tones[((tones.len() - 1) as f64 * share) as usize];
+        let white = tones.iter().filter(|v| **v >= 250).count() as f64 / tones.len() as f64;
+        println!("{name}: median {}, 99th percentile {}, {:.1}% white", at(0.5), at(0.99), white * 100.0);
+        assert!(white < 0.01, "{name}: {:.1}% of the frame is white", white * 100.0);
+        assert!(at(0.99) < 250, "{name}: the frame's highlights are blown");
     }
 }
