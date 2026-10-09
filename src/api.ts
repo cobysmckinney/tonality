@@ -80,6 +80,22 @@ export interface Volume {
   path: string;
 }
 
+/** A camera connected by USB, to take photos straight into the library with. */
+export interface Camera {
+  /** Its model: "Canon EOS 600D". */
+  name: string;
+  port: string;
+}
+
+/** What a capture reports as it goes. */
+export type CaptureReport =
+  | { kind: "downloading"; name: string }
+  /** New frames in the library, in the order they were taken. */
+  | { kind: "added"; ids: number[] }
+  | { kind: "failed"; message: string }
+  /** Capture stopped: asked to (no message), or the camera went away. */
+  | { kind: "ended"; message: string | null };
+
 export interface ScanItem {
   index: number;
   fileName: string;
@@ -312,6 +328,14 @@ export const api = {
   discardScan: () => invoke<void>("discard_scan"),
   runImport: (sessionId: number, indices: number[]) => invoke<ImportSummary>("run_import", { sessionId, indices }),
   cancelImport: () => invoke<void>("cancel_import"),
+
+  listCameras: () => invoke<Camera[]>("list_cameras"),
+  /** Without a camera, the first one found. */
+  startCapture: (camera: Camera | null, follow: boolean, firstFollows: number | null) =>
+    invoke<Camera>("start_capture", { camera, follow, firstFollows }),
+  takePhoto: () => invoke<void>("take_photo"),
+  setCaptureFollow: (follow: boolean) => invoke<void>("set_capture_follow", { follow }),
+  stopCapture: () => invoke<void>("stop_capture"),
 
   openEditor: (id: number) => invoke<EditorPhoto>("open_editor", { id }),
   closeEditor: () => invoke<void>("close_editor"),

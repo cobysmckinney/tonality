@@ -9,6 +9,7 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State, Window};
 use tauri_plugin_dialog::{DialogExt, FileDialogBuilder, FilePath};
 
+use crate::capture;
 use crate::edit::{Adjustments, Shape};
 use crate::export;
 use crate::film;
@@ -321,6 +322,62 @@ pub async fn run_import(app: AppHandle, session_id: u64, indices: Vec<usize>) ->
 #[tauri::command]
 pub fn cancel_import(state: State<AppState>) {
     state.cancel_import.store(true, Ordering::Relaxed);
+}
+
+// ---- tethered capture ----
+
+/// Cameras connected by USB that can take photos straight into the library.
+#[tauri::command(async)]
+pub fn list_cameras() -> Vec<capture::Found> {
+    capture::list()
+}
+
+/// Starts capturing with `camera`, or the first camera found. With
+/// `follow`, each new frame takes the settings of the one before; the
+/// first follows `first_follows`, the photo open when capture began.
+/// What happens next comes as `capture` events.
+#[tauri::command(async)]
+pub fn start_capture(
+    app: AppHandle,
+    camera: Option<capture::Found>,
+    follow: bool,
+    first_follows: Option<i64>,
+) -> CommandResult<capture::Found> {
+    let camera = match camera {
+        Some(camera) => camera,
+        None => capture::list().into_iter().next().ok_or_else(|| {
+            capture::unavailable().unwrap_or_else(|| {
+                "No camera found. Connect it by USB, switch it on, and try again. A camera that shows as a drive \
+                 is imported from instead."
+                    .into()
+            })
+        })?,
+    };
+    let library = app.state::<AppState>().library.clone();
+    let emitter = app.clone();
+    app.state::<capture::Tether>()
+        .start(library, &camera, follow, first_follows, move |report| {
+            let _ = emitter.emit("capture", report);
+        })
+        .map_err(message)?;
+    Ok(camera)
+}
+
+/// Takes a photo with the camera capturing.
+#[tauri::command]
+pub fn take_photo(tether: State<capture::Tether>) -> CommandResult<()> {
+    tether.send(capture::Command::Fire).map_err(message)
+}
+
+#[tauri::command]
+pub fn set_capture_follow(tether: State<capture::Tether>, follow: bool) -> CommandResult<()> {
+    tether.send(capture::Command::Follow(follow)).map_err(message)
+}
+
+/// Stops capturing, once the shots already taken are in the library.
+#[tauri::command(async)]
+pub fn stop_capture(tether: State<capture::Tether>) {
+    tether.stop();
 }
 
 // ---- editing ----

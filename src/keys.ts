@@ -72,6 +72,10 @@ export const SHORTCUTS: ShortcutGroup[] = [
       { keys: ["Alt+Drag"], does: "Erase with the brush" },
     ],
   },
+  {
+    title: "Capture",
+    shortcuts: [{ keys: ["F12"], does: "Take a photo with the camera" }],
+  },
 ];
 
 interface Open {
@@ -88,3 +92,22 @@ interface Open {
  */
 export const opensShortcuts = (key: string, typing: boolean, s: Open) =>
   key === "?" && !typing && !s.menu && !s.confirmRequest && !s.importState && !s.exportState && !s.filmSheet;
+
+interface Capturing extends Open {
+  shortcutsOpen: boolean;
+  capture: unknown;
+}
+
+/**
+ * Whether a key press takes a photo with the camera capturing: F12, from
+ * the grid or the editor, with nothing (a menu, a question, a sheet) on top.
+ */
+export const firesShutter = (key: string, s: Capturing) =>
+  key === "F12" &&
+  Boolean(s.capture) &&
+  !s.menu &&
+  !s.confirmRequest &&
+  !s.importState &&
+  !s.exportState &&
+  !s.filmSheet &&
+  !s.shortcutsOpen;

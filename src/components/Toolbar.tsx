@@ -17,7 +17,7 @@ export function menuBelow(event: React.MouseEvent, entries: MenuEntry[]) {
 }
 
 export function importEntries(): MenuEntry[] {
-  const { importFiles, importFolder, startImport, volumes } = useStore.getState();
+  const { importFiles, importFolder, startImport, volumes, cameras, capture, startCapture } = useStore.getState();
   return [
     { label: "Choose files…", run: () => void importFiles() },
     { label: "Choose a folder…", run: () => void importFolder() },
@@ -25,6 +25,13 @@ export function importEntries(): MenuEntry[] {
     ...volumes.map((card) => ({
       label: `From “${card.name}”`,
       run: () => void startImport([card.path], card.name),
+    })),
+    "separator",
+    // Without a camera found, choosing it says why.
+    ...(cameras.length > 0 ? cameras : [null]).map((camera) => ({
+      label: camera ? `Capture with “${camera.name}”` : "Capture with a camera…",
+      disabled: capture !== null,
+      run: () => void startCapture(camera),
     })),
   ];
 }

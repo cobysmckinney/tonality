@@ -63,6 +63,10 @@ tract-linalg = { version = "0.23.8", features = ["multithread-mm"] }
 jpeg-decoder = { version = "0.3.2", default-features = false }
 tauri-plugin-single-instance = "2"
 
+# Tethered capture loads libgphoto2 when it is first needed, so the app builds
+# and runs without it.
+[target.'cfg(target_os = "linux")'.dependencies]
+libloading = "0.8.9"
 
 [features]
 default = ["heif"]

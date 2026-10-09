@@ -17,6 +17,8 @@ import {
 import {
   api,
   AppliedEdits,
+  Camera,
+  CaptureReport,
   ExportJob,
   ExportPlan,
   ExportSettings,
@@ -236,6 +238,10 @@ interface State {
   cropAspect: number | null;
   brush: BrushSettings;
   volumes: Volume[];
+  /** Cameras connected by USB, to capture with. */
+  cameras: Camera[];
+  /** The camera taking photos straight into the library, while one is; with `follow`, each new frame takes the settings of the one before. */
+  capture: { camera: Camera; follow: boolean } | null;
   importState: ImportState | null;
   exportState: ExportState | null;
   /** The film details sheet: the photos it is for, as they are now, and what to offer while typing. */
@@ -369,6 +375,13 @@ interface State {
   runImport: () => Promise<void>;
   dismissImport: () => Promise<void>;
 
+  /** Starts capturing with a camera (without one, the first found): each shot comes into the library and opens. */
+  startCapture: (camera: Camera | null) => Promise<void>;
+  /** Takes a photo with the camera capturing. */
+  takePhoto: () => Promise<void>;
+  setCaptureFollow: (follow: boolean) => Promise<void>;
+  stopCapture: () => Promise<void>;
+
   /** Opens the export sheet for these photos, with the settings used last time. */
   startExport: (ids: number[]) => Promise<void>;
   /** Changes the export being set up: its settings, which branches it takes, or what the files are called. */
@@ -472,6 +485,24 @@ export const useStore = create<State>((set, get) => {
   };
   /** The activity that `edits-progress` events belong to. */
   let editsActivity: number | null = null;
+  /** The activity shown while a shot comes off the camera. */
+  let captureActivity: number | null = null;
+  const endCaptureActivity = () => {
+    if (captureActivity !== null) endActivity(captureActivity);
+    captureActivity = null;
+  };
+  /** Whether new frames follow the last one, as last chosen. */
+  let followFrames = true;
+
+  /** Shows the frames just captured, and opens the last one to be checked. */
+  const showCaptured = async (ids: number[]) => {
+    const last = ids[ids.length - 1];
+    if (last === undefined) return;
+    await get().reload();
+    if (!get().photos.some((p) => p.id === last)) await get().setView({ kind: "imports" });
+    if (get().filter !== "all" && !visiblePhotos(get()).some((p) => p.id === last)) get().setFilter("all");
+    if (get().photos.some((p) => p.id === last)) get().openPhoto(last);
+  };
 
   /**
    * Changes the edits of many photos, with progress and a way to stop.
@@ -646,6 +677,8 @@ export const useStore = create<State>((set, get) => {
     cropAspect: null,
     brush: { size: 30, feather: 50, strength: 100, erase: false },
     volumes: [],
+    cameras: [],
+    capture: null,
     importState: null,
     exportState: null,
     filmSheet: null,
@@ -665,6 +698,7 @@ export const useStore = create<State>((set, get) => {
       const failures = await settleEach([
         () => get().reload(),
         async () => set({ volumes: await api.listVolumes() }),
+        async () => set({ cameras: await api.listCameras() }),
         async () => set({ presets: await api.listPresets() }),
         async () => set({ favoritePresets: await api.favoritePresets() }),
       ]);
@@ -682,6 +716,37 @@ export const useStore = create<State>((set, get) => {
               text: `Camera card “${card.name}” connected`,
               action: { label: "Review photos", run: () => void get().startImport([card.path], card.name) },
             });
+          }
+        },
+        "cameras-changed": (payload: Camera[]) => {
+          const known = new Set(get().cameras.map((c) => c.port));
+          set({ cameras: payload });
+          if (get().libraryProblem || get().capture) return;
+          for (const camera of payload.filter((c) => !known.has(c.port))) {
+            get().toast({
+              text: `Camera “${camera.name}” connected`,
+              action: { label: "Capture", run: () => void get().startCapture(camera) },
+            });
+          }
+        },
+        capture: (payload: CaptureReport) => {
+          switch (payload.kind) {
+            case "downloading":
+              captureActivity ??= beginActivity("Bringing in a photo from the camera");
+              break;
+            case "added":
+              endCaptureActivity();
+              void showCaptured(payload.ids);
+              break;
+            case "failed":
+              endCaptureActivity();
+              get().toast({ text: payload.message, tone: "error" });
+              break;
+            case "ended":
+              endCaptureActivity();
+              set({ capture: null });
+              if (payload.message) get().toast({ text: payload.message, tone: "error" });
+              break;
           }
         },
         "scan-progress": (payload: Progress) => {
@@ -1358,6 +1423,45 @@ export const useStore = create<State>((set, get) => {
         else next.delete(index);
       }
       set({ importState: { ...current, chosen: next } });
+    },
+
+    async startCapture(camera) {
+      if (get().capture) return;
+      try {
+        const started = await during("Connecting to the camera", () =>
+          api.startCapture(camera, followFrames, get().openId),
+        );
+        set({ capture: { camera: started, follow: followFrames } });
+      } catch (error) {
+        get().toast({ text: String(error), tone: "error" });
+      }
+    },
+
+    async takePhoto() {
+      if (!get().capture) return;
+      try {
+        await api.takePhoto();
+      } catch (error) {
+        get().toast({ text: String(error), tone: "error" });
+      }
+    },
+
+    async setCaptureFollow(follow) {
+      const capture = get().capture;
+      if (!capture) return;
+      followFrames = follow;
+      set({ capture: { ...capture, follow } });
+      try {
+        await api.setCaptureFollow(follow);
+      } catch (error) {
+        get().toast({ text: String(error), tone: "error" });
+      }
+    },
+
+    async stopCapture() {
+      if (!get().capture) return;
+      await during("Stopping capture", () => api.stopCapture());
+      set({ capture: null });
     },
 
     async runImport() {

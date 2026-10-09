@@ -1,5 +1,5 @@
 import { ReactNode, useEffect, useRef } from "react";
-import { BookImage, Camera, Clock, Heart, Images, Plus, Trash2 } from "lucide-react";
+import { Aperture, BookImage, Camera, Clock, Heart, Images, Plus, Trash2 } from "lucide-react";
 import { Album, View } from "../api";
 import { count } from "../format";
 import { useStore } from "../store";
@@ -51,8 +51,10 @@ export function Sidebar() {
   const overview = useStore((s) => s.overview);
   const view = useStore((s) => s.view);
   const volumes = useStore((s) => s.volumes);
+  const cameras = useStore((s) => s.cameras);
+  const capturing = useStore((s) => s.capture?.camera.port);
   const renaming = useStore((s) => s.renamingAlbum);
-  const { setView, newAlbum, setRenamingAlbum, deleteAlbum, openMenu, startImport } = useStore.getState();
+  const { setView, newAlbum, setRenamingAlbum, deleteAlbum, openMenu, startImport, startCapture } = useStore.getState();
   const go = (next: View) => () => void setView(next);
 
   return (
@@ -130,6 +132,23 @@ export function Sidebar() {
               icon={<Camera size={16} />}
               label={card.name}
               onClick={() => void startImport([card.path], card.name)}
+            />
+          ))}
+        </div>
+      )}
+
+      {cameras.length > 0 && (
+        <div className="side-group">
+          <div className="side-heading">
+            <span>Capture</span>
+          </div>
+          {cameras.map((camera) => (
+            <Item
+              key={camera.port}
+              icon={<Aperture size={16} />}
+              label={camera.name}
+              active={capturing === camera.port}
+              onClick={() => capturing === undefined && void startCapture(camera)}
             />
           ))}
         </div>

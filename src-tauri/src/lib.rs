@@ -1,3 +1,4 @@
+pub mod capture;
 mod commands;
 pub mod develop;
 pub mod edit;
@@ -191,6 +192,11 @@ pub fn run() {
             volumes::watch(move |cards| {
                 let _ = handle.emit("volumes-changed", cards);
             });
+            app.manage(capture::Tether::default());
+            let handle = app.handle().clone();
+            capture::watch(move |cameras| {
+                let _ = handle.emit("cameras-changed", cameras);
+            });
             #[cfg(debug_assertions)]
             if let Some(folder) = std::env::var_os("TONALITY_EVAL") {
                 run_scripts_from(app.handle().clone(), PathBuf::from(folder));
@@ -231,6 +237,11 @@ pub fn run() {
             commands::discard_scan,
             commands::run_import,
             commands::cancel_import,
+            commands::list_cameras,
+            commands::start_capture,
+            commands::take_photo,
+            commands::set_capture_follow,
+            commands::stop_capture,
             commands::open_editor,
             commands::close_editor,
             commands::render_frame,
