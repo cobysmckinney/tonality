@@ -1,15 +1,11 @@
-import { expect, mock, test } from "bun:test";
+import { expect, test } from "bun:test";
+import { type Api, fakeApi } from "./fakeApi";
 
 // The backend, with opening a photo answered by whatever a test sets.
-let openEditor: (id: number) => Promise<unknown> = async () => {
+let openEditor: Api["openEditor"] = async () => {
   throw new Error("not set");
 };
-mock.module("./api", () => ({
-  api: {
-    openEditor: (id: number) => openEditor(id),
-    closeEditor: async () => {},
-  },
-}));
+fakeApi({ openEditor: (id) => openEditor(id) });
 const { useStore } = await import("./store");
 
 const state = () => useStore.getState();
