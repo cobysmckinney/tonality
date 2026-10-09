@@ -30,6 +30,8 @@ Tonality keeps one managed library, like Apple Photos. Importing copies photos i
 - **RAW + JPEG pairs** shot together are one photo.
 - **A damaged original**, or a file that isn't a photo Tonality can read, can't be edited or exported, and trying says so. If the photo is still on the camera card, deleting it permanently and importing it again may help.
 - **Film details**: a scan of a negative or slide carries the details of the camera that scanned it, not the film's. Right-click a selection (usually one roll) and choose **Film details…** to give the photos their film stock, the ISO it was shot at, the camera and lens, and frame numbers. Frames count up from the first frame (1 to begin with) in the order the photos were scanned. A field left as it is keeps each photo's own, so a roll can be filled in a batch at a time, and **Clear details** removes them. Stocks, cameras and lenses already used are offered as you type. In the editor, the Info tab (`I`) shows them in place of the scanner's, with the scanning camera listed under "Scanned with"; **Change film details** there corrects one frame. They are details about the photo, like flags, so they aren't steps in its history.
+- **Search** (`Ctrl+F`): the field at the top of the grid finds photos by camera, lens, film stock, file name or when they were taken. Click it to see the cameras, films and months in view, and choose one, or just type. Every word has to match: `portra 2026` is Portra shot in 2026, `october` is any October. A word can be kept to one thing with `camera:`, `lens:`, `film:`, `date:` or `name:`, and quotes match a whole name, so `camera:"Canon EOS R5"` leaves out the R50. A date can be a year, a month or a day (`2026`, `October 2026`, `2026-10-08`), or a span (`date:2026-06..2026-08`). A scan with film details is found by its film camera and lens as well as by the scanner's.
+- **Filter and sort**: the filter menu shows picks only, hides rejected photos or shows only them, and puts the grid in order: newest or oldest first, last imported first, or by file name. The search, filter and order stay as you move between Library, Favorites and albums, and the count at the top says when photos are hidden ("12 of 340 photos"). Importing clears the search and filter, so the new photos show. Imports and Recently Deleted keep their own order.
 - **Culling**: `F` favorite, `P` pick, `X` reject, `U` unflag, `Delete` to delete. Arrows move, Shift extends, Enter opens, Escape goes back. When a photo leaves the grid (deleted, or hidden by the filter after you reject it under Hide rejected, say), the next one is selected, so you can keep going without reaching for the mouse; in the editor, the next photo opens.
 - **If the library can't open** (say the folder can't be changed), the window says why. Fix the problem and choose Try again.
 
@@ -118,6 +120,7 @@ Exports are sRGB and carry the capture date, camera, lens and exposure. A photo 
 | Anywhere | `?` | List the shortcuts |
 | Grid | Arrows, Shift+arrows | Move, extend the selection |
 | Grid | `Ctrl+A` | Select all |
+| Grid | `Ctrl+F` | Search |
 | Grid | Enter, double-click | Open the photo |
 | Grid | `Esc` | Clear the selection |
 | Grid, editor | `F` / `P` / `X` / `U` | Favorite / pick / reject / unflag |

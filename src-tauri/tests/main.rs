@@ -9,3 +9,4 @@ mod history;
 mod library;
 mod masks;
 mod presets;
+mod search;

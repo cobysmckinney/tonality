@@ -19,6 +19,7 @@ use crate::import::{self, ImportSummary, ScanSession, ScanView};
 use crate::library::{FilmPhoto, FilmSuggestions, Library, Overview, PhotoInfo, PhotoItem, View};
 use crate::media;
 use crate::presets::{self, ImportedPresets, Preset, Settings};
+use crate::search::{Facets, Search, Sort};
 use crate::segment::Found;
 use crate::thumbs;
 use crate::volumes::{self, Volume};
@@ -103,9 +104,21 @@ pub fn get_overview(state: State<AppState>) -> CommandResult<Overview> {
     state.library.overview().map_err(message)
 }
 
+/// The view's photos that match the search, in the order asked for.
 #[tauri::command(async)]
-pub fn list_photos(state: State<AppState>, view: View) -> CommandResult<Vec<PhotoItem>> {
-    state.library.list_photos(view).map_err(message)
+pub fn list_photos(
+    state: State<AppState>,
+    view: View,
+    search: Option<Search>,
+    sort: Option<Sort>,
+) -> CommandResult<Vec<PhotoItem>> {
+    state.library.find_photos(view, &search.unwrap_or_default(), sort.unwrap_or_default()).map_err(message)
+}
+
+/// What there is to search for among the view's photos.
+#[tauri::command(async)]
+pub fn search_facets(state: State<AppState>, view: View) -> CommandResult<Facets> {
+    state.library.search_facets(view).map_err(message)
 }
 
 #[tauri::command(async)]

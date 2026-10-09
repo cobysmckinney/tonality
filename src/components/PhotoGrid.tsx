@@ -110,12 +110,15 @@ export function PhotoGrid() {
   const selection = useStore((s) => s.selection);
   const thumbSize = useStore((s) => s.thumbSize);
   const square = useStore((s) => s.squareThumbs);
+  const sort = useStore((s) => s.sort);
   const grid = useRef<GridHandle<number>>(null);
 
   const sections = useMemo(() => {
-    if (view.kind === "deleted") return [{ key: "all", items: photos }];
+    // In name order, days and imports are all mixed up: no headings.
+    if (view.kind === "deleted" || (view.kind !== "imports" && sort === "name")) return [{ key: "all", items: photos }];
+    const byImport = view.kind === "imports" || sort === "imported";
     const groups: GridSection<Photo>[] = [];
-    const keyOf = (photo: Photo) => (view.kind === "imports" ? String(photo.importId) : photo.takenAt.slice(0, 10));
+    const keyOf = (photo: Photo) => (byImport ? String(photo.importId) : photo.takenAt.slice(0, 10));
     // Photos arrive sorted, so each group is one contiguous run.
     for (const photo of photos) {
       const key = keyOf(photo);
@@ -123,7 +126,7 @@ export function PhotoGrid() {
       groups.at(-1)!.items.push(photo);
     }
     for (const group of groups) {
-      if (view.kind === "imports") {
+      if (byImport) {
         const info = imports?.find((i) => String(i.id) === group.key);
         const when = info ? longDateTime(new Date(info.createdAt * 1000)) : "";
         group.header = <Heading title={info?.source ?? "Import"} detail={when} total={group.items.length} />;
@@ -132,7 +135,7 @@ export function PhotoGrid() {
       }
     }
     return groups;
-  }, [photos, view, imports]);
+  }, [photos, view, sort, imports]);
 
   // Coming back from the viewer, bring the photo that was open into view.
   const viewing = useStore((s) => s.openId !== null);
