@@ -291,11 +291,6 @@ impl Found {
 pub fn guide(image: &LinearImage) -> RgbImage {
     let (width, height) = fit_within(image.width, image.height, COVERAGE_EDGE.min(image.width.max(image.height)));
     let (sx, sy) = (image.width as f32 / width as f32, image.height as f32 / height as f32);
-    let encode = |v: f32| {
-        let v = v.clamp(0.0, 1.0);
-        let v = if v <= 0.0031308 { v * 12.92 } else { 1.055 * v.powf(1.0 / 2.4) - 0.055 };
-        (v * 255.0).round() as u8
-    };
     // The working-image pixels under guide pixel `i`, along one side.
     let span = |i: usize, scale: f32, limit: u32| {
         let start = ((i as f32 * scale) as usize).min(limit as usize - 1);
@@ -315,21 +310,36 @@ pub fn guide(image: &LinearImage) -> RgbImage {
             }
             let count = (lines.len() * columns.len()) as f32;
             let average = sum.map(|v| v / count);
-            *out = if image.scene_referred { base_look(average) } else { average }.map(encode);
+            *out = if image.scene_referred { base_look(average, true) } else { average }.map(encode);
         }
     });
     RgbImage::from_raw(width, height, bytes).expect("sized to fit")
 }
 
+/// The picture the models are shown of a film negative: its positive
+/// (`width` x `height` pixels in scene light, already the guide's size),
+/// with the editor's look. Nothing in it is a clipped sensor channel.
+pub fn guide_of_positive(width: u32, height: u32, pixels: &[[f32; 3]]) -> RgbImage {
+    let bytes = pixels.par_iter().flat_map_iter(|&pixel| base_look(pixel, false).map(encode)).collect();
+    RgbImage::from_raw(width, height, bytes).expect("sized to fit")
+}
+
+/// A display-linear value as an 8-bit sRGB level.
+pub(crate) fn encode(v: f32) -> u8 {
+    let v = v.clamp(0.0, 1.0);
+    let v = if v <= 0.0031308 { v * 12.92 } else { 1.055 * v.powf(1.0 / 2.4) - 0.055 };
+    (v * 255.0).round() as u8
+}
+
 /// The editor's built-in look for RAW files (`base_look` in develop.wgsl,
 /// with the fade of clipped colours to white before it): scene values to
 /// display-linear, the sensor's clipping point on white.
-fn base_look(c: [f32; 3]) -> [f32; 3] {
+pub(crate) fn base_look(c: [f32; 3], fade_clipped: bool) -> [f32; 3] {
     const EXPOSURE: f32 = 1.4;
     const SATURATION: f32 = 1.05;
     let curve = |x: f32| (x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14);
     let peak = c[0].max(c[1]).max(c[2]);
-    let fade = smoothstep(0.82, 1.0, peak);
+    let fade = if fade_clipped { smoothstep(0.82, 1.0, peak) } else { 0.0 };
     let toned = c.map(|v| (curve((v + (peak - v) * fade).max(0.0) * EXPOSURE) / curve(EXPOSURE)).clamp(0.0, 1.0));
     let luma = 0.2126 * toned[0] + 0.7152 * toned[1] + 0.0722 * toned[2];
     toned.map(|v| luma + (v - luma) * SATURATION)

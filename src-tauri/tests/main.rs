@@ -4,6 +4,7 @@
 mod develop;
 mod editor;
 mod export;
+mod film;
 mod history;
 mod library;
 mod masks;

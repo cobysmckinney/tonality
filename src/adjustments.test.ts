@@ -95,6 +95,22 @@ describe("history step names", () => {
     expect(describeChange(edited({ ...kept, exposure: 1 }), edited({ ...kept, temperature: 10 }))).toBe("2 adjustments");
     expect(describeChange(edited(kept), edited({ ...kept, exposure: 1, vignette: -20, grain: 10 }))).toBe("3 adjustments");
   });
+  test("film steps say what happened in plain words", () => {
+    const none = defaultAdjustments();
+    const colour = edited({ film: { kind: "colour", base: null, range: null } });
+    expect(describeChange(none, colour)).toBe("Film: colour negative");
+    expect(describeChange(colour, edited({ film: { kind: "blackAndWhite", base: null, range: null } }))).toBe(
+      "Film: black and white negative",
+    );
+    expect(describeChange({ ...colour, exposure: 1 }, { ...none, exposure: 1 })).toBe("Film: none");
+    const picked = edited({ film: { kind: "colour", base: [0.7, 0.4, 0.2], range: null } });
+    expect(describeChange(colour, picked)).toBe("Film base picked");
+    expect(describeChange(picked, colour)).toBe("Film base guessed");
+    const roll = edited({ film: { kind: "colour", base: [0.7, 0.4, 0.2], range: { low: [0, 0, 0], high: [1, 1.1, 1.2] } } });
+    expect(describeChange(colour, roll)).toBe("Balanced with the roll");
+    expect(describeChange(roll, picked)).toBe("Balanced on its own");
+    expect(describeChange(roll, defaultAdjustments())).toBe("Reset all");
+  });
 });
 
 describe("curves", () => {

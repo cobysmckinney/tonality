@@ -18,7 +18,7 @@ import {
   Point,
   Shape,
 } from "./adjustments";
-import { Size, turnedSize } from "./crop";
+import { frameSize, Size, turnedSize } from "./crop";
 import { arrowOffset } from "./nudge";
 
 /** An affine map of the plane, as two rows: x' = a*x + b*y + c, y' = d*x + e*y + f. */
@@ -57,11 +57,26 @@ const clamp = (value: number, low: number, high: number) => Math.min(high, Math.
 /** Maps a position in the cropped picture (0..1 across and down) to a position on the photo file. */
 export function frameToSource(photo: Size, a: Adjustments): Affine {
   const { width: w, height: h } = turnedSize(photo, a.rotation);
-  const angle = (clamp(a.straighten, -45, 45) * Math.PI) / 180;
-  const [sin, cos] = [Math.sin(angle), Math.cos(angle)];
   const part = (value: number) => clamp(value, 0, 1);
   const size = [Math.max(part(a.crop.width), 0.01) * w, Math.max(part(a.crop.height), 0.01) * h];
-  const center = [part(a.crop.x) * w, part(a.crop.y) * h];
+  return placedToSource(photo, a, [part(a.crop.x) * w, part(a.crop.y) * h], size);
+}
+
+/**
+ * `frameToSource` for the uncropped picture the crop tool shows: the box
+ * holding the whole tilted photo.
+ */
+export function uncroppedToSource(photo: Size, a: Adjustments): Affine {
+  const { width: w, height: h } = turnedSize(photo, a.rotation);
+  const box = frameSize(photo, a, true);
+  return placedToSource(photo, a, [w / 2, h / 2], [box.width, box.height]);
+}
+
+/** Maps a frame of `size` centred at `center` (in pixels of the turned photo) to the photo file. */
+function placedToSource(photo: Size, a: Adjustments, center: number[], size: number[]): Affine {
+  const { width: w, height: h } = turnedSize(photo, a.rotation);
+  const angle = (clamp(a.straighten, -45, 45) * Math.PI) / 180;
+  const [sin, cos] = [Math.sin(angle), Math.cos(angle)];
 
   const offset = then(translate(-0.5, -0.5), scale(size[0], size[1]));
   const tilt: Affine = [
@@ -313,9 +328,10 @@ export function canAdd(masks: Mask[], kind: Shape["kind"]): boolean {
 /**
  * Everything the masks' black-and-white thumbnails depend on, as one string:
  * the masks' parts, how each combines and turns inside out, the framing, and
- * the exposure when a brightness range reads it. Nothing else (the photo's
- * colour, a mask's own sliders, its name) can change a thumbnail, so changing
- * it doesn't redraw them.
+ * the exposure when a brightness range reads it, and the film settings, which
+ * change the picture the models and brightness ranges see. Nothing else (the
+ * photo's colour, a mask's own sliders, its name) can change a thumbnail, so
+ * changing it doesn't redraw them.
  */
 export function matteKey(a: Adjustments): string {
   const ranged = a.masks.some((mask) => mask.parts.some((part) => part.shape.kind === "luminance"));
@@ -323,5 +339,6 @@ export function matteKey(a: Adjustments): string {
     a.masks.map((mask) => [mask.id, mask.visible, mask.invert, mask.parts]),
     GEOMETRY.map((key) => a[key]),
     ranged ? a.exposure : null,
+    a.film,
   ]);
 }

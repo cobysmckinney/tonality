@@ -4,6 +4,7 @@ import {
   Adjustments,
   DEFAULTS,
   describeChange,
+  Film,
   GEOMETRY,
   isAsShot,
   Mask,
@@ -33,7 +34,7 @@ import {
   Volume,
 } from "./api";
 import { listenAll, settleEach } from "./events";
-import { FilmPhoto, FilmSuggestions } from "./film";
+import { FilmPhoto, FilmSuggestions } from "./filmDetails";
 import { plural } from "./format";
 import { canAdd, circleShape, foundShapes, isFound, MaskStart, MAX_MASKS, newMask, newShape, SHAPE_NAMES, startKind } from "./masks";
 import { blend, holds, Preset, settingsFrom } from "./presets";
@@ -154,6 +155,8 @@ export interface EditorState {
    * the object is found.
    */
   circling: { mode: MaskMode | null; replace?: number; points?: Point[] } | null;
+  /** Waiting for a click on the clear film, to set a negative's film base. */
+  pickingBase: boolean;
   histogram: Uint32Array | null;
   highlightsClipped: boolean;
   shadowsClipped: boolean;
@@ -176,6 +179,7 @@ const idleEditor: EditorState = {
   showMask: true,
   finding: null,
   circling: null,
+  pickingBase: false,
   histogram: null,
   highlightsClipped: false,
   shadowsClipped: false,
@@ -311,6 +315,14 @@ interface State {
   copyEdits: (id: number) => Promise<void>;
   pasteEdits: (ids: number[]) => Promise<void>;
   revertEdits: (ids: number[]) => Promise<void>;
+  /** Changes the open photo's film settings, as a step named `label`. */
+  setFilm: (change: Partial<Film>, label?: string) => void;
+  /** Starts or stops waiting for a click on the clear film. */
+  setPickingBase: (picking: boolean) => void;
+  /** Sets the open photo's film base from a point on its file (0..1 across and down). */
+  pickBase: (point: Point) => Promise<void>;
+  /** Balances these frames of a roll of film together: a step in each one's history. */
+  balanceRoll: (ids: number[]) => Promise<void>;
 
   /** Shows a preset on the open photo without applying it; null puts the photo's own edits back. */
   previewPreset: (preset: Preset | null) => void;
@@ -1013,6 +1025,42 @@ export const useStore = create<State>((set, get) => {
       } catch (error) {
         get().toast({ text: String(error), tone: "error" });
         await get().reload();
+      }
+    },
+
+    setFilm(change, label) {
+      const { film } = get().editor.adjustments;
+      get().adjust({ film: { ...film, ...change } });
+      get().commitAdjust(label);
+    },
+
+    setPickingBase: (pickingBase) => setEditor({ pickingBase }),
+
+    async pickBase([x, y]) {
+      const { photoId } = get().editor;
+      setEditor({ pickingBase: false });
+      if (photoId === null) return;
+      try {
+        const { base } = await api.pickFilmBase(photoId, x, y);
+        // A base picked by hand belongs to this frame: its balance is measured afresh.
+        if (get().editor.photoId === photoId) get().setFilm({ base, range: null }, "Film base picked");
+      } catch (error) {
+        get().toast({ text: String(error), tone: "error" });
+      }
+    },
+
+    async balanceRoll(ids) {
+      if (ids.length === 0) return;
+      try {
+        const { done, versionOf, cancelled } = await applyToMany("Balancing the roll", ids, () => api.balanceRoll(ids));
+        patch(done, (p) => ({ ...p, version: versionOf.get(p.id) ?? p.version, edited: true, branches: Math.max(1, p.branches) }));
+        get().toast({
+          text: cancelled
+            ? `Stopped: balanced ${done.length} of ${plural(ids.length, "photo")}`
+            : `Balanced ${plural(ids.length, "photo")} as one roll`,
+        });
+      } catch (error) {
+        get().toast({ text: String(error), tone: "error" });
       }
     },
 

@@ -5,6 +5,7 @@ use std::collections::BTreeSet;
 use serde_json::json;
 use tempfile::TempDir;
 use tonality_lib::edit::{Adjustments, Crop};
+use tonality_lib::film::{Film, Kind};
 use tonality_lib::library::Library;
 use tonality_lib::presets::{self, Preset, Settings};
 
@@ -48,6 +49,10 @@ fn a_preset_changes_only_what_it_covers() {
     assert_eq!(after.vibrance, 0.0, "a covered setting goes back to zero if the preset says so");
     assert_eq!((after.exposure, after.grain), (0.7, 10.0), "the rest is left alone");
     assert_eq!((after.straighten, after.crop), (photo.straighten, photo.crop));
+
+    // A scan's film settings belong to it, like its framing.
+    let scan = Adjustments { film: Film { kind: Kind::Colour, base: Some([0.7, 0.4, 0.2]), range: None }, ..photo };
+    assert_eq!(presets::apply(&settings, &scan).film, scan.film);
 }
 
 #[test]
@@ -57,6 +62,7 @@ fn a_preset_never_holds_framing_or_things_it_does_not_understand() {
         "crop": { "x": 0.5, "y": 0.5, "width": 0.2, "height": 0.2 },
         "rotation": 1,
         "flipHorizontal": true,
+        "film": { "kind": "colour", "base": [0.7, 0.4, 0.2], "range": null },
         "somethingFromTheFuture": 4,
     }))
     .unwrap();

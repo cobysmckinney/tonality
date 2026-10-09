@@ -10,7 +10,7 @@ import {
   NO_FILM,
   startingForm,
   suggestionsFor,
-} from "../film";
+} from "../filmDetails";
 import { plural } from "../format";
 import { useStore } from "../store";
 

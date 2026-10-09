@@ -1126,6 +1126,39 @@ button {
   font-size: 12px;
   line-height: 1.45;
 }
+/* The film setting: which kind of negative, and the clear film it is measured against. */
+.film-kind {
+  justify-content: space-between;
+}
+.film-base {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+.film-base-label {
+  flex: 1;
+  color: var(--muted);
+}
+.film-swatch {
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  background: var(--well);
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.12);
+}
+.film-roll {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+/* Over the photo while the film base is being picked. */
+.film-picker {
+  position: absolute;
+  inset: 0;
+  cursor: crosshair;
+}
 .chips {
   display: flex;
   flex-wrap: wrap;
