@@ -8,6 +8,7 @@
 import {
   Adjustments,
   formatValue,
+  GEOMETRY,
   LABELS,
   LocalAdjustments,
   LOCAL_KEYS,
@@ -290,4 +291,20 @@ export function canAdd(masks: Mask[], kind: Shape["kind"]): boolean {
     return foundCount(masks) < MAX_FOUND;
   }
   return true;
+}
+
+/**
+ * Everything the masks' black-and-white thumbnails depend on, as one string:
+ * the masks' parts, how each combines and turns inside out, the framing, and
+ * the exposure when a brightness range reads it. Nothing else (the photo's
+ * colour, a mask's own sliders, its name) can change a thumbnail, so changing
+ * it doesn't redraw them.
+ */
+export function matteKey(a: Adjustments): string {
+  const ranged = a.masks.some((mask) => mask.parts.some((part) => part.shape.kind === "luminance"));
+  return JSON.stringify([
+    a.masks.map((mask) => [mask.id, mask.visible, mask.invert, mask.parts]),
+    GEOMETRY.map((key) => a[key]),
+    ranged ? a.exposure : null,
+  ]);
 }
