@@ -115,11 +115,22 @@ button {
   padding: 0 6px 0 16px;
   border-bottom: 1px solid var(--line);
 }
+/* The mark opens the About screen. */
+.app-mark-button {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 26px;
+  margin-left: -5px;
+  border-radius: 7px;
+}
+.app-mark-button:hover {
+  background: var(--raised);
+}
 .app-mark {
   width: 20px;
   height: 20px;
   color: var(--text);
-  /* Clicks fall through to the bar, so the mark drags the window too. */
   pointer-events: none;
 }
 .app-mark path {
@@ -2443,6 +2454,154 @@ kbd {
   font: inherit;
   font-size: 12px;
   text-align: center;
+}
+
+/* ---- about, the licence, and third-party notices ---- */
+
+.dialog.about {
+  display: flex;
+  flex-direction: column;
+  max-height: 100%;
+  padding: 12px 12px 24px 20px;
+}
+.dialog.about.licence,
+.dialog.about.notices {
+  width: min(720px, 100%);
+  /* The scrim's height less its padding: a percentage would grow with the long text inside. */
+  height: calc(100vh - var(--titlebar) - 48px);
+  padding-bottom: 12px;
+}
+.about-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 30px;
+}
+.about-header .icon-button:last-child {
+  margin-left: auto;
+}
+.about-header h2 {
+  font-size: 14px;
+}
+.about-main {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 0 8px;
+  text-align: center;
+}
+.about-mark {
+  width: 44px;
+  height: 44px;
+  margin-bottom: 14px;
+  color: var(--text);
+}
+.about-mark path {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 48;
+  stroke-linecap: round;
+}
+.about-mark circle {
+  fill: currentColor;
+}
+.dialog .about-main h2 {
+  color: var(--text);
+  font-size: 18px;
+}
+.dialog p.about-version {
+  margin-top: 2px;
+  color: var(--faint);
+  font-variant-numeric: tabular-nums;
+  user-select: text;
+  -webkit-user-select: text;
+}
+.dialog p.about-licence {
+  margin-top: 16px;
+}
+.about-links {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px 20px;
+  margin-top: 18px;
+}
+.about-scroll {
+  flex: 1;
+  min-height: 0;
+  margin-top: 8px;
+  padding-right: 8px;
+  overflow-y: auto;
+}
+.licence-text {
+  color: var(--muted);
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+  -webkit-user-select: text;
+}
+.dialog p.about-intro,
+.dialog p.about-loading {
+  margin: 0 0 16px;
+}
+.notice-group {
+  padding-bottom: 16px;
+}
+.notice-group h3 {
+  margin-bottom: 4px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 550;
+}
+.dialog p.notice-note {
+  margin: 0 0 8px;
+  color: var(--faint);
+  font-size: 12px;
+}
+.notice {
+  border-top: 1px solid var(--line);
+}
+.notice summary {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 6px 0;
+  cursor: default;
+  list-style: none;
+}
+.notice summary::-webkit-details-marker {
+  display: none;
+}
+.notice summary:hover .notice-name,
+.notice[open] .notice-name {
+  color: var(--text);
+}
+.notice-name {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.notice-version {
+  color: var(--faint);
+  font-variant-numeric: tabular-nums;
+}
+.notice-licence {
+  flex: none;
+  margin-left: auto;
+  max-width: 50%;
+  color: var(--faint);
+  font-size: 12px;
+  text-align: right;
+}
+.notice[open] {
+  padding-bottom: 12px;
+}
+.notice .licence-text + .licence-text {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px dashed var(--line);
 }
 
 .dialog-actions {

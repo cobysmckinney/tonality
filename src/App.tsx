@@ -78,7 +78,7 @@ export default function App() {
   const openPhoto = useStore((s) => (s.openId === null ? undefined : s.photos.find((p) => p.id === s.openId)));
   const modal = useStore(
     (s) =>
-      s.importState !== null || s.exportState !== null || s.filmSheet !== null || s.confirmRequest !== null || s.shortcutsOpen,
+      s.importState !== null || s.exportState !== null || s.filmSheet !== null || s.confirmRequest !== null || s.shortcutsOpen || s.aboutOpen,
   );
 
   useEffect(() => {

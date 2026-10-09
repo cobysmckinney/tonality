@@ -101,7 +101,7 @@ A few rules that aren't obvious from the code:
 - **Checks**: `bun test`, `bunx tsc --noEmit` and `cargo test` pass. Changes to the shader or GPU pipeline come with a GPU test. GitHub runs these, and `cargo clippy`, on every PR; a PR can't be merged until they pass.
 - **Docs**: if users would notice the change, update the [user guide](docs/guide.md) in the same PR.
 - **Style**: match the code around you. Neither side has a formatter set up yet, so don't reformat files you aren't otherwise changing.
-- **Dependencies** must be compatible with GPL-3.0-or-later. Don't commit sample photos or other large files.
+- **Dependencies** must be compatible with GPL-3.0-or-later. After adding or updating one, run `bun run notices` (it needs `cargo install --locked cargo-about --features cli`) to refresh the third-party notices on the About screen; `bun test` says when they are out of date. Don't commit sample photos or other large files.
 
 PRs are squash-merged, so tidy commit history inside a PR doesn't matter. The PR title becomes the commit message. Your branch is deleted once it's merged.
 

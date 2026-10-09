@@ -5,6 +5,7 @@ import { MenuEntry, useStore } from "../store";
 import { canStartImport } from "../sheets";
 import { opensShortcuts, SHORTCUTS } from "../keys";
 import { focusToRestore } from "../focus";
+import { About } from "./About";
 
 function MenuList({ entries, x, y }: { entries: MenuEntry[]; x: number; y: number }) {
   const element = useRef<HTMLDivElement>(null);
@@ -298,6 +299,7 @@ export function Overlays() {
       <DropTarget />
       <Confirm />
       <Shortcuts />
+      <About />
       <Menu />
       <Toasts />
     </>
