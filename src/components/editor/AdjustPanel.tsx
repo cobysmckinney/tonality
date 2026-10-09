@@ -1,10 +1,23 @@
 import { ReactNode, useEffect, useId, useState } from "react";
 import { ChevronDown, Pipette } from "lucide-react";
-import { Band, DEFAULTS, FILM_KINDS, LABELS, MIXER_BANDS, rangeOf, Rgb, same, SECTIONS, SliderKey } from "../../adjustments";
+import {
+  Band,
+  DEFAULTS,
+  FILM_KINDS,
+  formatValue,
+  LABELS,
+  MIXER_BANDS,
+  rangeOf,
+  Rgb,
+  same,
+  SECTIONS,
+  SliderKey,
+} from "../../adjustments";
 import { api } from "../../api";
 import { cssColour } from "../../film";
 import { useStore } from "../../store";
 import { onTabKey } from "../../tabs";
+import { formatKelvin, kelvinToPosition, Light, positionToKelvin, sliderScale, TINT_RANGE } from "../../whiteBalance";
 import { menuBelow } from "../Toolbar";
 import { CurveEditor } from "./CurveEditor";
 import { Slider } from "./Slider";
@@ -193,6 +206,82 @@ function FilmTools() {
 const TEMPERATURE_TRACK = "linear-gradient(to right, #4f8fe6, #b9b9b9, #f0a63c)";
 const TINT_TRACK = "linear-gradient(to right, #4fb866, #b9b9b9, #d756b8)";
 
+/**
+ * Temperature and Tint, and an eyedropper that sets them from something
+ * that should be grey. On a RAW they read as the light the photo was taken
+ * in: its colour temperature in Kelvin, and its tint. A JPEG or a negative's
+ * positive has no such light to name, so there they are plain
+ * warmer/cooler and greener/more magenta scales.
+ */
+function WhiteBalance() {
+  const temperature = useStore((s) => s.editor.adjustments.temperature);
+  const tint = useStore((s) => s.editor.adjustments.tint);
+  const camera = useStore((s) => s.editor.camera);
+  const negative = useStore((s) => s.editor.adjustments.film.kind !== "none");
+  const picking = useStore((s) => s.editor.pickingWhite);
+  const scale = sliderScale(camera, negative);
+  const s = useStore.getState();
+
+  const header = (
+    <div className="white-balance">
+      <span className="white-balance-label">White balance</span>
+      <button
+        className={`button quiet ${picking ? "engaged" : ""}`}
+        title="Click something in the photo that should be white or grey"
+        aria-pressed={picking}
+        onClick={() => s.setPickingWhite(!picking)}
+      >
+        <Pipette size={14} /> Pick
+      </button>
+    </div>
+  );
+  if (!scale) {
+    return (
+      <>
+        {header}
+        <Tool name="temperature" track={TEMPERATURE_TRACK} />
+        <Tool name="tint" track={TINT_TRACK} />
+      </>
+    );
+  }
+
+  // As shot reads exactly as shot, so the sliders rest there.
+  const shot = scale.asShot;
+  const light = scale.toLight({ temperature, tint });
+  const set = (next: Light) => s.adjust(scale.toRelative(next));
+  const current = () => {
+    const { adjustments } = useStore.getState().editor;
+    return scale.toLight({ temperature: adjustments.temperature, tint: adjustments.tint });
+  };
+  return (
+    <>
+      {header}
+      <Slider
+        label="Temperature"
+        value={kelvinToPosition(light.kelvin)}
+        min={kelvinToPosition(scale.lowest)}
+        max={kelvinToPosition(scale.highest)}
+        origin={kelvinToPosition(shot.kelvin)}
+        track={TEMPERATURE_TRACK}
+        format={(position) => formatKelvin(positionToKelvin(position))}
+        onChange={(position) => set({ kelvin: positionToKelvin(position), tint: light.tint })}
+        commitLabel={() => `Temperature ${formatKelvin(current().kelvin)}`}
+      />
+      <Slider
+        label="Tint"
+        value={Math.abs(light.tint - shot.tint) < 1e-6 ? shot.tint : light.tint}
+        min={-TINT_RANGE}
+        max={TINT_RANGE}
+        origin={shot.tint}
+        track={TINT_TRACK}
+        format={(value) => formatValue(value)}
+        onChange={(value) => set({ kelvin: light.kelvin, tint: value })}
+        commitLabel={() => `Tint ${formatValue(current().tint)}`}
+      />
+    </>
+  );
+}
+
 /** Every editing tool, grouped the way you'd work through a photo. */
 export function AdjustPanel() {
   const ready = useStore((s) => s.editor.ready);
@@ -210,8 +299,7 @@ export function AdjustPanel() {
         <Tool name="blacks" />
       </Section>
       <Section title="Color">
-        <Tool name="temperature" track={TEMPERATURE_TRACK} />
-        <Tool name="tint" track={TINT_TRACK} />
+        <WhiteBalance />
         <Tool name="vibrance" />
         <Tool name="saturation" />
       </Section>

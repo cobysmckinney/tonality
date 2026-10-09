@@ -37,3 +37,11 @@ test("the uncropped frame holds the whole tilted photo", () => {
   // Without a tilt or a crop, it is the cropped frame.
   expect(uncroppedToSource(photo, defaultAdjustments())).toEqual(frameToSource(photo, defaultAdjustments()));
 });
+
+test("a click on the cropped photo lands inside the crop", () => {
+  // The white balance picker works on the photo as it is normally shown.
+  const cropped = edited({ crop: { x: 0.3, y: 0.6, width: 0.4, height: 0.5 } });
+  const shown = { width: 240, height: 200 };
+  near(pickedPoint(photo, cropped, full, shown, [0, 0], false), [0.1, 0.35]);
+  near(pickedPoint(photo, cropped, full, shown, [240, 200], false), [0.5, 0.85]);
+});

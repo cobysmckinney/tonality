@@ -27,7 +27,13 @@ pub struct LinearImage {
 /// Opens a photo's file for editing. When it can't be read, the error says
 /// so in plain words and the decoder's own reason goes to the log.
 pub fn load(path: &Path, is_raw: bool) -> Result<LinearImage> {
-    let image = if is_raw { media::decoder_guard(|| load_raw(path)) } else { load_rendered(path) };
+    load_for_editing(path, is_raw).map(|(image, _)| image)
+}
+
+/// `load`, and how the camera white balanced the photo (`white::camera`),
+/// for showing it in Kelvin: for colour RAWs whose file says.
+pub fn load_for_editing(path: &Path, is_raw: bool) -> Result<(LinearImage, Option<crate::white::Camera>)> {
+    let image = if is_raw { media::decoder_guard(|| load_raw(path)) } else { load_rendered(path).map(|image| (image, None)) };
     image.map_err(|error| {
         eprintln!("couldn't open {} for editing: {error:#}", path.display());
         unreadable(path, &error)
@@ -66,7 +72,7 @@ impl std::fmt::Display for Unsupported {
 
 impl std::error::Error for Unsupported {}
 
-fn load_raw(path: &Path) -> Result<LinearImage> {
+fn load_raw(path: &Path) -> Result<(LinearImage, Option<crate::white::Camera>)> {
     let source = media::open_raw(path)?;
     let decoder = rawler::get_decoder(&source).map_err(|e| anyhow!("{e}"))?;
     let params = RawDecodeParams::default();
@@ -88,17 +94,17 @@ fn load_raw(path: &Path) -> Result<LinearImage> {
         ProcessingStep::Calibrate,
         ProcessingStep::CropDefault,
     ]);
-    let (width, height, pixels) = match develop.develop_intermediate(&raw).map_err(|e| anyhow!("{e}"))? {
-        Intermediate::ThreeColor(rgb) => (rgb.width, rgb.height, rgb.data),
+    let (width, height, pixels, white) = match develop.develop_intermediate(&raw).map_err(|e| anyhow!("{e}"))? {
+        Intermediate::ThreeColor(rgb) => (rgb.width, rgb.height, rgb.data, crate::white::camera(&raw)),
         Intermediate::Monochrome(gray) => {
-            (gray.width, gray.height, gray.data.iter().map(|&v| [v, v, v]).collect())
+            (gray.width, gray.height, gray.data.iter().map(|&v| [v, v, v]).collect(), None)
         }
         Intermediate::FourColor(_) => {
             return Err(Unsupported("comes from a camera with a four-colour sensor, which Tonality can't read yet").into())
         }
     };
     let (width, height, pixels) = orient(width, height, pixels, orientation);
-    Ok(LinearImage { width: width as u32, height: height as u32, pixels, scene_referred: true })
+    Ok((LinearImage { width: width as u32, height: height as u32, pixels, scene_referred: true }, white))
 }
 
 fn load_rendered(path: &Path) -> Result<LinearImage> {

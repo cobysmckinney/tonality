@@ -1153,8 +1153,20 @@ button {
   justify-content: space-between;
   gap: 6px;
 }
-/* Over the photo while the film base is being picked. */
-.film-picker {
+/* White balance: its name, and the eyedropper that sets it from something grey. */
+.white-balance {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+.white-balance-label {
+  flex: 1;
+  color: var(--muted);
+}
+/* Over the photo while the film base, or something grey, is being picked. */
+.film-picker,
+.white-picker {
   position: absolute;
   inset: 0;
   cursor: crosshair;

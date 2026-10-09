@@ -46,7 +46,7 @@ Import from a camera card, a folder or by dragging files in. You review what was
 
 ### The edits you actually need
 
-- **Light and colour**: exposure, contrast, highlights, shadows, whites, blacks, temperature, tint, vibrance, saturation.
+- **Light and colour**: exposure, contrast, highlights, shadows, whites, blacks, white balance (in Kelvin on RAWs, or picked from something grey), vibrance, saturation.
 - **Tone curve** with per-channel curves, and an **eight-band colour mixer**.
 - **Detail and effects**: clarity, dehaze, sharpening, noise reduction, vignette, grain.
 - **Crop and straighten**, with common ratios, quarter-turns and flips.

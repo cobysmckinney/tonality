@@ -13,7 +13,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use crate::develop::LinearImage;
-use crate::edit::{curve_table, Adjustments, Stroke, MAX_EXPOSURE};
+use crate::edit::{curve_table, Adjustments, Stroke, MAX_EXPOSURE, MAX_WHITE_BALANCE};
 use crate::film::{self, Look, Sample};
 use crate::geometry;
 use crate::masks::{self, Coverage, COVERAGE_EDGE, MAX_BRUSHES, MAX_FOUND, MAX_MASKS, MAX_PARTS};
@@ -25,7 +25,7 @@ use crate::segment::{self, Found};
 /// shader's input (`edit.rs`, `masks.rs`, `segment.rs`). On its next start a
 /// library then redraws the thumbnails and previews of its edited photos, so
 /// the grid keeps matching the editor (`thumbs::forget_old_looks`).
-pub const LOOK_VERSION: u32 = 2;
+pub const LOOK_VERSION: u32 = 3;
 
 const WORKING_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 const OUTPUT_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
@@ -128,7 +128,8 @@ pub struct Gpu {
 pub struct Session {
     pub width: u32,
     pub height: u32,
-    scene_referred: bool,
+    /// The photo is light as a sensor saw it (a RAW), not a rendered image.
+    pub scene_referred: bool,
     params: wgpu::Buffer,
     curves: wgpu::Texture,
     /// The working image with its mipmaps: the photo as opened, or the
@@ -170,6 +171,9 @@ pub struct Session {
     mattes_set: AtomicU64,
     /// The last histogram, with the recipe and `mattes_set` it was drawn with.
     histogram: Mutex<Option<(Adjustments, u64, Histogram)>>,
+    /// How the camera white balanced the photo (`white::camera`), for
+    /// showing white balance in Kelvin. None but for colour RAWs.
+    pub camera: Option<crate::white::Camera>,
 }
 
 /// How the whole picture's tones are spread, as the histogram shows them.
@@ -573,6 +577,7 @@ impl Gpu {
             targets: Mutex::new(Vec::new()),
             mattes_set: AtomicU64::new(0),
             histogram: Mutex::new(None),
+            camera: None,
         })
     }
 
@@ -980,6 +985,8 @@ impl Gpu {
         let (width, height) = (width.clamp(1, self.max_texture_size), height.clamp(1, self.max_texture_size));
         let a = adjustments;
         let unit = |value: f32| (value / 100.0).clamp(-1.0, 1.0);
+        // White balance goes further, so it can be set anywhere from 2000 K to 50000 K.
+        let white_balance = |value: f32| (value / 100.0).clamp(-MAX_WHITE_BALANCE / 100.0, MAX_WHITE_BALANCE / 100.0);
         let frame = geometry::frame(session.width, session.height, adjustments, uncropped);
         let to_source = geometry::frame_to_source(session.width, session.height, adjustments, &frame).0;
         let crop = geometry::crop_in_frame(session.width, session.height, adjustments, &frame);
@@ -1012,7 +1019,7 @@ impl Gpu {
                 scene_referred as u8 as f32,
             ],
             light: [a.exposure.clamp(-MAX_EXPOSURE, MAX_EXPOSURE), unit(a.contrast), unit(a.highlights), unit(a.shadows)],
-            tone: [unit(a.whites), unit(a.blacks), unit(a.temperature), unit(a.tint)],
+            tone: [unit(a.whites), unit(a.blacks), white_balance(a.temperature), white_balance(a.tint)],
             color: [unit(a.vibrance), unit(a.saturation), unit(a.clarity), unit(a.dehaze)],
             detail: [unit(a.sharpening).max(0.0), unit(a.noise_reduction).max(0.0), unit(a.vignette), unit(a.grain).max(0.0)],
             flags: [show_clipping as u8 as f32, uncropped as u8 as f32, matte as u8 as f32, look.is_some() as u8 as f32],

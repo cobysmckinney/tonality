@@ -22,6 +22,7 @@ use crate::presets::{self, ImportedPresets, Preset, Settings};
 use crate::segment::Found;
 use crate::thumbs;
 use crate::volumes::{self, Volume};
+use crate::white;
 
 pub struct AppState {
     pub library: Arc<Library>,
@@ -335,6 +336,9 @@ pub struct EditorPhoto {
     /// Found parts of its masks that couldn't be found in this photo, such
     /// as "the object"; they are left empty.
     missing: Vec<String>,
+    /// How the camera white balanced it (`white::Camera`), for
+    /// showing white balance in Kelvin. None but for colour RAWs.
+    camera: Option<white::Camera>,
 }
 
 #[derive(serde::Deserialize)]
@@ -365,7 +369,7 @@ pub async fn open_editor(app: AppHandle, id: i64) -> CommandResult<EditorPhoto> 
             *editing = Some((id, session));
         }
         let (_, session) = editing.as_ref().expect("just opened");
-        Ok(EditorPhoto { width: session.width, height: session.height, history, missing })
+        Ok(EditorPhoto { width: session.width, height: session.height, history, missing, camera: session.camera.clone() })
     })
     .await
     .map_err(|e| e.to_string())?
@@ -463,6 +467,33 @@ pub fn pick_film_base(state: State<AppState>, id: i64, x: f32, y: f32) -> Comman
     let editing = state.editing();
     let (_, session) = editing.as_ref().filter(|(open, _)| *open == id).ok_or("This photo is no longer open in the editor.")?;
     Ok(FilmBase::of(session.sample().base_at(x, y)))
+}
+
+/// Temperature and Tint, as the sliders hold them.
+#[derive(Serialize)]
+pub struct WhiteBalance {
+    temperature: f32,
+    tint: f32,
+}
+
+/// The white balance that makes a point on the open photo's file (0..1
+/// across and down) grey, for setting it by clicking something that should
+/// be. On a negative, the point as its positive shows it.
+#[tauri::command(async)]
+pub fn pick_white_balance(state: State<AppState>, id: i64, x: f32, y: f32, adjustments: Adjustments) -> CommandResult<WhiteBalance> {
+    let (sample, scene_referred) = {
+        let editing = state.editing();
+        let (_, session) = editing.as_ref().filter(|(open, _)| *open == id).ok_or("This photo is no longer open in the editor.")?;
+        (session.sample(), session.scene_referred)
+    };
+    let colour = sample.colour_at(x, y);
+    // A RAW's brightest values may have clipped; a negative's positive is worked out, so it hasn't.
+    let (colour, clips) = match film::resolve(&sample, &adjustments) {
+        Some(look) => (look.invert(colour), false),
+        None => (colour, scene_referred),
+    };
+    let (temperature, tint) = white::neutralising(colour, clips).map_err(|reason| reason.to_string())?;
+    Ok(WhiteBalance { temperature, tint })
 }
 
 /// Balances the frames of a roll together: measures the film base and

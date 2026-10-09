@@ -293,9 +293,10 @@ pub(crate) fn open_raw(path: &Path) -> Result<RawSource> {
 ///
 /// DNGs written by converters such as Lightroom often carry one colour
 /// matrix with no illuminant, which the DNG spec says applies to any light,
-/// and give the white point as a chromaticity instead of a camera neutral.
-/// rawler only looks for matrices of named illuminants and only reads the
-/// neutral, so it would treat the pixels as XYZ with no white balance.
+/// and give the white point as a chromaticity instead of a camera neutral,
+/// or no white point at all. rawler only looks for matrices of named
+/// illuminants and only reads the neutral, so it would treat the pixels as
+/// XYZ with no white balance.
 pub(crate) fn raw_image(decoder: &dyn Decoder, source: &RawSource, params: &RawDecodeParams) -> Result<RawImage> {
     use rawler::decoders::WellKnownIFD;
     use rawler::imgop::xyz::Illuminant;
@@ -315,12 +316,11 @@ pub(crate) fn raw_image(decoder: &dyn Decoder, source: &RawSource, params: &RawD
         .flatten()
         .and_then(|root| root.get_entry(DngTag::AsShotWhiteXY).map(|entry| [entry.force_f32(0), entry.force_f32(1)]));
     let matrix = raw.color_matrix.get(&Illuminant::D65).or_else(|| raw.color_matrix.values().next());
-    if let (true, Some([x, y]), Some(matrix)) = (raw.wb_coeffs[0].is_nan(), white_xy, matrix) {
-        // The camera's response to the white point, from XYZ to camera space.
-        let xyz = [x / y, 1.0, (1.0 - x - y) / y];
-        let neutral: Vec<f32> = matrix.as_chunks::<3>().0.iter().map(|row| row.iter().zip(xyz).map(|(m, v)| m * v).sum()).collect();
-        if neutral.len() == 3 && neutral.iter().all(|v| v.is_finite() && *v > 0.0) {
-            raw.wb_coeffs = [neutral[1] / neutral[0], 1.0, neutral[1] / neutral[2], f32::NAN];
+    if let (true, Some(matrix)) = (raw.wb_coeffs[0].is_nan(), matrix) {
+        // With no white point at all, daylight: rawler would otherwise
+        // leave the photo unbalanced, which comes out green.
+        if let Some([r, g, b]) = crate::white::balance_for(white_xy.unwrap_or(crate::white::D65), matrix) {
+            raw.wb_coeffs = [r, g, b, f32::NAN];
         }
     }
     Ok(raw)

@@ -15,6 +15,7 @@ pub mod presets;
 pub mod segment;
 pub mod thumbs;
 pub mod volumes;
+pub mod white;
 
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
@@ -238,6 +239,7 @@ pub fn run() {
             commands::find_parts,
             commands::film_base,
             commands::pick_film_base,
+            commands::pick_white_balance,
             commands::balance_roll,
             commands::prepare_circles,
             commands::refresh_rendered,

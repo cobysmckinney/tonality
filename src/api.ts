@@ -2,6 +2,7 @@ import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import type { Adjustments, Rgb, Shape } from "./adjustments";
 import type { FilmDetails, FilmPhoto, FilmSuggestions } from "./filmDetails";
 import type { Preset, PresetSettings } from "./presets";
+import type { Camera, Relative } from "./whiteBalance";
 
 export type View =
   | { kind: "library" }
@@ -152,6 +153,8 @@ export interface EditorPhoto {
   history: History;
   /** Found parts of its masks that couldn't be found in this photo ("the object"); they are left empty. */
   missing: string[];
+  /** How the camera white balanced it, for showing white balance in Kelvin; null but for colour RAWs. */
+  camera: Camera | null;
 }
 
 export interface Frame {
@@ -358,6 +361,9 @@ export const api = {
   filmBase: (id: number, adjustments: Adjustments) => invoke<FilmBase>("film_base", { id, adjustments }),
   /** The film base at a point on the open photo's file (0..1 across and down). */
   pickFilmBase: (id: number, x: number, y: number) => invoke<FilmBase>("pick_film_base", { id, x, y }),
+  /** The Temperature and Tint that make a point on the open photo's file (0..1 across and down) grey; on a negative, as its positive shows it. */
+  pickWhiteBalance: (id: number, x: number, y: number, adjustments: Adjustments) =>
+    invoke<Relative>("pick_white_balance", { id, x, y, adjustments }),
   /** Balances these frames as one roll of film, as a step in each one's history, the way `applyEdits` goes. */
   balanceRoll: (ids: number[]) => invoke<AppliedEdits>("balance_roll", { ids }),
   /** Stops `applyEdits` after the photo it is on. */

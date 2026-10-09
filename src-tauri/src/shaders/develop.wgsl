@@ -106,6 +106,11 @@ const BASE_SHARPENING = 0.25;
 // white), half as many at +50. DEHAZE_STRENGTH in gpu.rs's tests.
 const DEHAZE_STRENGTH = 0.6 / 0.9;
 
+// Stops red and blue move apart for each 100 of Temperature, and green
+// against them for each 100 of Tint. The same in white.rs.
+const TEMPERATURE_STOPS = 1.2;
+const TINT_STOPS = 0.35;
+
 fn luma(c: vec3f) -> f32 {
     return dot(c, LUMA);
 }
@@ -328,7 +333,12 @@ fn fragment(in: VertexOutput) -> @location(0) vec4f {
         }
         // Each slider still ends at its own limits, however many masks add up.
         light = clamp(light, vec4f(-MAX_EXPOSURE, -1.0, -1.0, -1.0), vec4f(MAX_EXPOSURE, 1.0, 1.0, 1.0));
-        tone = clamp(tone, vec4f(-1.0), vec4f(1.0));
+        // The photo's own white balance can go past 100 (a RAW's, set in
+        // Kelvin); masks can then take it as far again beyond.
+        let own = p.tone.zw;
+        let low = vec4f(-1.0, -1.0, min(vec2f(-1.0), 2.0 * own + 1.0));
+        let high = vec4f(1.0, 1.0, max(vec2f(1.0), 2.0 * own - 1.0));
+        tone = clamp(tone, low, high);
         color = clamp(color, vec4f(-1.0), vec4f(1.0));
         detail = clamp(detail, vec4f(-1.0), vec4f(1.0));
     }
@@ -369,7 +379,8 @@ fn fragment(in: VertexOutput) -> @location(0) vec4f {
 
     // White balance: temperature trades red against blue, tint green against
     // magenta, keeping overall brightness where it was.
-    var gains = vec3f(exp2(tone.z * 0.6), exp2(-tone.w * 0.35), exp2(-tone.z * 0.6));
+    let apart = tone.z * TEMPERATURE_STOPS / 2.0;
+    var gains = vec3f(exp2(apart), exp2(-tone.w * TINT_STOPS), exp2(-apart));
     gains /= luma(gains);
     c *= gains;
     var medium = max(textureSampleLevel(blur_medium, linear_sampler, uv, 0.0).rgb, vec3f(0.0)) * gains;

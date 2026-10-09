@@ -268,6 +268,7 @@ function Stage({ photo, onZoomChange }: { photo: Photo; onZoomChange: (label: st
   const showClipping = useStore((s) => s.editor.showClipping && !s.editor.showOriginal);
   // Picking the film base shows the whole scan, rebate and all, as the crop tool does.
   const pickingBase = useStore((s) => s.sidePanel === "adjust" && s.editor.pickingBase && !s.editor.showOriginal);
+  const pickingWhite = useStore((s) => s.sidePanel === "adjust" && s.editor.pickingWhite && !s.editor.showOriginal);
   const cropping = useStore((s) => s.sidePanel === "crop" && !s.editor.showOriginal);
   const uncropped = cropping || pickingBase;
   const masking = useStore((s) => s.sidePanel === "masks" && !s.editor.showOriginal);
@@ -473,6 +474,18 @@ function Stage({ photo, onZoomChange }: { photo: Photo; onZoomChange: (label: st
             }}
           />
         )}
+        {live && pickingWhite && painted && !painted.uncropped && shown && photoSize && (
+          <div
+            className="white-picker"
+            onPointerDown={(event) => event.stopPropagation()}
+            onClick={(event) => {
+              const rect = event.currentTarget.getBoundingClientRect();
+              const at: [number, number] = [event.clientX - rect.left, event.clientY - rect.top];
+              const point = pickedPoint(photoSize, adjustments, geometry.region, shown, at, false);
+              void useStore.getState().pickWhite(point);
+            }}
+          />
+        )}
       </div>
       {!ready && !failed && <span className="stage-note">Preparing photo…</span>}
       {failed && (
@@ -485,6 +498,9 @@ function Stage({ photo, onZoomChange }: { photo: Photo; onZoomChange: (label: st
       {ready && circling && <span className="stage-note centered">Draw a loop around what you want · Esc cancels</span>}
       {ready && pickingBase && (
         <span className="stage-note centered">Click the clear film at the edge of a frame · Esc cancels</span>
+      )}
+      {ready && pickingWhite && (
+        <span className="stage-note centered">Click something that should be white or grey · Esc cancels</span>
       )}
     </div>
   );
@@ -610,6 +626,7 @@ export function Editor({ photo, inert }: { photo: Photo; inert: boolean }) {
         if (onSlider) target.blur();
         else if (state.editor.circling && !state.editor.circling.points) state.cancelCircle();
         else if (state.editor.pickingBase) state.setPickingBase(false);
+        else if (state.editor.pickingWhite) state.setPickingWhite(false);
         else if (state.sidePanel === "masks" && state.editor.maskId !== null) state.selectMask(null);
         else if (state.sidePanel === "crop" || state.sidePanel === "masks") state.setSidePanel("adjust");
         else state.closePhoto();

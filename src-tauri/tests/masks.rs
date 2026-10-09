@@ -418,6 +418,23 @@ fn exposure_stops_at_its_limit_however_many_masks_add_up() {
 }
 
 #[test]
+fn white_balance_stops_where_it_did_unless_the_photo_goes_further() {
+    let Some(gpu) = gpu() else { return };
+    let session = photo(gpu, false);
+    let render = |recipe: &Adjustments| gpu.render_image(&session, recipe, u32::MAX).unwrap().into_raw();
+    let warmer = |temperature| everywhere(LocalAdjustments { temperature, ..Default::default() });
+    let photo_at = |temperature| Adjustments { temperature, ..Default::default() };
+
+    // As before Kelvin: the photo's 80 and a mask's 50 stop at 100.
+    let top = render(&photo_at(100.0));
+    assert!(top == render(&Adjustments { masks: vec![warmer(50.0)], ..photo_at(80.0) }), "stops at 100");
+    // A RAW set past 100 in Kelvin leaves its masks room to go on.
+    let further = render(&photo_at(300.0));
+    assert!(further != render(&photo_at(250.0)), "the photo is grey enough to tell");
+    assert!(further == render(&Adjustments { masks: vec![warmer(50.0)], ..photo_at(250.0) }), "goes on past it");
+}
+
+#[test]
 fn a_photo_that_isnt_open_exports_with_its_subject_and_sky() {
     use std::sync::atomic::AtomicBool;
     use tonality_lib::export::{self, Format, Job, Settings};
