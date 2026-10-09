@@ -1,5 +1,5 @@
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
-import type { Adjustments, Shape } from "./adjustments";
+import type { Adjustments, Rgb, Shape } from "./adjustments";
 import type { Preset, PresetSettings } from "./presets";
 
 export type View =
@@ -241,6 +241,12 @@ export interface ExportSummary {
   cancelled: boolean;
 }
 
+/** A film base, and how it looks in the scan (sRGB, 0..255) for a swatch. */
+export interface FilmBase {
+  base: Rgb;
+  swatch: Rgb;
+}
+
 export interface AppliedEdits {
   /** The new versions of the photos that were done: the first so many of those asked for, in order. */
   versions: number[];
@@ -340,6 +346,12 @@ export const api = {
    */
   applyEdits: (ids: number[], adjustments: Adjustments, label: string, keepCrop: boolean) =>
     invoke<AppliedEdits>("apply_edits", { ids, adjustments, label, keepCrop }),
+  /** The film base the open photo is turned with: the one picked, or the one guessed from the scan. */
+  filmBase: (id: number, adjustments: Adjustments) => invoke<FilmBase>("film_base", { id, adjustments }),
+  /** The film base at a point on the open photo's file (0..1 across and down). */
+  pickFilmBase: (id: number, x: number, y: number) => invoke<FilmBase>("pick_film_base", { id, x, y }),
+  /** Balances these frames as one roll of film, as a step in each one's history, the way `applyEdits` goes. */
+  balanceRoll: (ids: number[]) => invoke<AppliedEdits>("balance_roll", { ids }),
   /** Stops `applyEdits` after the photo it is on. */
   cancelEdits: () => invoke<void>("cancel_edits"),
   getEdits: (id: number) => invoke<Adjustments>("get_edits", { id }),

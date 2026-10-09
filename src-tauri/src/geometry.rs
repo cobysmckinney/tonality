@@ -34,6 +34,14 @@ impl Affine {
         ])
     }
 
+    /// The map that undoes `self`.
+    pub fn inverse(&self) -> Affine {
+        let [[a, b, c], [d, e, f]] = self.0;
+        let det = a * e - b * d;
+        let (ia, ib, id, ie) = (e / det, -b / det, -d / det, a / det);
+        Affine([[ia, ib, -(ia * c + ib * f)], [id, ie, -(id * c + ie * f)]])
+    }
+
     fn scale(sx: f64, sy: f64) -> Affine {
         Affine([[sx, 0.0, 0.0], [0.0, sy, 0.0]])
     }

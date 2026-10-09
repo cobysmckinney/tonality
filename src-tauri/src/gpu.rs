@@ -14,6 +14,7 @@ use std::sync::{Arc, Mutex};
 
 use crate::develop::LinearImage;
 use crate::edit::{curve_table, Adjustments, Stroke, MAX_EXPOSURE};
+use crate::film::{self, Look, Sample};
 use crate::geometry;
 use crate::masks::{self, Coverage, COVERAGE_EDGE, MAX_BRUSHES, MAX_FOUND, MAX_MASKS, MAX_PARTS};
 use crate::segment::{self, Found};
@@ -117,6 +118,8 @@ pub struct Gpu {
     develop_deep: Option<(wgpu::TextureFormat, wgpu::RenderPipeline)>,
     copy: wgpu::RenderPipeline,
     gaussian: wgpu::RenderPipeline,
+    /// Turns a scanned negative into the positive the develop shader works on.
+    film: wgpu::RenderPipeline,
     sampler: wgpu::Sampler,
     max_texture_size: u32,
 }
@@ -128,11 +131,27 @@ pub struct Session {
     scene_referred: bool,
     params: wgpu::Buffer,
     curves: wgpu::Texture,
+    /// The working image with its mipmaps: the photo as opened, or the
+    /// positive of a negative (`apply_film`).
+    source: wgpu::Texture,
+    /// The working image blurred, medium and large.
+    blurs: [Blur; 2],
     views: Views,
     coverages: Mutex<Coverages>,
     /// The photo as the models see it, kept to find its subject, sky and
-    /// circled objects in (`segment::guide`).
-    picture: Arc<segment::Picture>,
+    /// circled objects in (`segment::guide`). None until it is next wanted,
+    /// once a negative's positive has replaced it (`Gpu::picture`).
+    picture: Mutex<Option<Arc<segment::Picture>>>,
+    /// The photo as opened, as the models see it.
+    original_picture: Arc<segment::Picture>,
+    /// Added to found mattes' keys while the photo is a negative's positive,
+    /// so mattes found in the negative or another positive aren't used.
+    matte_suffix: Mutex<String>,
+    /// A small copy of the photo as opened, to measure film in.
+    sample: Arc<Sample>,
+    /// The film look in the working image. Held while a frame is drawn, so
+    /// no other frame changes the working image under it.
+    film: Mutex<FilmState>,
     /// Where the photo's found mattes are kept between sessions, if anywhere:
     /// the start of their file names, which end in each matte's key.
     pub matte_files: Option<PathBuf>,
@@ -200,21 +219,47 @@ struct Target {
     readback: wgpu::Buffer,
 }
 
+/// What the working image holds, and what it was made from.
+#[derive(Default)]
+struct FilmState {
+    /// The photo as opened, kept here while the working image holds a
+    /// negative's positive instead.
+    scan: Option<wgpu::Texture>,
+    /// The film look the working image has; None for the photo as opened.
+    applied: Option<Look>,
+    /// The last look worked out, and the film and framing settings it was
+    /// worked out from, so each frame doesn't measure the film again.
+    measured: Option<(Adjustments, Option<Look>)>,
+}
+
+/// A blurred copy of the working image, and a texture to blur it through.
+struct Blur {
+    view: wgpu::TextureView,
+    scratch: wgpu::TextureView,
+    width: u32,
+    height: u32,
+    sigma: f32,
+}
+
 impl Session {
-    /// The photo as the models see it, to find parts in.
-    pub fn picture(&self) -> Arc<segment::Picture> {
-        self.picture.clone()
+    /// The name a found part's matte goes by in this session.
+    pub fn key(&self, found: &Found) -> String {
+        format!("{}{}", found.key(), self.matte_suffix.lock().unwrap())
     }
 
     /// Whether this part has been found (or set) for this session.
     pub fn has_matte(&self, found: &Found) -> bool {
-        self.mattes.lock().unwrap().contains_key(&found.key())
+        self.mattes.lock().unwrap().contains_key(&self.key(found))
     }
 
     /// Uses `matte` for this found part: white where it is. Any size; it is
     /// stretched over the whole photo.
     pub fn set_matte(&self, found: &Found, matte: image::GrayImage) {
-        let key = found.key();
+        self.set_matte_named(self.key(found), matte);
+    }
+
+    /// `set_matte`, for the part whose key was `key` when it was looked for.
+    pub fn set_matte_named(&self, key: String, matte: image::GrayImage) {
         self.missing.lock().unwrap().remove(&key);
         self.mattes.lock().unwrap().insert(key, Arc::new(matte));
         self.mattes_set.fetch_add(1, Ordering::Relaxed);
@@ -224,8 +269,13 @@ impl Session {
     pub fn matte_path(&self, found: &Found) -> Option<PathBuf> {
         let start = self.matte_files.as_ref()?;
         let mut name = start.file_name()?.to_os_string();
-        name.push(format!("{}.png", found.key()));
+        name.push(format!("{}.png", self.key(found)));
         Some(start.with_file_name(name))
+    }
+
+    /// A small copy of the photo as opened, to measure film in.
+    pub fn sample(&self) -> Arc<Sample> {
+        self.sample.clone()
     }
 }
 
@@ -345,6 +395,7 @@ impl Gpu {
             develop_deep: deep_format.map(|format| (format, pipeline("develop deep", &develop_shader, "fragment", format))),
             copy: pipeline("copy", &prepare_shader, "copy", WORKING_FORMAT),
             gaussian: pipeline("gaussian", &prepare_shader, "gaussian", WORKING_FORMAT),
+            film: pipeline("film", &prepare_shader, "film_positive", WORKING_FORMAT),
             sampler,
             max_texture_size: limits.max_texture_dimension_2d,
             device,
@@ -393,17 +444,23 @@ impl Gpu {
         })
     }
 
-    /// A blurred, shrunken copy of `source`, `long_edge` pixels along its longer side.
-    fn blurred_copy(&self, source: &wgpu::TextureView, width: u32, height: u32, (long_edge, sigma): (u32, f32)) -> wgpu::TextureView {
-        use wgpu::util::DeviceExt;
+    /// Textures for a blurred, shrunken copy of a `width` x `height` picture,
+    /// `long_edge` pixels along its longer side.
+    fn blur(&self, width: u32, height: u32, (long_edge, sigma): (u32, f32)) -> Blur {
         let (w, h) = fit_within(width, height, long_edge.min(width.max(height)));
         let make = |label| self.texture(label, w, h, 1, WORKING_FORMAT).create_view(&Default::default());
-        let (first, second) = (make("blur"), make("blur scratch"));
-        let mut encoder = self.device.create_command_encoder(&Default::default());
-        self.draw(&mut encoder, &self.copy, &self.copy_bindings(source), &first);
+        Blur { view: make("blur"), scratch: make("blur scratch"), width: w, height: h, sigma }
+    }
+
+    /// Draws `blur` from `source`.
+    fn draw_blur(&self, encoder: &mut wgpu::CommandEncoder, source: &wgpu::TextureView, blur: &Blur) {
+        use wgpu::util::DeviceExt;
+        let Blur { view: first, scratch: second, width: w, height: h, sigma } = blur;
+        let (w, h, sigma) = (*w, *h, *sigma);
+        self.draw(encoder, &self.copy, &self.copy_bindings(source), first);
 
         // Horizontal into the scratch texture, then vertical back.
-        for (input, target, step) in [(&first, &second, [1.0 / w as f32, 0.0]), (&second, &first, [0.0, 1.0 / h as f32])] {
+        for (input, target, step) in [(first, second, [1.0 / w as f32, 0.0]), (second, first, [0.0, 1.0 / h as f32])] {
             let params = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: None,
                 contents: bytemuck::bytes_of(&BlurParams { step, sigma, radius: (sigma * 2.5).ceil() }),
@@ -418,10 +475,28 @@ impl Gpu {
                     wgpu::BindGroupEntry { binding: 2, resource: params.as_entire_binding() },
                 ],
             });
-            self.draw(&mut encoder, &self.gaussian, &bindings, target);
+            self.draw(encoder, &self.gaussian, &bindings, target);
         }
-        self.queue.submit([encoder.finish()]);
-        first
+    }
+
+    /// Draws the working image's mipmaps and blurs from its full-size level,
+    /// each mip level averaged down from the one above, so a zoomed-out view
+    /// is a properly filtered one.
+    fn draw_derived(&self, encoder: &mut wgpu::CommandEncoder, source: &wgpu::Texture, blurs: &[Blur; 2]) {
+        let level_view = |level| {
+            source.create_view(&wgpu::TextureViewDescriptor {
+                base_mip_level: level,
+                mip_level_count: Some(1),
+                ..Default::default()
+            })
+        };
+        for level in 1..source.mip_level_count() {
+            self.draw(encoder, &self.copy, &self.copy_bindings(&level_view(level - 1)), &level_view(level));
+        }
+        let whole = source.create_view(&Default::default());
+        for blur in blurs {
+            self.draw_blur(encoder, &whole, blur);
+        }
     }
 
     /// Uploads a photo and prepares everything the develop shader reads.
@@ -429,6 +504,7 @@ impl Gpu {
         let image = shrink_to_fit(image, self.max_texture_size);
         let (width, height) = (image.width, image.height);
         let picture = Arc::new(segment::Picture::new(segment::guide(&image)));
+        let sample = Arc::new(Sample::of(&image));
 
         // Half-float is plenty for photographic range at half the memory of f32.
         let mut texels = vec![f16::ONE; image.pixels.len() * 4];
@@ -447,24 +523,13 @@ impl Gpu {
         );
         drop(texels);
 
-        // Mipmaps, each level averaged down from the one above, so a
-        // zoomed-out view is a properly filtered one.
-        let level_view = |level| {
-            source.create_view(&wgpu::TextureViewDescriptor {
-                base_mip_level: level,
-                mip_level_count: Some(1),
-                ..Default::default()
-            })
-        };
+        let blurs = [self.blur(width, height, MEDIUM_BLUR), self.blur(width, height, LARGE_BLUR)];
         let mut encoder = self.device.create_command_encoder(&Default::default());
-        for level in 1..mips {
-            self.draw(&mut encoder, &self.copy, &self.copy_bindings(&level_view(level - 1)), &level_view(level));
-        }
+        self.draw_derived(&mut encoder, &source, &blurs);
         self.queue.submit([encoder.finish()]);
 
         let source_view = source.create_view(&Default::default());
-        let blur_medium = self.blurred_copy(&source_view, width, height, MEDIUM_BLUR);
-        let blur_large = self.blurred_copy(&source_view, width, height, LARGE_BLUR);
+        let (blur_medium, blur_large) = (blurs[0].view.clone(), blurs[1].view.clone());
 
         let curves = self.texture("curves", 256, 1, 1, WORKING_FORMAT);
         let params = self.device.create_buffer(&wgpu::BufferDescriptor {
@@ -492,9 +557,15 @@ impl Gpu {
             scene_referred: image.scene_referred,
             params,
             curves,
+            source,
+            blurs,
             views,
             coverages: Mutex::new(coverages),
-            picture,
+            picture: Mutex::new(Some(picture.clone())),
+            original_picture: picture,
+            matte_suffix: Mutex::new(String::new()),
+            sample,
+            film: Mutex::new(FilmState::default()),
             matte_files: None,
             mattes: Mutex::new(HashMap::new()),
             finding: Mutex::new(()),
@@ -616,9 +687,26 @@ impl Gpu {
     /// A part that can't be found draws as empty rather than stopping the
     /// photo drawing; those found missing by this call are returned.
     pub fn ensure_found(&self, session: &Session, found: &[Found]) -> Vec<(Found, anyhow::Error)> {
+        let film = session.film.lock().unwrap();
+        self.ensure_found_with(session, &film, found)
+    }
+
+    /// Gets a photo ready to draw with `adjustments`: its film look in the
+    /// working image, and the found parts of its masks (`ensure_found`).
+    pub fn prepare(&self, session: &Session, adjustments: &Adjustments) -> Result<Vec<(Found, anyhow::Error)>> {
+        let mut film = session.film.lock().unwrap();
+        self.apply_film(session, &mut film, adjustments)?;
+        Ok(self.ensure_found_with(session, &film, &masks::found(&adjustments.masks)))
+    }
+
+    /// `ensure_found`, with the session's film lock held (`film`), so the
+    /// working image the models may be shown can't change meanwhile.
+    fn ensure_found_with(&self, session: &Session, _film: &FilmState, found: &[Found]) -> Vec<(Found, anyhow::Error)> {
         let mut missing = Vec::new();
         for part in found {
-            let ready = || session.has_matte(part) || session.missing.lock().unwrap().contains(&part.key());
+            let key = session.key(part);
+            let ready =
+                || session.mattes.lock().unwrap().contains_key(&key) || session.missing.lock().unwrap().contains(&key);
             if ready() {
                 continue;
             }
@@ -627,10 +715,13 @@ impl Gpu {
             if ready() {
                 continue;
             }
-            match part.find_cached(&session.picture, session.matte_path(part).as_deref()) {
-                Ok(matte) => session.set_matte(part, matte),
+            let found = self
+                .picture_with(session)
+                .and_then(|picture| part.find_cached(&picture, session.matte_path(part).as_deref()));
+            match found {
+                Ok(matte) => session.set_matte_named(key, matte),
                 Err(error) => {
-                    session.missing.lock().unwrap().insert(part.key());
+                    session.missing.lock().unwrap().insert(key);
                     missing.push((part.clone(), error));
                 }
             }
@@ -638,10 +729,140 @@ impl Gpu {
         missing
     }
 
+    /// The photo as the models see it, to find parts in.
+    pub fn picture(&self, session: &Session) -> Result<Arc<segment::Picture>> {
+        let _film = session.film.lock().unwrap();
+        self.picture_with(session)
+    }
+
+    /// `picture`, with the session's film lock held. Once a negative's
+    /// positive has replaced the photo, the models are shown that, drawn
+    /// from the working image the first time it is wanted.
+    fn picture_with(&self, session: &Session) -> Result<Arc<segment::Picture>> {
+        if let Some(picture) = &*session.picture.lock().unwrap() {
+            return Ok(picture.clone());
+        }
+        let (width, height) =
+            fit_within(session.width, session.height, masks::COVERAGE_EDGE.min(session.width.max(session.height)));
+        let pixels = self.read_working(session, width, height)?;
+        let picture = Arc::new(segment::Picture::new(segment::guide_of_positive(width, height, &pixels)));
+        *session.picture.lock().unwrap() = Some(picture.clone());
+        Ok(picture)
+    }
+
+    /// The working image averaged down to `width` x `height`, in linear light.
+    fn read_working(&self, session: &Session, width: u32, height: u32) -> Result<Vec<[f32; 3]>> {
+        let texture = self.texture("working copy", width, height, 1, WORKING_FORMAT);
+        let view = texture.create_view(&Default::default());
+        let row = width * 8;
+        let padded = padded_row(row);
+        let readback = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("working readback"),
+            size: padded as u64 * height as u64,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let mut encoder = self.device.create_command_encoder(&Default::default());
+        self.draw(&mut encoder, &self.copy, &self.copy_bindings(&session.views.source), &view);
+        encoder.copy_texture_to_buffer(
+            texture.as_image_copy(),
+            wgpu::TexelCopyBufferInfo {
+                buffer: &readback,
+                layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(padded), rows_per_image: Some(height) },
+            },
+            wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+        );
+        self.queue.submit([encoder.finish()]);
+        let (sender, receiver) = std::sync::mpsc::channel();
+        readback.slice(..).map_async(wgpu::MapMode::Read, move |result| {
+            let _ = sender.send(result);
+        });
+        self.device.poll(wgpu::PollType::wait_indefinitely()).context("waiting for the graphics device")?;
+        receiver.recv().context("the graphics device dropped the picture")??;
+        let mapped = readback.slice(..).get_mapped_range().context("reading the picture back")?;
+        let mut pixels = Vec::with_capacity((width * height) as usize);
+        for line in mapped.chunks_exact(padded as usize) {
+            let texels: &[f16] = bytemuck::cast_slice(&line[..row as usize]);
+            pixels.extend(texels.as_chunks::<4>().0.iter().map(|t| [t[0].to_f32(), t[1].to_f32(), t[2].to_f32()]));
+        }
+        Ok(pixels)
+    }
+
+    /// Makes the working image hold what `adjustments` ask of the film: a
+    /// negative's positive, or the photo as opened. Only redraws it (and its
+    /// mipmaps and blurs) when that changes. Returns the look applied.
+    fn apply_film(&self, session: &Session, state: &mut FilmState, adjustments: &Adjustments) -> Result<Option<Look>> {
+        use wgpu::util::DeviceExt;
+        // The look depends only on the film settings and the framing (the
+        // balance is measured inside the crop).
+        let mut wanted = Adjustments { film: adjustments.film, ..Default::default() };
+        wanted.keep_framing_of(adjustments);
+        let look = match &state.measured {
+            Some((measured, look)) if *measured == wanted => *look,
+            _ => {
+                let look = film::resolve(&session.sample, adjustments);
+                state.measured = Some((wanted, look));
+                look
+            }
+        };
+        if look == state.applied {
+            return Ok(look);
+        }
+
+        let size = wgpu::Extent3d { width: session.width, height: session.height, depth_or_array_layers: 1 };
+        let mut encoder = self.device.create_command_encoder(&Default::default());
+        match look {
+            Some(look) => {
+                if state.scan.is_none() {
+                    let scan = self.texture("scan", session.width, session.height, 1, WORKING_FORMAT);
+                    encoder.copy_texture_to_texture(session.source.as_image_copy(), scan.as_image_copy(), size);
+                    state.scan = Some(scan);
+                }
+                let scan = state.scan.as_ref().expect("just kept").create_view(&Default::default());
+                let uniform = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("film"),
+                    contents: bytemuck::cast_slice(&look.uniform()),
+                    usage: wgpu::BufferUsages::UNIFORM,
+                });
+                let bindings = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("film"),
+                    layout: &self.film.get_bind_group_layout(0),
+                    entries: &[
+                        wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&scan) },
+                        wgpu::BindGroupEntry { binding: 3, resource: uniform.as_entire_binding() },
+                    ],
+                });
+                let full_size = session.source.create_view(&wgpu::TextureViewDescriptor {
+                    base_mip_level: 0,
+                    mip_level_count: Some(1),
+                    ..Default::default()
+                });
+                self.draw(&mut encoder, &self.film, &bindings, &full_size);
+            }
+            None => {
+                // Back to the photo as opened; the copy kept of it isn't needed any more.
+                if let Some(scan) = state.scan.take() {
+                    encoder.copy_texture_to_texture(scan.as_image_copy(), session.source.as_image_copy(), size);
+                }
+            }
+        }
+        self.draw_derived(&mut encoder, &session.source, &session.blurs);
+        self.queue.submit([encoder.finish()]);
+
+        // The models are shown the new picture once the film or its base changes.
+        let seen = |look: Option<Look>| look.map(|look| (look.kind, look.base));
+        if seen(look) != seen(state.applied) {
+            *session.matte_suffix.lock().unwrap() = look.map(|look| look.matte_name()).unwrap_or_default();
+            *session.picture.lock().unwrap() = if look.is_none() { Some(session.original_picture.clone()) } else { None };
+        }
+        state.applied = look;
+        Ok(look)
+    }
+
     /// Puts the mattes of `found` into the layers the shader reads them from,
     /// in order, uploading only those that changed. They must be ready (`ensure_found`).
     fn upload_found(&self, session: &Session, coverages: &mut Coverages, found: &[Found]) {
-        let (width, height) = session.picture.guide.dimensions();
+        let (width, height) = session.original_picture.guide.dimensions();
         if coverages.found.is_none() {
             let (texture, view) = self.coverage_maps(width, height, MAX_FOUND as u32);
             coverages.found = Some(texture);
@@ -651,7 +872,7 @@ impl Gpu {
         let texture = coverages.found.as_ref().expect("just made");
         let mattes = session.mattes.lock().unwrap();
         for (layer, part) in found.iter().enumerate() {
-            let key = part.key();
+            let key = session.key(part);
             let matte = mattes.get(&key);
             // An empty layer is labelled apart from the part, so the matte replaces it once found.
             let label = if matte.is_some() { key } else { format!("missing {key}") };
@@ -763,7 +984,12 @@ impl Gpu {
         let to_source = geometry::frame_to_source(session.width, session.height, adjustments, &frame).0;
         let crop = geometry::crop_in_frame(session.width, session.height, adjustments, &frame);
         let (packed, strokes, found) = masks::pack(&a.masks, session.width, session.height, mask_overlay);
-        for (part, error) in self.ensure_found(session, &found) {
+        // Held to the end, so no other frame changes the working image under this one.
+        let mut film = session.film.lock().unwrap();
+        let look = self.apply_film(session, &mut film, adjustments)?;
+        // A negative's positive is in scene light, like a RAW's.
+        let scene_referred = session.scene_referred || look.is_some();
+        for (part, error) in self.ensure_found_with(session, &film, &found) {
             eprintln!("couldn't find {}, drawing it as empty: {error:#}", part.name());
         }
         let mut coverages = session.coverages.lock().unwrap();
@@ -783,13 +1009,13 @@ impl Gpu {
                 session.width as f32,
                 session.height as f32,
                 source_pixels_per_output_pixel,
-                session.scene_referred as u8 as f32,
+                scene_referred as u8 as f32,
             ],
             light: [a.exposure.clamp(-MAX_EXPOSURE, MAX_EXPOSURE), unit(a.contrast), unit(a.highlights), unit(a.shadows)],
             tone: [unit(a.whites), unit(a.blacks), unit(a.temperature), unit(a.tint)],
             color: [unit(a.vibrance), unit(a.saturation), unit(a.clarity), unit(a.dehaze)],
             detail: [unit(a.sharpening).max(0.0), unit(a.noise_reduction).max(0.0), unit(a.vignette), unit(a.grain).max(0.0)],
-            flags: [show_clipping as u8 as f32, uncropped as u8 as f32, matte as u8 as f32, 0.0],
+            flags: [show_clipping as u8 as f32, uncropped as u8 as f32, matte as u8 as f32, look.is_some() as u8 as f32],
             mixer: a.mixer.map(|band| [unit(band.hue), unit(band.saturation), unit(band.luminance), 0.0]),
             mask_counts: packed.counts,
             masks: packed.masks,
@@ -848,6 +1074,7 @@ impl Gpu {
         }
         target.readback.unmap();
         self.keep_target(session, target);
+        drop(film);
         Ok(pixels)
     }
 

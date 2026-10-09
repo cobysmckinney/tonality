@@ -11,6 +11,7 @@ use tauri_plugin_dialog::{DialogExt, FileDialogBuilder, FilePath};
 
 use crate::edit::{Adjustments, Shape};
 use crate::export;
+use crate::film;
 use crate::grants::Grants;
 use crate::gpu::{self, Region, Session};
 use crate::history::History;
@@ -340,8 +341,7 @@ pub async fn open_editor(app: AppHandle, id: i64) -> CommandResult<EditorPhoto> 
             let session = thumbs::open_session(&state.library, id).map_err(message)?;
             // Have found parts ready before the first frame needs them; usually a quick read of the cache.
             let adjustments = Adjustments::from_json(state.library.edits(id).map_err(message)?.as_deref());
-            let found = crate::masks::found(&adjustments.masks);
-            for (part, _) in gpu::shared().map_err(message)?.ensure_found(&session, &found) {
+            for (part, _) in gpu::shared().map_err(message)?.prepare(&session, &adjustments).map_err(message)? {
                 missing.push(part.name().to_string());
             }
             *editing = Some((id, session));
@@ -362,7 +362,7 @@ pub async fn prepare_circles(app: AppHandle, id: i64) -> CommandResult<()> {
         let picture = {
             let editing = state.editing();
             let (_, session) = editing.as_ref().filter(|(open, _)| *open == id).ok_or("This photo is no longer open in the editor.")?;
-            session.picture()
+            gpu::shared().and_then(|gpu| gpu.picture(session)).map_err(message)?
         };
         picture.prepare_circles().map_err(message)
     })
@@ -388,25 +388,97 @@ pub async fn find_parts(app: AppHandle, id: i64, shapes: Vec<Shape>) -> CommandR
                 .filter(|found| !session.has_matte(found))
                 .map(|found| {
                     let path = session.matte_path(&found);
-                    (found, path)
+                    // Named now: a negative's film settings may change while the model runs.
+                    (session.key(&found), found, path)
                 })
                 .collect();
             if wanted.is_empty() {
                 return Ok(());
             }
-            (session.picture(), wanted)
+            (gpu::shared().and_then(|gpu| gpu.picture(session)).map_err(message)?, wanted)
         };
         let mattes = wanted
             .into_iter()
-            .map(|(found, path)| Ok((found.find_cached(&picture, path.as_deref())?, found)))
+            .map(|(key, found, path)| Ok((found.find_cached(&picture, path.as_deref())?, key)))
             .collect::<anyhow::Result<Vec<_>>>()
             .map_err(message)?;
         let editing = state.editing();
         let (_, session) = editing.as_ref().filter(|(open, _)| *open == id).ok_or_else(closed)?;
-        for (matte, found) in mattes {
-            session.set_matte(&found, matte);
+        for (matte, key) in mattes {
+            session.set_matte_named(key, matte);
         }
         Ok(())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// The film base the open photo's negative is turned with, as linear light
+/// and as the colour to show for it: the one picked, or the one guessed.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FilmBase {
+    base: [f32; 3],
+    /// The base as it looks in the scan, in sRGB, 0..255.
+    swatch: [u8; 3],
+}
+
+impl FilmBase {
+    fn of(base: [f32; 3]) -> Self {
+        Self { base, swatch: film::swatch(base) }
+    }
+}
+
+/// The film base the open photo is turned with, picked or guessed.
+#[tauri::command(async)]
+pub fn film_base(state: State<AppState>, id: i64, adjustments: Adjustments) -> CommandResult<FilmBase> {
+    let editing = state.editing();
+    let (_, session) = editing.as_ref().filter(|(open, _)| *open == id).ok_or("This photo is no longer open in the editor.")?;
+    let sample = session.sample();
+    Ok(FilmBase::of(adjustments.film.base.unwrap_or_else(|| sample.guessed_base())))
+}
+
+/// The film base at a point on the open photo's file (0..1 across and
+/// down), for picking it by clicking the clear film.
+#[tauri::command(async)]
+pub fn pick_film_base(state: State<AppState>, id: i64, x: f32, y: f32) -> CommandResult<FilmBase> {
+    let editing = state.editing();
+    let (_, session) = editing.as_ref().filter(|(open, _)| *open == id).ok_or("This photo is no longer open in the editor.")?;
+    Ok(FilmBase::of(session.sample().base_at(x, y)))
+}
+
+/// Balances the frames of a roll together: measures the film base and
+/// density range across all of them, and gives each the same numbers, as a
+/// step in its history. Frames not yet set as negatives take the film type
+/// of the first that is.
+#[tauri::command]
+pub async fn balance_roll(app: AppHandle, ids: Vec<i64>) -> CommandResult<AppliedEdits> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        let recipes: Vec<Adjustments> = ids
+            .iter()
+            .map(|&id| Ok(Adjustments::from_json(state.library.edits(id)?.as_deref())))
+            .collect::<anyhow::Result<_>>()
+            .map_err(message)?;
+        let kind = recipes
+            .iter()
+            .map(|recipe| recipe.film.kind)
+            .find(|kind| *kind != film::Kind::None)
+            .ok_or("Choose the film type for one of these photos first, in Adjust.")?;
+        let mut frames = Vec::with_capacity(ids.len());
+        for (&id, recipe) in ids.iter().zip(&recipes) {
+            let files = state.library.photo_files(id).map_err(message)?;
+            let sample = film::Sample::of(&crate::develop::load(&files.path, files.is_raw).map_err(message)?);
+            let mut recipe = recipe.clone();
+            recipe.film.kind = kind;
+            frames.push((sample, recipe));
+        }
+        let (base, range) = film::balance_roll(kind, &frames);
+        edit_each(&app, &ids, "Balanced with the roll", |own| {
+            let mut recipe = own.clone();
+            recipe.film = film::Film { kind, base: Some(base), range: Some(range) };
+            recipe
+        })
     })
     .await
     .map_err(|e| e.to_string())?
