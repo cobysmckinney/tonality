@@ -1,6 +1,21 @@
 import { describe, expect, test } from "bun:test";
-import { Adjustments, defaultAdjustments, Point } from "./adjustments";
-import { apply, canAdd, circleShape, foundCount, frameToSource, fromOriginal, MAX_FOUND, newMask, newShape, nudge, onOriginal, screenMap, stillHeld } from "./masks";
+import { Adjustments, defaultAdjustments, Point, Shape } from "./adjustments";
+import {
+  apply,
+  canAdd,
+  circleShape,
+  foundCount,
+  frameToSource,
+  fromOriginal,
+  matteKey,
+  MAX_FOUND,
+  newMask,
+  newShape,
+  nudge,
+  onOriginal,
+  screenMap,
+  stillHeld,
+} from "./masks";
 
 const photo = { width: 300, height: 200 };
 const edited = (change: Partial<Adjustments>): Adjustments => ({ ...defaultAdjustments(), ...change });
@@ -165,5 +180,31 @@ describe("a drag on the photo", () => {
   test("lets go when another part is chosen or a loop is drawn", () => {
     expect(stillHeld(start, { maskId: 1, partIndex: 1, circling: false })).toBe(false);
     expect(stillHeld(start, { maskId: 1, partIndex: 0, circling: true })).toBe(false);
+  });
+});
+
+describe("the masks' thumbnails", () => {
+  const radial = newMask([], "radial", photo, defaultAdjustments());
+  const masked = edited({ masks: [radial] });
+
+  test("are left alone by sliders that can't change a mask", () => {
+    const key = matteKey(masked);
+    expect(matteKey({ ...masked, exposure: 1, saturation: 30, grain: 20 })).toBe(key);
+    const brighter = { ...radial, name: "Face", adjustments: { ...radial.adjustments, exposure: 0.5 } };
+    expect(matteKey({ ...masked, masks: [brighter] })).toBe(key);
+  });
+
+  test("are redrawn when a part, the way a mask combines, or the framing changes", () => {
+    const key = matteKey(masked);
+    const moved = { ...radial, parts: [{ ...radial.parts[0], shape: { ...radial.parts[0].shape, angle: 30 } as Shape }] };
+    expect(matteKey({ ...masked, masks: [moved] })).not.toBe(key);
+    expect(matteKey({ ...masked, masks: [{ ...radial, invert: true }] })).not.toBe(key);
+    expect(matteKey({ ...masked, rotation: 1 })).not.toBe(key);
+    expect(matteKey({ ...masked, crop: { x: 0.5, y: 0.5, width: 0.5, height: 0.5 } })).not.toBe(key);
+  });
+
+  test("follow the exposure only when a brightness range reads it", () => {
+    const ranged = edited({ masks: [newMask([], "luminance", photo, defaultAdjustments())] });
+    expect(matteKey({ ...ranged, exposure: 1 })).not.toBe(matteKey(ranged));
   });
 });

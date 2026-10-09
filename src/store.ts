@@ -243,6 +243,8 @@ interface State {
   confirmRequest: ConfirmRequest | null;
   renamingAlbum: number | null;
   menu: { x: number; y: number; entries: MenuEntry[] } | null;
+  /** The list of keyboard shortcuts is open. */
+  shortcutsOpen: boolean;
 
   /** Loads what the app starts with; anything that fails to load is reported, and the rest still loads. */
   init: () => Promise<void>;
@@ -369,6 +371,7 @@ interface State {
   confirm: (request: Omit<ConfirmRequest, "resolve">) => Promise<boolean>;
   openMenu: (x: number, y: number, entries: MenuEntry[]) => void;
   closeMenu: () => void;
+  setShortcutsOpen: (open: boolean) => void;
 }
 
 const sameView = (a: View, b: View) => a.kind === b.kind && (a.kind !== "album" || a.id === (b as typeof a).id);
@@ -626,6 +629,7 @@ export const useStore = create<State>((set, get) => {
     confirmRequest: null,
     renamingAlbum: null,
     menu: null,
+    shortcutsOpen: false,
     libraryProblem: null,
 
     async init() {
@@ -1441,5 +1445,6 @@ export const useStore = create<State>((set, get) => {
 
     openMenu: (x, y, entries) => set({ menu: { x, y, entries } }),
     closeMenu: () => set({ menu: null }),
+    setShortcutsOpen: (shortcutsOpen) => set({ shortcutsOpen }),
   };
 });

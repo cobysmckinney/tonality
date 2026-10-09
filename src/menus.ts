@@ -32,26 +32,27 @@ export function photoMenu(ids: number[]): MenuEntry[] {
     return [
       { label: "Recover", run: () => void s.restore(ids) },
       "separator",
-      { label: "Delete permanently", danger: true, run: () => void s.purge(ids) },
+      { label: "Delete permanently", hint: "Del", danger: true, run: () => void s.purge(ids) },
     ];
   }
 
   const view = s.view;
   return [
-    ...(single !== null ? [{ label: "Open", run: () => s.openPhoto(single) }, "separator" as const] : []),
+    ...(single !== null ? [{ label: "Open", hint: "Enter", run: () => s.openPhoto(single) }, "separator" as const] : []),
     {
       label: photos.every((p) => p.favorite) ? "Remove from Favorites" : "Add to Favorites",
+      hint: "F",
       run: () => void s.toggleFavorite(ids),
     },
-    { label: "Pick", checked: photos.every((p) => p.flag === 1), run: () => void s.toggleFlag(ids, 1) },
-    { label: "Reject", checked: photos.every((p) => p.flag === -1), run: () => void s.toggleFlag(ids, -1) },
+    { label: "Pick", hint: "P", checked: photos.every((p) => p.flag === 1), run: () => void s.toggleFlag(ids, 1) },
+    { label: "Reject", hint: "X", checked: photos.every((p) => p.flag === -1), run: () => void s.toggleFlag(ids, -1) },
     "separator",
-    ...(single !== null ? [{ label: "Copy edits", run: () => void s.copyEdits(single) }] : []),
-    { label: "Paste edits", disabled: s.clipboard === null, run: () => void s.pasteEdits(ids) },
+    ...(single !== null ? [{ label: "Copy edits", hint: "Ctrl+C", run: () => void s.copyEdits(single) }] : []),
+    { label: "Paste edits", hint: "Ctrl+V", disabled: s.clipboard === null, run: () => void s.pasteEdits(ids) },
     { label: "Apply preset", submenu: presetEntries(ids) },
     { label: "Revert to original", disabled: !photos.some((p) => p.edited), run: () => void s.revertEdits(ids) },
     "separator",
-    { label: "Export…", run: () => void s.startExport(ids) },
+    { label: "Export…", hint: "Ctrl+E", run: () => void s.startExport(ids) },
     "separator",
     { label: "Add to album", submenu: albumEntries(ids) },
     ...(view.kind === "album"
@@ -66,6 +67,6 @@ export function photoMenu(ids: number[]): MenuEntry[] {
         ]
       : []),
     "separator",
-    { label: "Delete", danger: true, run: () => void s.trash(ids) },
+    { label: "Delete", hint: "Del", danger: true, run: () => void s.trash(ids) },
   ];
 }
