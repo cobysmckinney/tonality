@@ -31,7 +31,7 @@ import { editorKeysBlocked } from "../../shortcuts";
 import { onTabKey } from "../../tabs";
 import { menuBelow, useTitle } from "../Toolbar";
 import { frameSize, Size } from "../../crop";
-import { fromOriginal, onOriginal } from "../../masks";
+import { framingKey, fromOriginal, onOriginal } from "../../masks";
 import { pickedPoint } from "../../film";
 import { FIT, heldFrame, pannedView, place as placeOn, View, zoomedView } from "../../zoom";
 import { AdjustPanel } from "./AdjustPanel";
@@ -276,6 +276,15 @@ function Stage({ photo, onZoomChange }: { photo: Photo; onZoomChange: (label: st
     s.sidePanel === "masks" && s.editor.showMask && !s.editor.showOriginal ? s.editor.maskId : null,
   );
 
+  // The subject and sky are found in the crop: again once a new one is settled, not at each step of the crop tool.
+  const inCropTool = useStore((s) => s.sidePanel === "crop");
+  const framing = useStore((s) => framingKey(s.editor.adjustments));
+  useEffect(() => {
+    if (ready && !inCropTool) useStore.getState().reframe();
+  }, [ready, inCropTool, framing]);
+  // Parts found meanwhile change the picture, though not the recipe.
+  const found = useStore((s) => s.editor.found);
+
   const adjustments = useMemo(() => (showOriginal ? DEFAULTS : current), [current, showOriginal]);
   /** The size, in photo pixels, of the picture being shown. */
   const frame = useMemo(
@@ -370,7 +379,7 @@ function Stage({ photo, onZoomChange }: { photo: Photo; onZoomChange: (label: st
     const original = showOriginal;
     wanted.current = { id: photo.id, adjustments, region, width, height, showClipping, uncropped, original, maskOverlay };
     void pump();
-  }, [geometry, adjustments, showClipping, uncropped, showOriginal, maskOverlay, photo.id, pump]);
+  }, [geometry, adjustments, showClipping, uncropped, showOriginal, maskOverlay, photo.id, pump, found]);
 
   /** Zooms to `zoom`, keeping the point under the pointer where it is. */
   const zoomAt = useCallback(

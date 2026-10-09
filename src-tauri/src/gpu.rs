@@ -9,7 +9,7 @@ use rayon::prelude::*;
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use crate::develop::LinearImage;
@@ -17,7 +17,7 @@ use crate::edit::{curve_table, Adjustments, Stroke, MAX_EXPOSURE};
 use crate::film::{self, Look, Sample};
 use crate::geometry;
 use crate::masks::{self, Coverage, COVERAGE_EDGE, MAX_BRUSHES, MAX_FOUND, MAX_MASKS, MAX_PARTS};
-use crate::segment::{self, Found};
+use crate::segment::{self, Found, Framing};
 
 /// Which look the develop pipeline draws. **Bump it whenever a change makes
 /// an edited photo come out differently**: in this file, in
@@ -25,7 +25,7 @@ use crate::segment::{self, Found};
 /// shader's input (`edit.rs`, `masks.rs`, `segment.rs`). On its next start a
 /// library then redraws the thumbnails and previews of its edited photos, so
 /// the grid keeps matching the editor (`thumbs::forget_old_looks`).
-pub const LOOK_VERSION: u32 = 2;
+pub const LOOK_VERSION: u32 = 3;
 
 const WORKING_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 const OUTPUT_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
@@ -147,6 +147,13 @@ pub struct Session {
     /// Added to found mattes' keys while the photo is a negative's positive,
     /// so mattes found in the negative or another positive aren't used.
     matte_suffix: Mutex<String>,
+    /// What the models are shown of the photo: all of it, or its crop.
+    framing: Mutex<Framing>,
+    /// Whether `framing` changes only when asked (`set_framing`,
+    /// `Gpu::prepare`), rather than following each recipe drawn. The
+    /// editor's photo is held: its crop changes at every step of a drag, and
+    /// the models take seconds.
+    pub hold_framing: AtomicBool,
     /// A small copy of the photo as opened, to measure film in.
     sample: Arc<Sample>,
     /// The film look in the working image. Held while a frame is drawn, so
@@ -244,12 +251,42 @@ struct Blur {
 impl Session {
     /// The name a found part's matte goes by in this session.
     pub fn key(&self, found: &Found) -> String {
-        format!("{}{}", found.key(), self.matte_suffix.lock().unwrap())
+        self.key_in(found, &self.framing())
+    }
+
+    /// The name a found part's matte goes by in this session, found in `framing`.
+    pub fn key_in(&self, found: &Found, framing: &Framing) -> String {
+        format!("{}{}", found.key(framing), self.matte_suffix.lock().unwrap())
+    }
+
+    /// What the models are shown of the photo now.
+    pub fn framing(&self) -> Framing {
+        *self.framing.lock().unwrap()
+    }
+
+    /// Shows the models `framing` of the photo from now on.
+    pub fn set_framing(&self, framing: Framing) {
+        let mut current = self.framing.lock().unwrap();
+        if *current != framing {
+            *current = framing;
+            // Its mattes are other ones, which changes the picture without changing the recipe.
+            self.mattes_set.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    /// What the models would be shown of the photo edited with `adjustments`.
+    pub fn framing_of(&self, adjustments: &Adjustments) -> Framing {
+        Framing::of(self.width, self.height, adjustments)
     }
 
     /// Whether this part has been found (or set) for this session.
     pub fn has_matte(&self, found: &Found) -> bool {
-        self.mattes.lock().unwrap().contains_key(&self.key(found))
+        self.has_matte_named(&self.key(found))
+    }
+
+    /// Whether the matte named `key` has been found (or set) for this session.
+    pub fn has_matte_named(&self, key: &str) -> bool {
+        self.mattes.lock().unwrap().contains_key(key)
     }
 
     /// Uses `matte` for this found part: white where it is. Any size; it is
@@ -267,9 +304,14 @@ impl Session {
 
     /// Where this part's matte is kept between sessions, if anywhere.
     pub fn matte_path(&self, found: &Found) -> Option<PathBuf> {
+        self.matte_path_named(&self.key(found))
+    }
+
+    /// Where the matte named `key` is kept between sessions, if anywhere.
+    pub fn matte_path_named(&self, key: &str) -> Option<PathBuf> {
         let start = self.matte_files.as_ref()?;
         let mut name = start.file_name()?.to_os_string();
-        name.push(format!("{}.png", self.key(found)));
+        name.push(format!("{key}.png"));
         Some(start.with_file_name(name))
     }
 
@@ -564,6 +606,8 @@ impl Gpu {
             picture: Mutex::new(Some(picture.clone())),
             original_picture: picture,
             matte_suffix: Mutex::new(String::new()),
+            framing: Mutex::new(Framing::Whole),
+            hold_framing: AtomicBool::new(false),
             sample,
             film: Mutex::new(FilmState::default()),
             matte_files: None,
@@ -692,10 +736,12 @@ impl Gpu {
     }
 
     /// Gets a photo ready to draw with `adjustments`: its film look in the
-    /// working image, and the found parts of its masks (`ensure_found`).
+    /// working image, and the found parts of its masks (`ensure_found`),
+    /// found in its crop even if the session's framing is held.
     pub fn prepare(&self, session: &Session, adjustments: &Adjustments) -> Result<Vec<(Found, anyhow::Error)>> {
         let mut film = session.film.lock().unwrap();
         self.apply_film(session, &mut film, adjustments)?;
+        session.set_framing(session.framing_of(adjustments));
         Ok(self.ensure_found_with(session, &film, &masks::found(&adjustments.masks)))
     }
 
@@ -703,8 +749,9 @@ impl Gpu {
     /// working image the models may be shown can't change meanwhile.
     fn ensure_found_with(&self, session: &Session, _film: &FilmState, found: &[Found]) -> Vec<(Found, anyhow::Error)> {
         let mut missing = Vec::new();
+        let framing = session.framing();
         for part in found {
-            let key = session.key(part);
+            let key = session.key_in(part, &framing);
             let ready =
                 || session.mattes.lock().unwrap().contains_key(&key) || session.missing.lock().unwrap().contains(&key);
             if ready() {
@@ -717,7 +764,7 @@ impl Gpu {
             }
             let found = self
                 .picture_with(session)
-                .and_then(|picture| part.find_cached(&picture, session.matte_path(part).as_deref()));
+                .and_then(|picture| part.find_cached(&picture, &framing, session.matte_path_named(&key).as_deref()));
             match found {
                 Ok(matte) => session.set_matte_named(key, matte),
                 Err(error) => {
@@ -989,6 +1036,9 @@ impl Gpu {
         let look = self.apply_film(session, &mut film, adjustments)?;
         // A negative's positive is in scene light, like a RAW's.
         let scene_referred = session.scene_referred || look.is_some();
+        if !session.hold_framing.load(Ordering::Relaxed) {
+            session.set_framing(session.framing_of(adjustments));
+        }
         for (part, error) in self.ensure_found_with(session, &film, &found) {
             eprintln!("couldn't find {}, drawing it as empty: {error:#}", part.name());
         }
@@ -1440,7 +1490,7 @@ mod tests {
         };
         let masked = Adjustments { masks: vec![subject], ..edit };
         // Not found yet: it draws as empty, without running the model.
-        session.missing.lock().unwrap().insert(Found::Subject.key());
+        session.missing.lock().unwrap().insert(session.key(&Found::Subject));
         let before = gpu.histogram(&session, &masked).unwrap();
         session.set_matte(&Found::Subject, image::GrayImage::from_pixel(8, 8, image::Luma([255])));
         let after = gpu.histogram(&session, &masked).unwrap();

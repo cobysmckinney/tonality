@@ -195,7 +195,7 @@ fn changing_the_film_redraws_the_working_image() {
 
     // Back to the scan as it was.
     assert!(draw(&plain) == before, "turning film off brings back the scan as opened");
-    assert_eq!(session.key(&Found::Subject), Found::Subject.key());
+    assert_eq!(session.key(&Found::Subject), Found::Subject.key(&session.framing()));
 
     // The blurs behind shadows and highlights are of the positive too:
     // lifting the shadows lifts its dark steps, not the negative's.

@@ -64,6 +64,8 @@ function useMattes(): Map<number, ImageData> {
   const ready = useStore((s) => s.editor.ready);
   // A slider that can't change a mask leaves the key, and the pictures, alone.
   const key = useStore((s) => matteKeyOf(s.editor.adjustments));
+  // Parts found again in a new crop change the pictures too.
+  const found = useStore((s) => s.editor.found);
   // Kept with the photo they were drawn for: another photo's masks can have the same ids.
   const [mattes, setMattes] = useState({ photoId, pictures: new Map<number, ImageData>() });
   useEffect(() => {
@@ -82,7 +84,7 @@ function useMattes(): Map<number, ImageData> {
       current = false;
       clearTimeout(timer);
     };
-  }, [photoId, ready, key]);
+  }, [photoId, ready, key, found]);
   return mattes.photoId === photoId ? mattes.pictures : NO_MATTES;
 }
 

@@ -341,12 +341,12 @@ export const api = {
         return pixels;
       });
     }),
-  /** Finds what these parts pick out of the open photo (subject, sky, circled object), so masks can use them. */
-  findParts: (id: number, shapes: Shape[]) => invoke<void>("find_parts", { id, shapes }),
+  /** Finds what these parts pick out of the open photo (subject, sky, circled object), so masks can use them; the subject and sky in the crop of `adjustments`. */
+  findParts: (id: number, shapes: Shape[], adjustments: Adjustments) => invoke<void>("find_parts", { id, shapes, adjustments }),
   /** Starts the object model's first look at the open photo, so a circle being drawn is answered quickly. */
   prepareCircles: (id: number) => invoke<void>("prepare_circles", { id }),
-  /** Redraws thumbnails to match the photos' current edits; returns each photo's new version. */
-  refreshRendered: (ids: number[]) => invoke<number[]>("refresh_rendered", { ids }),
+  /** Redraws thumbnails to match the photos' current edits; returns each photo's new version. With `settle`, the open photo's subject and sky are first found in its crop. */
+  refreshRendered: (ids: number[], settle = false) => invoke<number[]>("refresh_rendered", { ids, settle }),
   /**
    * Applies one recipe to these photos as a step in each one's history, one
    * photo at a time, sending an `edits-progress` event after each. With

@@ -188,6 +188,20 @@ export const isFound = (shape: Shape) => shape.kind === "subject" || shape.kind 
 /** The found parts among these masks' parts. */
 export const foundShapes = (masks: Mask[]) => masks.flatMap((mask) => mask.parts.map((part) => part.shape)).filter(isFound);
 
+/** The photo's framing (crop, straightening, turns and flips): the subject and sky are found in its crop. */
+export const framingKey = (a: Adjustments) => JSON.stringify(GEOMETRY.map((key) => a[key]));
+
+/**
+ * The subject and sky parts of `masks` to find again once the framing has
+ * changed from `framedAs`, each once. A circled object is found in the whole
+ * photo, so a new crop leaves it be.
+ */
+export function partsToReframe(a: Adjustments, framedAs: string | null): Shape[] {
+  if (framingKey(a) === framedAs) return [];
+  const shapes = foundShapes(a.masks).filter((shape) => shape.kind !== "object");
+  return [...new Map(shapes.map((shape) => [JSON.stringify(shape), shape])).values()];
+}
+
 export const MODE_NAMES: Record<MaskMode, string> = { add: "Add", subtract: "Subtract", intersect: "Intersect" };
 
 /** The most masks, and parts of each kind, the editor draws; mirrors masks.rs. */

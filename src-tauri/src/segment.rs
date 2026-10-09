@@ -8,9 +8,12 @@
 //! photo's own edges by a guided filter, so hair and branches are followed
 //! far more finely than the model's view allows.
 //!
-//! A matte is worked out from the photo file alone, the right way up but
-//! before any edits, so it follows crops and turns like every other mask
-//! part, and is kept on disk next to the thumbnails.
+//! A matte is worked out from the photo file, the right way up but before
+//! any edits, and kept on disk next to the thumbnails. Once the photo is
+//! cropped, the subject and sky models are shown just the crop, the way it
+//! is seen (`Framing`), so what was cropped away (a film scan's holder and
+//! rebate, say) can't be taken for either. The matte is still laid over the
+//! whole photo file, so it follows turns and flips like every other mask part.
 
 use std::path::Path;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -22,7 +25,8 @@ use tract_linalg::multithread::{multithread_tract_scope, Executor};
 use tract_onnx::prelude::*;
 
 use crate::develop::LinearImage;
-use crate::edit::Shape;
+use crate::edit::{Adjustments, Crop, Shape};
+use crate::geometry::{self, Affine};
 use crate::gpu::fit_within;
 use crate::masks::COVERAGE_EDGE;
 use crate::media;
@@ -139,6 +143,7 @@ const SCENE_SKY: usize = 2;
 /// Names the subject model and the way its answer is refined. Part of each
 /// cached matte's file name, so changing either finds every matte again.
 /// Bump `gpu::LOOK_VERSION` too, so thumbnails drawn with the old mattes go.
+/// A matte found in a crop also carries the crop's name (`Framing::name`).
 const SUBJECT_TAG: &str = "isnet-1";
 const SKY_TAG: &str = "skyseg-ade-1";
 
@@ -248,11 +253,13 @@ impl Found {
         }
     }
 
-    /// Names this matte among the photo's: its cache file is named after it.
-    pub fn key(&self) -> String {
+    /// Names this matte among the photo's, when found in `framing`: its
+    /// cache file is named after it. A circled object is always found in the
+    /// whole photo, its circle being enough to keep it to its place.
+    pub fn key(&self, framing: &Framing) -> String {
         match self {
-            Found::Subject => format!("subject-{SUBJECT_TAG}"),
-            Found::Sky => format!("sky-{SKY_TAG}"),
+            Found::Subject => format!("subject-{SUBJECT_TAG}{}", framing.name()),
+            Found::Sky => format!("sky-{SKY_TAG}{}", framing.name()),
             Found::Object(points) => {
                 let bytes: Vec<u8> = points.iter().flatten().flat_map(|v| v.to_le_bytes()).collect();
                 let hash = blake3::hash(&bytes).to_hex();
@@ -261,27 +268,192 @@ impl Found {
         }
     }
 
-    /// The matte for `picture`, the size of its guide: white where this part is.
-    pub fn find(&self, picture: &Picture) -> Result<GrayImage> {
+    /// The matte for `picture` when the models are shown `framing` of it, the
+    /// size of its guide: white where this part is.
+    pub fn find(&self, picture: &Picture, framing: &Framing) -> Result<GrayImage> {
         match self {
-            Found::Subject => SUBJECT.matte(&picture.guide),
-            Found::Sky => find_sky(&picture.guide),
+            Found::Subject => framing.find_in(&picture.guide, |view| SUBJECT.matte(view)),
+            Found::Sky => framing.find_in(&picture.guide, find_sky),
             Found::Object(points) => find_object(picture, points),
         }
     }
 
     /// `find`, but a matte found before is read from `cache`, and a new one is written there.
-    pub fn find_cached(&self, picture: &Picture, cache: Option<&Path>) -> Result<GrayImage> {
+    pub fn find_cached(&self, picture: &Picture, framing: &Framing, cache: Option<&Path>) -> Result<GrayImage> {
         if let Some(cached) = cache.and_then(|path| image::open(path).ok()) {
             return Ok(cached.into_luma8());
         }
-        let matte = self.find(picture)?;
+        let matte = self.find(picture, framing)?;
         if let Some(path) = cache {
             // A matte that can't be kept is found again next time; not worth failing over.
             let _ = write_png(&matte, path);
         }
         Ok(matte)
     }
+}
+
+/// What the subject and sky models are shown of a photo: all of it, as the
+/// file has it, until it is cropped; then just the crop, the way it is seen
+/// (turned, flipped and straightened).
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub enum Framing {
+    #[default]
+    Whole,
+    Cropped(Cropped),
+}
+
+/// A crop of a `width` x `height` photo, with the turns, flips and
+/// straightening it is seen with.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Cropped {
+    width: u32,
+    height: u32,
+    crop: Crop,
+    straighten: f32,
+    rotation: u8,
+    flip_horizontal: bool,
+    flip_vertical: bool,
+}
+
+impl Framing {
+    /// What the models are shown of a `width` x `height` photo edited with
+    /// `adjustments`. Turns and flips alone leave it whole: the matte follows
+    /// them anyway, and a photo only turned is found as it always was.
+    pub fn of(width: u32, height: u32, adjustments: &Adjustments) -> Framing {
+        let crop = adjustments.crop;
+        let near = |a: f32, b: f32| (a - b).abs() < 1e-3;
+        let whole = near(crop.x, 0.5)
+            && near(crop.y, 0.5)
+            && crop.width > 0.999
+            && crop.height > 0.999
+            && near(adjustments.straighten, 0.0);
+        if whole {
+            return Framing::Whole;
+        }
+        Framing::Cropped(Cropped {
+            width,
+            height,
+            crop,
+            straighten: adjustments.straighten,
+            rotation: adjustments.rotation % 4,
+            flip_horizontal: adjustments.flip_horizontal,
+            flip_vertical: adjustments.flip_vertical,
+        })
+    }
+
+    /// Added to the names of mattes found in this framing; nothing for the
+    /// whole photo, so its mattes keep the names they always had.
+    fn name(&self) -> String {
+        match self {
+            Framing::Whole => String::new(),
+            Framing::Cropped(cropped) => {
+                let Crop { x, y, width, height } = cropped.crop;
+                let text = format!(
+                    "{x:.4},{y:.4},{width:.4},{height:.4},{:.2},{},{},{}",
+                    cropped.straighten, cropped.rotation, cropped.flip_horizontal, cropped.flip_vertical
+                );
+                format!("-in-{}", &blake3::hash(text.as_bytes()).to_hex()[..10])
+            }
+        }
+    }
+
+    /// `find`'s matte for `guide` (the whole photo file), found in this
+    /// framing: the crop is cut out and turned, `find` is shown it, and its
+    /// answer is laid back over the whole photo, empty outside the crop.
+    fn find_in(&self, guide: &RgbImage, find: impl FnOnce(&RgbImage) -> Result<GrayImage>) -> Result<GrayImage> {
+        match self {
+            Framing::Whole => find(guide),
+            Framing::Cropped(cropped) => {
+                let to_source = cropped.on_source();
+                let view = show(guide, &to_source, cropped.size_in(guide.dimensions()));
+                Ok(place(&find(&view)?, &to_source, guide.dimensions()))
+            }
+        }
+    }
+}
+
+impl Cropped {
+    fn adjustments(&self) -> Adjustments {
+        Adjustments {
+            crop: self.crop,
+            straighten: self.straighten,
+            rotation: self.rotation,
+            flip_horizontal: self.flip_horizontal,
+            flip_vertical: self.flip_vertical,
+            ..Default::default()
+        }
+    }
+
+    /// Where each point of the crop as seen (0..1 across and down) is on the photo file (0..1).
+    fn on_source(&self) -> Affine {
+        let adjustments = self.adjustments();
+        let frame = geometry::frame(self.width, self.height, &adjustments, false);
+        geometry::frame_to_source(self.width, self.height, &adjustments, &frame)
+    }
+
+    /// The crop's size as seen, in pixels of a copy of the photo `width` x `height` big.
+    fn size_in(&self, (width, height): (u32, u32)) -> (u32, u32) {
+        let [w, h] = geometry::frame(self.width, self.height, &self.adjustments(), false).size;
+        let scale = width.max(height) as f64 / self.width.max(self.height) as f64;
+        // Never so small that the models and the filter have nothing to work on.
+        let side = |v: f64| ((v * scale).round() as u32).max(MIN_VIEW);
+        (side(w), side(h))
+    }
+}
+
+/// The fewest pixels a side of a crop is shown to the models with.
+const MIN_VIEW: u32 = 32;
+
+/// The part of `guide` that `to_source` maps 0..1 onto, as a `width` x
+/// `height` picture.
+fn show(guide: &RgbImage, to_source: &Affine, (width, height): (u32, u32)) -> RgbImage {
+    let (gw, gh) = guide.dimensions();
+    let mut view = RgbImage::new(width, height);
+    view.par_chunks_mut(width as usize * 3).enumerate().for_each(|(y, row)| {
+        let v = (y as f64 + 0.5) / height as f64;
+        for (x, out) in row.as_chunks_mut::<3>().0.iter_mut().enumerate() {
+            let [u, v] = to_source.apply([(x as f64 + 0.5) / width as f64, v]);
+            *out = std::array::from_fn(|c| {
+                bilinear(gw, gh, u as f32, v as f32, |x, y| guide.get_pixel(x, y)[c] as f32).round() as u8
+            });
+        }
+    });
+    view
+}
+
+/// `matte`, found in the part of the photo that `to_source` maps 0..1 onto,
+/// laid back over the whole photo at `width` x `height`: empty outside that
+/// part, except that its edge reaches a pixel or two past it, so the crop's
+/// own edge is covered as fully as the matte says.
+fn place(matte: &GrayImage, to_source: &Affine, (width, height): (u32, u32)) -> GrayImage {
+    let to_view = to_source.inverse();
+    let (mw, mh) = matte.dimensions();
+    let reach = [1.5 / mw as f64, 1.5 / mh as f64];
+    let outside = |p: f64, reach: f64| p < -reach || p > 1.0 + reach;
+    let mut out = GrayImage::new(width, height);
+    out.par_chunks_mut(width as usize).enumerate().for_each(|(y, row)| {
+        let v = (y as f64 + 0.5) / height as f64;
+        for (x, out) in row.iter_mut().enumerate() {
+            let [s, t] = to_view.apply([(x as f64 + 0.5) / width as f64, v]);
+            if !outside(s, reach[0]) && !outside(t, reach[1]) {
+                *out = bilinear(mw, mh, s as f32, t as f32, |x, y| matte.get_pixel(x, y)[0] as f32).round() as u8;
+            }
+        }
+    });
+    out
+}
+
+/// A `width` x `height` picture's value at `u, v` in 0..1, bilinearly from
+/// `at(x, y)`, its edges carried on past it.
+fn bilinear(width: u32, height: u32, u: f32, v: f32, at: impl Fn(u32, u32) -> f32) -> f32 {
+    let x = (u * width as f32 - 0.5).clamp(0.0, (width - 1) as f32);
+    let y = (v * height as f32 - 0.5).clamp(0.0, (height - 1) as f32);
+    let (x0, y0) = (x as u32, y as u32);
+    let (x1, y1) = ((x0 + 1).min(width - 1), (y0 + 1).min(height - 1));
+    let (fx, fy) = (x - x0 as f32, y - y0 as f32);
+    let top = at(x0, y0) + (at(x1, y0) - at(x0, y0)) * fx;
+    let bottom = at(x0, y1) + (at(x1, y1) - at(x0, y1)) * fx;
+    top + (bottom - top) * fy
 }
 
 /// The picture the subject is found in: the photo in sRGB, at most
@@ -765,7 +937,7 @@ mod tests {
     #[test]
     fn a_bright_disc_on_a_plain_background_is_the_subject() {
         let guide = discs(&[(150.0, 100.0)]);
-        let matte = Found::Subject.find(&Picture::new(guide)).unwrap();
+        let matte = Found::Subject.find(&Picture::new(guide), &Framing::Whole).unwrap();
         assert_eq!(matte.dimensions(), (300, 200));
         assert!(matte.get_pixel(150, 100)[0] > 230, "centre");
         for (x, y) in [(5, 5), (294, 5), (5, 194), (294, 194)] {
@@ -783,7 +955,7 @@ mod tests {
                 [(220.0 + 62.0 * turn.cos()) / 300.0, (100.0 + 58.0 * turn.sin()) / 200.0]
             })
             .collect();
-        let matte = Found::Object(circle).find(&Picture::new(guide)).unwrap();
+        let matte = Found::Object(circle).find(&Picture::new(guide), &Framing::Whole).unwrap();
         assert!(matte.get_pixel(220, 100)[0] > 230, "the circled disc");
         assert!(matte.get_pixel(190, 100)[0] > 200, "all of it");
         assert_eq!(matte.get_pixel(70, 100)[0], 0, "not the other disc");
@@ -793,7 +965,7 @@ mod tests {
     #[test]
     fn a_circle_too_small_to_see_into_is_refused() {
         let guide = discs(&[(150.0, 100.0)]);
-        assert!(Found::Object(vec![[0.5, 0.5], [0.501, 0.5], [0.5, 0.501]]).find(&Picture::new(guide)).is_err());
+        assert!(Found::Object(vec![[0.5, 0.5], [0.501, 0.5], [0.5, 0.501]]).find(&Picture::new(guide), &Framing::Whole).is_err());
     }
 
     #[test]
@@ -802,7 +974,7 @@ mod tests {
         let landscape = RgbImage::from_fn(300, 200, |_, y| {
             if y < 100 { image::Rgb([90 + y as u8 / 2, 150 + y as u8 / 2, 230]) } else { image::Rgb([40, 70, 30]) }
         });
-        let matte = Found::Sky.find(&Picture::new(landscape)).unwrap();
+        let matte = Found::Sky.find(&Picture::new(landscape), &Framing::Whole).unwrap();
         assert!(matte.get_pixel(150, 30)[0] > 200, "sky {}", matte.get_pixel(150, 30)[0]);
         assert!(matte.get_pixel(150, 170)[0] < 30, "land {}", matte.get_pixel(150, 170)[0]);
         // Leaves and earth fill this one: there is no sky, and the answer is not stretched to find one.
@@ -810,7 +982,7 @@ mod tests {
             let leaf = (x / 7 * 31 + y / 5 * 17) % 5;
             image::Rgb([30 + leaf as u8 * 12, 60 + leaf as u8 * 15, 20 + leaf as u8 * 4])
         });
-        let matte = Found::Sky.find(&Picture::new(foliage)).unwrap();
+        let matte = Found::Sky.find(&Picture::new(foliage), &Framing::Whole).unwrap();
         assert!(matte.pixels().all(|p| p[0] < 30), "{:?}", matte.pixels().map(|p| p[0]).max());
     }
 
@@ -818,9 +990,132 @@ mod tests {
     fn each_found_part_has_its_own_key() {
         let a = Found::Object(vec![[0.1, 0.1], [0.5, 0.1], [0.3, 0.5]]);
         let b = Found::Object(vec![[0.1, 0.1], [0.5, 0.1], [0.3, 0.6]]);
-        assert_eq!(a.key(), a.clone().key());
-        assert_ne!(a.key(), b.key());
-        assert!(Found::Subject.key().starts_with("subject-") && Found::Sky.key().starts_with("sky-"));
+        assert_eq!(a.key(&Framing::Whole), a.clone().key(&Framing::Whole));
+        assert_ne!(a.key(&Framing::Whole), b.key(&Framing::Whole));
+        assert!(Found::Subject.key(&Framing::Whole).starts_with("subject-") && Found::Sky.key(&Framing::Whole).starts_with("sky-"));
+    }
+
+    fn framing(width: u32, height: u32, adjustments: Adjustments) -> Cropped {
+        match Framing::of(width, height, &adjustments) {
+            Framing::Cropped(cropped) => cropped,
+            Framing::Whole => panic!("{adjustments:?} is cropped"),
+        }
+    }
+
+    #[test]
+    fn an_uncropped_photo_is_shown_whole_and_its_mattes_keep_their_names() {
+        let turned = Adjustments { rotation: 1, flip_horizontal: true, ..Default::default() };
+        for adjustments in [Adjustments::default(), turned] {
+            assert_eq!(Framing::of(300, 200, &adjustments), Framing::Whole);
+        }
+        // The names mattes were kept under before crops counted.
+        assert_eq!(Found::Subject.key(&Framing::Whole), "subject-isnet-1");
+        assert_eq!(Found::Sky.key(&Framing::Whole), "sky-skyseg-ade-1");
+
+        let crop = |x| Framing::of(300, 200, &Adjustments { crop: Crop { x, y: 0.5, width: 0.5, height: 1.0 }, ..Default::default() });
+        let (left, right) = (crop(0.25), crop(0.75));
+        assert_ne!(Found::Subject.key(&left), Found::Subject.key(&Framing::Whole));
+        assert_ne!(Found::Subject.key(&left), Found::Subject.key(&right));
+        assert_eq!(Found::Subject.key(&left), Found::Subject.key(&crop(0.25)));
+        let straightened = Framing::of(300, 200, &Adjustments { straighten: 3.0, ..Default::default() });
+        assert_ne!(straightened, Framing::Whole, "straightening crops the corners off");
+        // A circled object is found in the whole photo whatever the crop.
+        let object = Found::Object(vec![[0.1, 0.1], [0.5, 0.1], [0.3, 0.5]]);
+        assert_eq!(object.key(&left), object.key(&Framing::Whole));
+    }
+
+    /// A photo whose red says how far across a pixel is and green how far down.
+    fn positions(width: u32, height: u32) -> RgbImage {
+        RgbImage::from_fn(width, height, |x, y| image::Rgb([x as u8, y as u8, 0]))
+    }
+
+    #[test]
+    fn a_crop_is_shown_to_the_models_the_way_it_is_seen() {
+        // Turned a quarter clockwise, the 200 x 100 photo stands 100 x 200;
+        // the crop is the lower half of that, which is the file's right half.
+        let cropped = framing(200, 100, Adjustments {
+            rotation: 1,
+            crop: Crop { x: 0.5, y: 0.75, width: 1.0, height: 0.5 },
+            ..Default::default()
+        });
+        let guide = positions(200, 100);
+        assert_eq!(cropped.size_in(guide.dimensions()), (100, 100));
+        let view = show(&guide, &cropped.on_source(), (100, 100));
+        // The view's top left is the file's bottom middle, and down the view is rightward in the file.
+        for (x, y) in [(0, 0), (99, 0), (0, 99), (40, 70), (99, 99)] {
+            let [r, g, _] = view.get_pixel(x, y).0;
+            let (want_x, want_y) = (100 + y, 99 - x);
+            assert!(r.abs_diff(want_x as u8) <= 1 && g.abs_diff(want_y as u8) <= 1, "at {x},{y}: {r},{g}");
+        }
+        // Half the size on a guide half the size.
+        assert_eq!(cropped.size_in((100, 50)), (50, 50));
+    }
+
+    #[test]
+    fn a_matte_found_in_a_crop_is_laid_back_where_the_crop_is() {
+        let cropped = framing(200, 100, Adjustments {
+            rotation: 1,
+            crop: Crop { x: 0.5, y: 0.75, width: 1.0, height: 0.5 },
+            ..Default::default()
+        });
+        // The subject is the left half of what the model saw: the bottom of the file's right half.
+        let matte = GrayImage::from_fn(100, 100, |x, _| image::Luma([if x < 50 { 255 } else { 0 }]));
+        let placed = place(&matte, &cropped.on_source(), (200, 100));
+        assert_eq!(placed.dimensions(), (200, 100));
+        let at = |x, y| placed.get_pixel(x, y)[0];
+        assert_eq!(at(150, 75), 255);
+        assert_eq!(at(150, 25), 0);
+        assert_eq!(at(50, 75), 0, "nothing outside the crop");
+        // The crop's edge is covered fully, and the matte stops just past it.
+        assert_eq!(at(100, 75), 255);
+        assert_eq!(at(99, 75), 255);
+        assert_eq!(at(97, 75), 0);
+    }
+
+    #[test]
+    fn showing_a_crop_and_laying_it_back_meet_for_every_turn_and_flip() {
+        let guide = RgbImage::from_fn(300, 200, |x, y| image::Rgb([(x * 255 / 299) as u8, (y * 255 / 199) as u8, 128]));
+        for rotation in 0..4 {
+            for (flip_horizontal, flip_vertical) in [(false, false), (true, false), (false, true)] {
+                for straighten in [0.0, 8.0] {
+                    let cropped = framing(300, 200, Adjustments {
+                        crop: Crop { x: 0.4, y: 0.55, width: 0.5, height: 0.6 },
+                        straighten,
+                        rotation,
+                        flip_horizontal,
+                        flip_vertical,
+                        ..Default::default()
+                    });
+                    let to_source = cropped.on_source();
+                    let size = cropped.size_in(guide.dimensions());
+                    let view = show(&guide, &to_source, size);
+                    // The model's answer is the view's red: laid back, it is the photo's red again.
+                    let red = GrayImage::from_fn(size.0, size.1, |x, y| image::Luma([view.get_pixel(x, y)[0]]));
+                    let placed = place(&red, &to_source, guide.dimensions());
+                    let pixel = |p: [f64; 2]| ((p[0] * 300.0) as u32, (p[1] * 200.0) as u32);
+                    for t in [[0.2, 0.2], [0.5, 0.5], [0.8, 0.3], [0.3, 0.8]] {
+                        let (x, y) = pixel(to_source.apply(t));
+                        let (got, want) = (placed.get_pixel(x, y)[0], guide.get_pixel(x, y)[0]);
+                        assert!(got.abs_diff(want) <= 3, "{cropped:?} at {t:?}: {got} vs {want}");
+                    }
+                    let (x, y) = pixel(to_source.apply([-0.2, 0.5]));
+                    assert_eq!(placed.get_pixel(x, y)[0], 0, "{cropped:?}: outside the crop");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_cropped_photo_has_its_subject_found_in_the_crop_alone() {
+        // Two discs; the crop holds only the right-hand one.
+        let guide = discs(&[(70.0, 100.0), (220.0, 100.0)]);
+        let crop = Crop { x: 220.0 / 300.0, y: 0.5, width: 0.4, height: 0.8 };
+        let framing = Framing::of(300, 200, &Adjustments { crop, ..Default::default() });
+        let matte = Found::Subject.find(&Picture::new(guide), &framing).unwrap();
+        assert_eq!(matte.dimensions(), (300, 200));
+        assert!(matte.get_pixel(220, 100)[0] > 230, "the disc in the crop");
+        assert_eq!(matte.get_pixel(70, 100)[0], 0, "not the one cropped away");
+        assert!(matte.get_pixel(165, 25)[0] < 25, "nor the ground around it");
     }
 
     #[test]
