@@ -39,6 +39,7 @@ import { plural } from "./format";
 import { canAdd, circleShape, foundShapes, isFound, MaskStart, MAX_MASKS, newMask, newShape, SHAPE_NAMES, startKind } from "./masks";
 import { blend, holds, Preset, settingsFrom } from "./presets";
 import { forget } from "./selection";
+import { parseSearch, SearchFacets, searching, Sort } from "./search";
 import { canStartExport, canStartFilm, canStartImport } from "./sheets";
 
 export type Filter = "all" | "picks" | "unrejected" | "rejects";
@@ -209,10 +210,16 @@ interface State {
   libraryProblem: LibraryProblem | null;
   overview: Overview | null;
   view: View;
-  /** Every photo in the current view, before the flag filter. */
+  /** The current view's photos that match the search, before the flag filter. */
   photos: Photo[];
   loaded: boolean;
+  /** The flag filter. Like the search and the order, it stays as you move between views. */
   filter: Filter;
+  /** What is typed in the search field. */
+  search: string;
+  sort: Sort;
+  /** What there is to search for in the current view, once asked for. */
+  facets: SearchFacets | null;
   selection: Set<number>;
   /** Where a shift-click or shift-arrow range starts. */
   anchor: number | null;
@@ -259,6 +266,13 @@ interface State {
   reload: () => Promise<void>;
   setView: (view: View) => Promise<void>;
   setFilter: (filter: Filter) => void;
+  /** Searches as it is typed: the grid follows a moment later, or straight away with `now`. */
+  setSearch: (search: string, now?: boolean) => void;
+  setSort: (sort: Sort) => void;
+  /** Loads what there is to search for in the current view. */
+  loadFacets: () => Promise<void>;
+  /** Clears the search and the flag filter. */
+  showEverything: () => void;
   setThumbSize: (size: number) => void;
   toggleSquareThumbs: () => void;
   setSidePanel: (panel: SidePanel) => void;
@@ -424,6 +438,12 @@ export function targetOf(state: Pick<State, "selection">, id: number): number[] 
 }
 
 let nextToastId = 1;
+/** Counts photo lists asked for, so a slow answer never overwrites a newer one. */
+let listRequest = 0;
+/** The search the last list asked for, as JSON. */
+let listedFor = "";
+/** Waits for a pause in typing before searching. */
+let searchTimer: ReturnType<typeof setTimeout> | undefined;
 /** Counts export plans asked for, so a slow answer never overwrites a newer one. */
 let planRequest = 0;
 
@@ -631,6 +651,9 @@ export const useStore = create<State>((set, get) => {
     photos: [],
     loaded: false,
     filter: "all",
+    search: "",
+    sort: "newest",
+    facets: null,
     selection: new Set(),
     anchor: null,
     cursor: null,
@@ -710,9 +733,12 @@ export const useStore = create<State>((set, get) => {
     },
 
     async reload() {
-      const view = get().view;
-      const [overview, photos] = await Promise.all([api.getOverview(), api.listPhotos(view)]);
-      if (!sameView(view, get().view)) return;
+      const request = ++listRequest;
+      const { view, search, sort } = get();
+      const asked = parseSearch(search);
+      listedFor = JSON.stringify(asked);
+      const [overview, photos] = await Promise.all([api.getOverview(), api.listPhotos(view, asked, sort)]);
+      if (request !== listRequest || !sameView(view, get().view)) return;
       const present = new Set(photos.map((p) => p.id));
       set((s) => ({
         overview,
@@ -724,11 +750,40 @@ export const useStore = create<State>((set, get) => {
     },
 
     async setView(view) {
-      set({ view, photos: [], loaded: false, filter: "all", selection: new Set(), anchor: null, cursor: null, openId: null });
+      set({ view, photos: [], loaded: false, facets: null, selection: new Set(), anchor: null, cursor: null, openId: null });
       await get().reload();
     },
 
     setFilter: (filter) => set({ filter, selection: new Set(), anchor: null, cursor: null }),
+
+    setSearch(search, now = false) {
+      set({ search });
+      clearTimeout(searchTimer);
+      // A space, or a field named but not filled in yet, doesn't change what is asked for.
+      if (!now && JSON.stringify(parseSearch(search)) === listedFor) return;
+      if (now) void get().reload();
+      else searchTimer = setTimeout(() => void get().reload(), 150);
+    },
+
+    setSort(sort) {
+      set({ sort });
+      void get().reload();
+    },
+
+    async loadFacets() {
+      const view = get().view;
+      try {
+        const facets = await api.searchFacets(view);
+        if (sameView(view, get().view)) set({ facets });
+      } catch (error) {
+        console.error(error);
+      }
+    },
+
+    showEverything() {
+      set({ filter: "all" });
+      get().setSearch("", true);
+    },
     setThumbSize: (thumbSize) => set({ thumbSize }),
     toggleSquareThumbs: () => set((s) => ({ squareThumbs: !s.squareThumbs })),
     setSidePanel: (sidePanel) => set({ sidePanel }),
@@ -1370,6 +1425,8 @@ export const useStore = create<State>((set, get) => {
         set({ importState: summary.failed.length > 0 ? { phase: "done", summary } : null });
         const added = summary.imported + summary.restored;
         if (added > 0) {
+          // The new photos are what to show, whatever was being looked for.
+          set({ search: "", filter: "all" });
           await get().setView({ kind: "imports" });
           get().toast({ text: `Imported ${plural(added, "photo")}${summary.cancelled ? " before stopping" : ""}` });
         } else {
@@ -1477,7 +1534,9 @@ export const useStore = create<State>((set, get) => {
 
     async saveFilmDetails(photos) {
       if (!(await attempt(() => api.setFilmDetails(photos)))) return;
-      set((s) => ({ filmSheet: null, filmSaves: s.filmSaves + 1 }));
+      set((s) => ({ filmSheet: null, filmSaves: s.filmSaves + 1, facets: null }));
+      // Photos may have come to match the search, or stopped matching it.
+      if (searching(get().search)) await get().reload();
       if (photos.length > 1) get().toast({ text: `Saved film details for ${plural(photos.length, "photo")}` });
     },
 

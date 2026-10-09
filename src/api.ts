@@ -2,6 +2,7 @@ import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import type { Adjustments, Rgb, Shape } from "./adjustments";
 import type { FilmDetails, FilmPhoto, FilmSuggestions } from "./filmDetails";
 import type { Preset, PresetSettings } from "./presets";
+import type { Search, SearchFacets, Sort } from "./search";
 
 export type View =
   | { kind: "library" }
@@ -281,7 +282,11 @@ export const api = {
   libraryProblem: () => invoke<LibraryProblem | null>("library_problem"),
   retryLibrary: () => invoke<void>("retry_library"),
   getOverview: () => invoke<Overview>("get_overview"),
-  listPhotos: (view: View) => invoke<Photo[]>("list_photos", { view }),
+  /** The view's photos that match the search, in this order. */
+  listPhotos: (view: View, search: Search = { terms: [] }, sort: Sort = "newest") =>
+    invoke<Photo[]>("list_photos", { view, search, sort }),
+  /** What there is to search for among the view's photos. */
+  searchFacets: (view: View) => invoke<SearchFacets>("search_facets", { view }),
   getPhotoInfo: (id: number) => invoke<PhotoInfo>("get_photo_info", { id }),
 
   setFavorite: (ids: number[], favorite: boolean) => invoke<void>("set_favorite", { ids, favorite }),

@@ -12,6 +12,7 @@ pub mod library;
 pub mod masks;
 pub mod media;
 pub mod presets;
+pub mod search;
 pub mod segment;
 pub mod thumbs;
 pub mod volumes;
@@ -208,6 +209,7 @@ pub fn run() {
             commands::retry_library,
             commands::get_overview,
             commands::list_photos,
+            commands::search_facets,
             commands::get_photo_info,
             commands::set_favorite,
             commands::set_flag,

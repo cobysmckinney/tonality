@@ -9,19 +9,21 @@ import { Sidebar } from "./components/Sidebar";
 import { TitleBar } from "./components/TitleBar";
 import { Toolbar } from "./components/Toolbar";
 import { Editor } from "./components/editor/Editor";
+import { searching } from "./search";
 import { useStore, visiblePhotos } from "./store";
 
 /** What a view says when it has nothing to show. */
 function EmptyState() {
   const view = useStore((s) => s.view);
+  const search = useStore((s) => s.search);
   const filtered = useStore((s) => s.photos.length > 0);
-  const { importFiles, importFolder, setFilter } = useStore.getState();
+  const { importFiles, importFolder, showEverything } = useStore.getState();
 
-  if (filtered) {
+  if (filtered || searching(search)) {
     return (
       <div className="empty">
-        <h2>No photos match this filter</h2>
-        <button className="button" onClick={() => setFilter("all")}>
+        <h2>{searching(search) ? `Nothing here matches “${search.trim()}”` : "No photos match this filter"}</h2>
+        <button className="button" onClick={showEverything}>
           Show all photos
         </button>
       </div>

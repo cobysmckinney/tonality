@@ -17,9 +17,12 @@ use std::sync::{Mutex, MutexGuard};
 
 use anyhow::{bail, Context, Result};
 use rayon::prelude::*;
-use rusqlite::{params, Connection, OptionalExtension, Row};
+use rusqlite::types::Value;
+use rusqlite::{params, params_from_iter, Connection, OptionalExtension, Row};
 use serde::{Deserialize, Serialize};
 use walkdir::WalkDir;
+
+use crate::search::{self, Facet, Facets, Search, Sort};
 
 /// How long a photo stays in Recently Deleted before its files are removed.
 pub const TRASH_RETENTION_DAYS: i64 = 30;
@@ -300,6 +303,23 @@ impl std::fmt::Display for LibraryInUse {
 
 impl std::error::Error for LibraryInUse {}
 
+/// The photos a view shows, as `photos p …` ending in a WHERE clause that
+/// more conditions can be added to with AND. Its values go onto `values`.
+fn in_view(view: View, values: &mut Vec<Value>) -> String {
+    match view {
+        View::Library | View::Imports => "photos p WHERE p.deleted_at IS NULL".to_string(),
+        View::Favorites => "photos p WHERE p.deleted_at IS NULL AND p.favorite = 1".to_string(),
+        View::Deleted => "photos p WHERE p.deleted_at IS NOT NULL".to_string(),
+        View::Album { id } => {
+            values.push(Value::Integer(id));
+            format!(
+                "photos p JOIN album_photos ap ON ap.photo_id = p.id AND ap.album_id = ?{} WHERE p.deleted_at IS NULL",
+                values.len()
+            )
+        }
+    }
+}
+
 fn now() -> i64 {
     chrono::Utc::now().timestamp()
 }
@@ -445,31 +465,29 @@ impl Library {
     }
 
     pub fn list_photos(&self, view: View) -> Result<Vec<PhotoItem>> {
+        self.find_photos(view, &Search::default(), Sort::default())
+    }
+
+    /// The photos in a view that match the search, in the order asked for.
+    pub fn find_photos(&self, view: View, search: &Search, sort: Sort) -> Result<Vec<PhotoItem>> {
         const COLUMNS: &str = "p.id, p.file_name, p.kind, p.jpeg_path IS NOT NULL, p.taken_at, \
              p.width, p.height, p.favorite, p.flag, p.import_id, p.deleted_at, p.edits IS NOT NULL, p.version, \
              (SELECT COUNT(*) FROM edit_branches b WHERE b.photo_id = p.id), p.path";
-        let (rest, album) = match view {
-            View::Library => ("WHERE p.deleted_at IS NULL ORDER BY p.taken_at DESC, p.id DESC", None),
-            View::Favorites => (
-                "WHERE p.deleted_at IS NULL AND p.favorite = 1 ORDER BY p.taken_at DESC, p.id DESC",
-                None,
-            ),
-            View::Imports => (
-                "WHERE p.deleted_at IS NULL ORDER BY p.import_id DESC, p.taken_at DESC, p.id DESC",
-                None,
-            ),
-            View::Deleted => ("WHERE p.deleted_at IS NOT NULL ORDER BY p.deleted_at DESC, p.id DESC", None),
-            View::Album { id } => (
-                "JOIN album_photos ap ON ap.photo_id = p.id AND ap.album_id = ?1 \
-                 WHERE p.deleted_at IS NULL ORDER BY p.taken_at DESC, p.id DESC",
-                Some(id),
-            ),
+        let order = match (view, sort) {
+            (View::Deleted, _) => "p.deleted_at DESC, p.id DESC",
+            (View::Imports, _) | (_, Sort::Imported) => "p.import_id DESC, p.taken_at DESC, p.id DESC",
+            (_, Sort::Newest) => "p.taken_at DESC, p.id DESC",
+            (_, Sort::Oldest) => "p.taken_at ASC, p.id ASC",
+            (_, Sort::Name) => "p.file_name COLLATE NOCASE ASC, p.id ASC",
         };
         if matches!(view, View::Deleted) {
             self.purge_expired_quietly();
         }
+        let mut values = Vec::new();
+        let photos = in_view(view, &mut values);
+        let matching = search::conditions(search, &mut values);
         let db = self.db();
-        let mut stmt = db.prepare(&format!("SELECT {COLUMNS} FROM photos p {rest}"))?;
+        let mut stmt = db.prepare(&format!("SELECT {COLUMNS} FROM {photos} AND {matching} ORDER BY {order}"))?;
         let map = |r: &Row| {
             let item = PhotoItem {
                 id: r.get(0)?,
@@ -490,10 +508,8 @@ impl Library {
             };
             Ok((item, r.get::<_, String>(14)?))
         };
-        let rows: Vec<(PhotoItem, String)> = match album {
-            Some(id) => stmt.query_map([id], map)?.collect::<rusqlite::Result<_>>()?,
-            None => stmt.query_map([], map)?.collect::<rusqlite::Result<_>>()?,
-        };
+        let rows: Vec<(PhotoItem, String)> =
+            stmt.query_map(params_from_iter(&values), map)?.collect::<rusqlite::Result<_>>()?;
         drop(stmt);
         drop(db);
         // A quick look at each file, in parallel, so a large library still lists promptly.
@@ -513,6 +529,38 @@ impl Library {
             }
         }
         Ok(items)
+    }
+
+    /// The cameras, lenses, film stocks and months of the photos in a view,
+    /// to offer as things to search for.
+    pub fn search_facets(&self, view: View) -> Result<Facets> {
+        let mut values = Vec::new();
+        let photos = in_view(view, &mut values);
+        let db = self.db();
+        let shown = format!("WITH shown AS (SELECT p.* FROM {photos})");
+        let counted = |values_sql: &str, order: &str| -> Result<Vec<Facet>> {
+            let mut stmt = db.prepare(&format!(
+                "{shown} SELECT value, COUNT(DISTINCT id) FROM ({values_sql})
+                 WHERE value IS NOT NULL AND trim(value) != '' GROUP BY value ORDER BY {order}"
+            ))?;
+            let facets = stmt
+                .query_map(params_from_iter(&values), |r| Ok(Facet { value: r.get(0)?, count: r.get(1)? }))?
+                .collect::<rusqlite::Result<_>>()?;
+            Ok(facets)
+        };
+        let most_used = "COUNT(DISTINCT id) DESC, value COLLATE NOCASE";
+        Ok(Facets {
+            cameras: counted(
+                &format!(
+                    "SELECT p.id, {} AS value FROM shown p UNION ALL SELECT p.id, p.film_camera FROM shown p",
+                    search::CAMERA
+                ),
+                most_used,
+            )?,
+            lenses: counted("SELECT p.id, p.lens AS value FROM shown p UNION ALL SELECT p.id, p.film_lens FROM shown p", most_used)?,
+            films: counted("SELECT p.id, p.film_stock AS value FROM shown p", most_used)?,
+            months: counted("SELECT p.id, substr(p.taken_at, 1, 7) AS value FROM shown p", "value DESC")?,
+        })
     }
 
     pub fn photo_info(&self, id: i64) -> Result<PhotoInfo> {

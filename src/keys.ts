@@ -36,6 +36,7 @@ export const SHORTCUTS: ShortcutGroup[] = [
       { keys: ["Arrows"], does: "Move" },
       { keys: ["Shift+Arrows"], does: "Extend the selection" },
       { keys: ["Ctrl+A"], does: "Select all" },
+      { keys: ["Ctrl+F"], does: "Search" },
       { keys: ["Enter"], does: "Open the photo" },
       { keys: ["Esc"], does: "Clear the selection" },
     ],
