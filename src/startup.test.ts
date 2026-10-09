@@ -1,19 +1,15 @@
-import { expect, mock, test } from "bun:test";
+import { expect, test } from "bun:test";
+import { fakeApi } from "./fakeApi";
 
 // A backend whose presets fail to load.
 const card = { name: "EOS_DIGITAL", path: "/media/card" };
-mock.module("./api", () => ({
-  api: {
-    libraryProblem: async () => null,
-    getOverview: async () => ({ total: 0, imports: [], albums: [] }),
-    listPhotos: async () => [],
-    listVolumes: async () => [card],
-    listPresets: async () => {
-      throw "database is locked";
-    },
-    favoritePresets: async () => [3],
+fakeApi({
+  listVolumes: async () => [card],
+  listPresets: async () => {
+    throw "database is locked";
   },
-}));
+  favoritePresets: async () => [3],
+});
 const { useStore } = await import("./store");
 
 test("when one thing fails to load at startup, it's reported and the rest still loads", async () => {

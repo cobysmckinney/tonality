@@ -1,22 +1,19 @@
-import { beforeEach, expect, mock, test } from "bun:test";
+import { beforeEach, expect, test } from "bun:test";
 import { DEFAULTS, Mask } from "./adjustments";
+import { fakeApi } from "./fakeApi";
 import { newMask } from "./masks";
 
 // The backend, with each find held until a test lets it finish.
 const finds: { kinds: string[]; finish: () => void }[] = [];
 const steps: string[] = [];
-mock.module("./api", () => ({
-  api: {
-    findParts: (_id: number, shapes: { kind: string }[]) =>
-      new Promise<void>((finish) => finds.push({ kinds: shapes.map((shape) => shape.kind), finish })),
-    prepareCircles: async () => {},
-    historyCommit: async (_id: number, adjustments: unknown, name: string) => {
-      steps.push(name);
-      return { branches: [], branchId: 1, steps: [], headId: 1, adjustments };
-    },
-    refreshRendered: async () => [1],
+fakeApi({
+  findParts: (_id, shapes) =>
+    new Promise<void>((finish) => finds.push({ kinds: shapes.map((shape) => shape.kind), finish })),
+  historyCommit: async (_id, adjustments, name) => {
+    steps.push(name);
+    return { branches: [], branchId: 1, steps: [], headId: 1, adjustments };
   },
-}));
+});
 const { useStore } = await import("./store");
 
 const size = { width: 300, height: 200 };
