@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { dragged, Handle, heldAspect, Rect, Size, toCrop, toFrame, toRect, turnedSize } from "../../crop";
+import { arrowOffset } from "../../nudge";
 import { useStore } from "../../store";
 
 const HANDLES: (Handle & { cursor: string })[] = [
@@ -12,6 +13,10 @@ const HANDLES: (Handle & { cursor: string })[] = [
   { x: 0, y: 1, cursor: "ns-resize" },
   { x: 1, y: 1, cursor: "nwse-resize" },
 ];
+/** What each corner is called, for a screen reader. */
+const CORNERS: Record<string, string> = { "-1,-1": "Top left", "1,-1": "Top right", "-1,1": "Bottom left", "1,1": "Bottom right" };
+/** How long after the last arrow key a run of nudges becomes one step, as with a slider. */
+const NUDGE_PAUSE = 600;
 /** How far around a corner or edge a press still counts as grabbing it, in screen pixels. */
 const GRIP = 14;
 const BRACKET = 18;
@@ -29,12 +34,16 @@ interface Props {
 /**
  * The crop frame drawn over the whole (tilted) photo. The frame always sits
  * upright; straightening turns the photo underneath it. Drag a corner or an
- * edge to resize, drag inside to move.
+ * edge to resize, drag inside to move. From the keyboard the frame and its
+ * corners take the focus, and the arrow keys move them.
  */
 export function CropOverlay({ photo, scale, width, height }: Props) {
   const adjustments = useStore((s) => s.editor.adjustments);
   const chosen = useStore((s) => s.cropAspect);
   const drag = useRef<{ handle: Handle; start: Rect; aspect: number | null; x: number; y: number } | null>(null);
+  // A run of arrow-key nudges, from where it started, until it is recorded.
+  const nudging = useRef<{ start: Rect; aspect: number | null } | null>(null);
+  const pause = useRef<ReturnType<typeof setTimeout>>(undefined);
   // Guides appear only while they help: thirds while the frame moves, a finer grid while straightening.
   const [dragging, setDragging] = useState(false);
   const [straightening, setStraightening] = useState(false);
@@ -74,22 +83,57 @@ export function CropOverlay({ photo, scale, width, height }: Props) {
     const next = dragged(held.start, held.handle, delta, adjustments.straighten, turned, held.aspect);
     useStore.getState().adjust({ crop: toCrop(next, turned) });
   };
+  /** Records a drag or a run of nudges from `start` as one step. */
+  const record = (start: Rect, held: number | null) => {
+    const s = useStore.getState();
+    // A shape that no longer held is let go once the crop is changed freely.
+    const now = toRect(s.editor.adjustments.crop, turned);
+    const moved = (["x", "y", "width", "height"] as const).some((key) => start[key] !== now[key]);
+    if (held === null && s.cropAspect !== null && moved) s.setCropShape("Free", null);
+    s.commitAdjust();
+  };
   const end = () => {
     const held = drag.current;
     if (!held) return;
     drag.current = null;
     setDragging(false);
-    const s = useStore.getState();
-    // A shape that no longer held is let go once the crop is changed freely.
-    const now = toRect(s.editor.adjustments.crop, turned);
-    const moved = (["x", "y", "width", "height"] as const).some((key) => held.start[key] !== now[key]);
-    if (held.aspect === null && chosen !== null && moved) s.setCropShape("Free", null);
-    s.commitAdjust();
+    record(held.start, held.aspect);
+  };
+  const endNudges = () => {
+    clearTimeout(pause.current);
+    const held = nudging.current;
+    nudging.current = null;
+    if (held) record(held.start, held.aspect);
   };
   // Leaving the crop tool mid-drag (C, M, Esc, holding \) still records the drag as its own step.
   const ending = useRef(end);
   ending.current = end;
-  useLayoutEffect(() => () => ending.current(), []);
+  const endingNudges = useRef(endNudges);
+  endingNudges.current = endNudges;
+  useLayoutEffect(
+    () => () => {
+      ending.current();
+      endingNudges.current();
+    },
+    [],
+  );
+
+  // An arrow key moves the frame, or a corner, a pixel on screen (ten with Shift), as a short drag would.
+  const nudge = (handle: Handle) => (event: React.KeyboardEvent<SVGElement>) => {
+    if (event.ctrlKey || event.metaKey || event.altKey) return;
+    // Delete here shouldn't fall through to deleting the photo.
+    if (event.key === "Delete" || event.key === "Backspace") return event.stopPropagation();
+    const offset = arrowOffset(event.key, event.shiftKey);
+    if (!offset) return;
+    // The arrows would otherwise also change photo.
+    event.preventDefault();
+    event.stopPropagation();
+    nudging.current ??= { start: rect, aspect };
+    const next = dragged(rect, handle, [offset[0] / scale, offset[1] / scale], adjustments.straighten, turned, nudging.current.aspect);
+    useStore.getState().adjust({ crop: toCrop(next, turned) });
+    clearTimeout(pause.current);
+    pause.current = setTimeout(endNudges, NUDGE_PAUSE);
+  };
 
   const grid = (parts: number) =>
     Array.from({ length: parts - 1 }, (_, i) => {
@@ -113,7 +157,19 @@ export function CropOverlay({ photo, scale, width, height }: Props) {
       onDoubleClick={(event) => event.stopPropagation()}
     >
       <path className="crop-shade" fillRule="evenodd" d={`M0 0H${width}V${height}H0ZM${left} ${top}h${w}v${h}h${-w}Z`} />
-      <rect className="crop-area" x={left} y={top} width={w} height={h} onPointerDown={begin({ x: 0, y: 0 })} />
+      <rect
+        className="crop-area"
+        x={left}
+        y={top}
+        width={w}
+        height={h}
+        tabIndex={0}
+        role="button"
+        aria-label="Crop frame: arrow keys move it"
+        onPointerDown={begin({ x: 0, y: 0 })}
+        onKeyDown={nudge({ x: 0, y: 0 })}
+        onBlur={endNudges}
+      />
       {straightening ? (
         <path className="crop-thirds fine" d={grid(8)} />
       ) : (
@@ -127,6 +183,8 @@ export function CropOverlay({ photo, scale, width, height }: Props) {
         const gy = handle.y === 0 ? top + GRIP : handle.y < 0 ? top - GRIP : top + h - GRIP;
         const gw = handle.x === 0 ? Math.max(0, w - 2 * GRIP) : 2 * GRIP;
         const gh = handle.y === 0 ? Math.max(0, h - 2 * GRIP) : 2 * GRIP;
+        // The corners take the focus too; between them they do what the edges do.
+        const corner = CORNERS[`${handle.x},${handle.y}`];
         return (
           <rect
             key={`${handle.x},${handle.y}`}
@@ -137,6 +195,13 @@ export function CropOverlay({ photo, scale, width, height }: Props) {
             height={gh}
             style={{ cursor: handle.cursor }}
             onPointerDown={begin(handle)}
+            {...(corner && {
+              tabIndex: 0,
+              role: "button",
+              "aria-label": `${corner} corner: arrow keys move it`,
+              onKeyDown: nudge(handle),
+              onBlur: endNudges,
+            })}
           />
         );
       })}

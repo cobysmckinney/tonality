@@ -416,3 +416,51 @@ fn exposure_stops_at_its_limit_however_many_masks_add_up() {
     let lower = Adjustments { exposure: 3.0, ..Default::default() };
     assert!(render(&lower) == render(&Adjustments { masks: vec![up(-2.0)], ..top }), "a mask still darkens");
 }
+
+#[test]
+fn a_photo_that_isnt_open_exports_with_its_subject_and_sky() {
+    use std::sync::atomic::AtomicBool;
+    use tonality_lib::export::{self, Format, Job, Settings};
+    use tonality_lib::library::{Library, View};
+    use tonality_lib::{import, thumbs};
+
+    let Some(gpu) = gpu() else { return };
+    let dir = tempfile::tempdir().unwrap();
+    let library = Library::open(&dir.path().join("Tonality")).unwrap();
+    let card = dir.path().join("card");
+    std::fs::create_dir_all(&card).unwrap();
+    image::RgbImage::from_pixel(60, 40, image::Rgb([90, 90, 90])).save(card.join("IMG_0001.png")).unwrap();
+    let session = import::scan(&library, 1, &[card], None, &|_, _| {}).unwrap();
+    import::run(&library, &session, &[0], &AtomicBool::new(false), &|_, _| {}).unwrap();
+    let id = library.list_photos(View::Library).unwrap()[0].id;
+
+    // The subject (left half) brightened and the sky (top half) darkened,
+    // their mattes found while the photo was open and kept in the library.
+    let darker = |parts| Mask { id: 2, adjustments: LocalAdjustments { exposure: -1.0, ..Default::default() }, ..brighter(parts) };
+    let recipe = with(vec![brighter(vec![add(Shape::Subject)]), darker(vec![add(Shape::Sky)])]);
+    library.history_commit(id, &recipe, "Masks").unwrap();
+    let top_half = image::GrayImage::from_fn(60, 40, |_, y| image::Luma([if y < 20 { 255 } else { 0 }]));
+    let mut kept = gpu.open(LinearImage { width: 1, height: 1, pixels: vec![[0.0; 3]], scene_referred: false }).unwrap();
+    kept.matte_files = Some(library.matte_files(id));
+    for (found, matte) in [(Found::Subject, left_half()), (Found::Sky, top_half)] {
+        let path = kept.matte_path(&found).unwrap();
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        matte.save(path).unwrap();
+    }
+
+    // Exported the way the app exports a photo the editor doesn't have open: loaded from the library.
+    let draw = |id: i64, recipe: &Adjustments, long_edge: u32, _deep: bool| -> anyhow::Result<image::DynamicImage> {
+        let session = thumbs::open_session(&library, id)?;
+        Ok(gpu.render_image(&session, recipe, long_edge)?.into())
+    };
+    let settings = Settings { format: Format::Png, ..Default::default() };
+    let summary = export::run(&library, &Job::of(&[id]), &settings, &draw, &AtomicBool::new(false), &|_, _| {}).unwrap();
+    assert!(summary.failed.is_empty(), "{:?}", summary.failed.iter().map(|f| &f.reason).collect::<Vec<_>>());
+    let picture = image::open(&summary.exported[0].path).unwrap().into_rgb8();
+    let level = |x: u32, y: u32| picture.get_pixel(x, y).0[1];
+
+    let plain = level(45, 30);
+    assert!(level(15, 30) > plain + 30, "the subject is brighter: {} vs {plain}", level(15, 30));
+    assert!(level(45, 10) + 20 < plain, "the sky is darker: {} vs {plain}", level(45, 10));
+    assert!(level(15, 10).abs_diff(plain) <= 2, "where both apply they cancel out: {} vs {plain}", level(15, 10));
+}

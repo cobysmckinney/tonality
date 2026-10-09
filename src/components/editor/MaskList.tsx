@@ -19,9 +19,9 @@ import {
   User,
   X,
 } from "lucide-react";
-import { Mask, MaskMode, MaskPart, Shape } from "../../adjustments";
+import { Adjustments, Mask, MaskMode, MaskPart, Shape } from "../../adjustments";
 import { api } from "../../api";
-import { canAdd, MODE_NAMES, SHAPE_NAMES } from "../../masks";
+import { canAdd, matteKey, MODE_NAMES, SHAPE_NAMES } from "../../masks";
 import { MenuEntry, useStore } from "../../store";
 import { menuBelow } from "../Toolbar";
 import { NameInput } from "./NameInput";
@@ -44,17 +44,30 @@ const MATTE_EDGE = 96;
 /** The square a thumbnail sits in, in CSS pixels; `.matte` in styles.css. */
 const MATTE_BOX = 32;
 
+/** Each recipe's `matteKey`, worked out once: the store asks on every change to anything. */
+const matteKeys = new WeakMap<Adjustments, string>();
+function matteKeyOf(adjustments: Adjustments): string {
+  let key = matteKeys.get(adjustments);
+  if (key === undefined) {
+    key = matteKey(adjustments);
+    matteKeys.set(adjustments, key);
+  }
+  return key;
+}
+
 /**
  * Each mask's coverage as a black-and-white picture, redrawn a moment after
- * the recipe stops changing.
+ * something that can change one stops changing.
  */
 function useMattes(): Map<number, ImageData> {
   const photoId = useStore((s) => s.editor.photoId);
   const ready = useStore((s) => s.editor.ready);
-  const adjustments = useStore((s) => s.editor.adjustments);
+  // A slider that can't change a mask leaves the key, and the pictures, alone.
+  const key = useStore((s) => matteKeyOf(s.editor.adjustments));
   // Kept with the photo they were drawn for: another photo's masks can have the same ids.
   const [mattes, setMattes] = useState({ photoId, pictures: new Map<number, ImageData>() });
   useEffect(() => {
+    const { adjustments } = useStore.getState().editor;
     if (!ready || photoId === null || adjustments.masks.length === 0) return;
     let current = true;
     const timer = setTimeout(async () => {
@@ -69,7 +82,7 @@ function useMattes(): Map<number, ImageData> {
       current = false;
       clearTimeout(timer);
     };
-  }, [photoId, ready, adjustments]);
+  }, [photoId, ready, key]);
   return mattes.photoId === photoId ? mattes.pictures : NO_MATTES;
 }
 

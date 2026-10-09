@@ -35,8 +35,8 @@ Tonality keeps one managed library, like Apple Photos. Importing copies photos i
 
 Opening a photo (double-click or Enter) loads it at full resolution onto the graphics card, and every slider change redraws it straight away. A photo larger than the graphics card can hold (16,384 pixels a side on most, 8,192 on some) is scaled down just enough to fit, and that is the largest it can be exported at. A RAW file that was cut short (by a failing card or an interrupted copy, say) isn't shown with the missing part blank: opening or exporting it says the file is damaged instead. Editing never touches the original: your edits are stored in the library, and the photo's thumbnail is redrawn with them so the grid matches. When an update changes how edits look, the thumbnails of edited photos are redrawn the first time the new version opens the library.
 
-- **Adjust**: light (exposure, contrast, highlights, shadows, whites, blacks), color (temperature, tint, vibrance, saturation), tone curve with per-channel curves, an eight-band color mixer, detail (sharpening, noise reduction, clarity, dehaze), effects (vignette, grain). Dehaze judges how hazy the photo is as it was taken, so raising the exposure doesn't make it take more away.
-- **Crop** (`C`): the photo is shown whole with an upright crop frame over it. Shapes (free, original, 1:1, 5:4, 4:3, 3:2, 16:9) keep the crop the way up it already is, and a square crop takes the photo's way up. A shape holds while you drag the frame (undo back to a crop of another shape and it is free again). A straighten slider turns the photo under the frame and keeps the frame on the photo, and there are quarter-turns and flips. A vignette frames the crop, and moves with the frame as you drag it. Pasting edits onto another photo leaves that photo's own crop alone.
+- **Adjust**: light (exposure, contrast, highlights, shadows, whites, blacks), color (temperature, tint, vibrance, saturation), tone curve with per-channel curves (Tab reaches its points: the arrow keys move one, `+` adds a point after it and `Delete` removes it), an eight-band color mixer, detail (sharpening, noise reduction, clarity, dehaze), effects (vignette, grain). Dehaze judges how hazy the photo is as it was taken, so raising the exposure doesn't make it take more away.
+- **Crop** (`C`): the photo is shown whole with an upright crop frame over it. Shapes (free, original, 1:1, 5:4, 4:3, 3:2, 16:9) keep the crop the way up it already is, and a square crop takes the photo's way up. A shape holds while you drag the frame (undo back to a crop of another shape and it is free again). A straighten slider turns the photo under the frame and keeps the frame on the photo, and there are quarter-turns and flips. A vignette frames the crop, and moves with the frame as you drag it. From the keyboard, Tab reaches the frame and then its corners, and the arrow keys move them a pixel at a time (ten with Shift); Enter finishes. Pasting edits onto another photo leaves that photo's own crop alone.
 - **Starting look**: RAW files open with a built-in tone curve fitted to match camera JPEGs.
 - **Histogram** with clipping markers; `J` shows clipped areas on the photo.
 - **Tools** sit in a rail of icons along the right edge; `A` adjust, `C` crop, `M` masks, `Shift+P` presets, `H` history, `I` info; `Ctrl+Z` / `Ctrl+Shift+Z` undo and redo, hold `\` for the original, `Z` or double-click for 100%, scroll to zoom, `Ctrl+C` / `Ctrl+V` copy and paste edits (in the grid too, onto a whole selection), double-click a slider to reset it.
@@ -63,7 +63,7 @@ Masks change one part of the photo. Each mask is an area, built from parts, with
 - **Select object**: draw a rough loop around something on the photo and its outline is found. The first loop on a photo takes a few seconds while the model looks the photo over (it starts as soon as you choose to draw); after that each loop takes a moment. **Draw again** replaces the loop; Esc cancels one being drawn. A loop drawn, or edits pasted, while another part is being found waits its turn. A loop pasted onto a much smaller photo may be too small to find anything in; that part is left empty, the editor says so, and you can draw it again.
 - **The list**: each mask has a black-and-white thumbnail of what it covers. The eye hides a mask's effect without removing it; **…** (or a right-click) renames, inverts or deletes it. Clicking the chosen mask again, **New mask**, or Esc lets go of it, back to the tiles.
 - **Parts**: the chosen mask opens to list its parts. **Add**, **Subtract** and **Intersect** put another one on: it adds to the area, takes from it, or keeps only what both cover ("the sky, but only its bright part"). The mark after a part changes how it combines, and the button at the end of the row inverts the whole mask. The chosen part's settings (a brush's size, a radial's feather, a range's ends) come first under the list.
-- **On the photo**: a gradient's ends and a radial's edges, centre and turning knob are dragged into place. With a brush part chosen, dragging paints; Alt erases, `[` and `]` change the size. `O` (or **Overlay**) tints the chosen mask red.
+- **On the photo**: a gradient's ends and a radial's edges, centre and turning knob are dragged into place, or reached with Tab and moved with the arrow keys (a pixel at a time, ten with Shift; the turning knob goes round, Right and Down clockwise). With a brush part chosen, dragging paints; Alt erases, `[` and `]` change the size. `O` (or **Overlay**) tints the chosen mask red.
 - **They stay on the photo**: parts are kept on the file itself, so they follow crops, turns and flips. Presets never include masks; pasting edits does.
 - **Limits**: 8 masks, 32 parts, 8 brush parts and 8 found parts (subject, sky, objects) a photo.
 
@@ -96,11 +96,15 @@ Exports are sRGB and carry the capture date, camera, lens and exposure.
 
 ## Keyboard shortcuts
 
+`?`, or the keyboard button in the title bar, lists them in the app. Menus show each item's key too.
+
 | Where | Key | Does |
 |---|---|---|
+| Anywhere | `?` | List the shortcuts |
 | Grid | Arrows, Shift+arrows | Move, extend the selection |
 | Grid | `Ctrl+A` | Select all |
 | Grid | Enter, double-click | Open the photo |
+| Grid | `Esc` | Clear the selection |
 | Grid, editor | `F` / `P` / `X` / `U` | Favorite / pick / reject / unflag |
 | Grid, editor | `Delete` | Move to Recently Deleted (kept 30 days). In the editor, not while a button or slider has focus: click the photo first |
 | Grid, editor | `Ctrl+C` / `Ctrl+V` | Copy / paste edits (in the grid, onto every selected photo) |
@@ -112,6 +116,11 @@ Exports are sRGB and carry the capture date, camera, lens and exposure.
 | Editor | hold `\`, or hold Space or Enter on the Show original button | Show the original |
 | Editor | `Z`, double-click | Fit / 100% |
 | Editor | `J` | Show clipped areas |
+| Editor | Arrows, Shift+arrows, on the crop frame or a corner | Move it a pixel, or ten |
+| Editor | Arrows, on a curve point | Move it; `+` adds a point after it, `Delete` removes it |
 | Editor | `O` | Mask overlay |
+| Editor | Arrows, Shift+arrows, on a mask's knob | Move it a pixel, or ten |
 | Editor | `[` / `]` | Brush size |
+| Editor | Alt while painting | Erase with the brush |
+| Editor | Enter, in the crop tool | Finish cropping |
 | Editor | double-click a slider | Reset it |

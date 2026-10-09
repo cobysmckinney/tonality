@@ -3,6 +3,8 @@ import { Check, ChevronRight, X } from "lucide-react";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { MenuEntry, useStore } from "../store";
 import { canStartImport } from "../sheets";
+import { opensShortcuts, SHORTCUTS } from "../keys";
+import { focusToRestore } from "../focus";
 
 function MenuList({ entries, x, y }: { entries: MenuEntry[]; x: number; y: number }) {
   const element = useRef<HTMLDivElement>(null);
@@ -57,6 +59,19 @@ function MenuList({ entries, x, y }: { entries: MenuEntry[]; x: number; y: numbe
 
 function Menu() {
   const menu = useStore((s) => s.menu);
+  // What had the focus when the menu opened, to give it back when it closes.
+  // This runs before the effect below moves the focus onto the first item.
+  const opener = useRef<HTMLElement | null>(null);
+  useEffect(() => {
+    if (menu) {
+      opener.current ??= document.activeElement as HTMLElement | null;
+      return;
+    }
+    const back = focusToRestore(opener.current, document.activeElement, document.body);
+    opener.current = null;
+    back?.focus({ preventScroll: true });
+  }, [menu]);
+
   useEffect(() => {
     if (!menu) return;
     const close = () => useStore.getState().closeMenu();
@@ -124,6 +139,104 @@ function Confirm() {
   );
 }
 
+/** One shortcut's keys, each key in its own box: "Ctrl+Shift+Z" as Ctrl, Shift, Z. */
+function Keys({ keys }: { keys: string[] }) {
+  return (
+    <span className="keys">
+      {keys.map((combo, i) => (
+        <span key={combo} className="combo">
+          {i > 0 && <span className="or">or</span>}
+          {(combo === "+" ? ["+"] : combo.split("+")).map((key) => (
+            <kbd key={key}>{key}</kbd>
+          ))}
+        </span>
+      ))}
+    </span>
+  );
+}
+
+/** Every keyboard shortcut, opened with ? or the keyboard button in the title bar. */
+function Shortcuts() {
+  const open = useStore((s) => s.shortcutsOpen);
+  const busy = useStore((s) => s.importState !== null || s.exportState !== null || s.confirmRequest !== null);
+  const opener = useRef<HTMLElement | null>(null);
+  const closeButton = useRef<HTMLButtonElement>(null);
+
+  // Taken before anything else hears the key, so Esc here doesn't also close the photo behind.
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      const s = useStore.getState();
+      if (s.shortcutsOpen && (event.key === "Escape" || event.key === "?")) {
+        event.stopPropagation();
+        event.preventDefault();
+        s.setShortcutsOpen(false);
+      } else if (!s.shortcutsOpen) {
+        const typing = (event.target as HTMLElement).closest?.("input:not([type=range]), textarea") != null;
+        if (!opensShortcuts(event.key, typing, s)) return;
+        event.stopPropagation();
+        event.preventDefault();
+        // Noted now: the panels behind go inert as the list opens, which can drop their focus.
+        opener.current = document.activeElement as HTMLElement | null;
+        s.setShortcutsOpen(true);
+      }
+    };
+    window.addEventListener("keydown", onKey, { capture: true });
+    return () => window.removeEventListener("keydown", onKey, { capture: true });
+  }, []);
+
+  // An import, export or question that opens meanwhile (a dropped folder, say) takes its place.
+  useEffect(() => {
+    if (open && busy) useStore.getState().setShortcutsOpen(false);
+  }, [open, busy]);
+
+  // The list takes the focus onto its Close button, and gives it back where it was
+  // when it closes, so the place in a panel isn't lost.
+  useEffect(() => {
+    if (open) {
+      opener.current ??= document.activeElement as HTMLElement | null;
+      closeButton.current?.focus();
+      return;
+    }
+    const back = opener.current;
+    opener.current = null;
+    if (back?.isConnected && back !== document.body && (document.activeElement === document.body || !document.activeElement)) {
+      back.focus({ preventScroll: true });
+    }
+  }, [open]);
+
+  if (!open) return null;
+  const close = () => useStore.getState().setShortcutsOpen(false);
+  return (
+    <div className="scrim" onMouseDown={(event) => event.target === event.currentTarget && close()}>
+      <div className="panel dialog shortcuts" role="dialog" aria-modal="true" aria-labelledby="shortcuts-title">
+        <header className="shortcuts-header">
+          <h2 id="shortcuts-title">Keyboard shortcuts</h2>
+          <button className="icon-button small" aria-label="Close" title="Close (Esc)" ref={closeButton} onClick={close}>
+            <X size={14} />
+          </button>
+        </header>
+        <div className="shortcut-groups">
+          {SHORTCUTS.map((group) => (
+            <section key={group.title}>
+              <h3>{group.title}</h3>
+              <dl>
+                {group.shortcuts.map((shortcut) => (
+                  <div key={shortcut.does} className="shortcut">
+                    <dt>{shortcut.does}</dt>
+                    <dd>
+                      <Keys keys={shortcut.keys} />
+                    </dd>
+                  </div>
+                ))}
+              </dl>
+            </section>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function Toasts() {
   const toasts = useStore((s) => s.toasts);
   const dismiss = useStore((s) => s.dismissToast);
@@ -182,6 +295,7 @@ export function Overlays() {
     <>
       <DropTarget />
       <Confirm />
+      <Shortcuts />
       <Menu />
       <Toasts />
     </>

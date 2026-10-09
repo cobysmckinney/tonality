@@ -1,6 +1,27 @@
 import { describe, expect, test } from "bun:test";
-import { Adjustments, defaultAdjustments, Point } from "./adjustments";
-import { apply, canAdd, circleShape, foundCount, frameToSource, fromOriginal, MAX_FOUND, newMask, newShape, onOriginal, screenMap, stillHeld } from "./masks";
+import { readFileSync } from "node:fs";
+import { Adjustments, defaultAdjustments, Mask, MaskPart, Point, Shape } from "./adjustments";
+import {
+  apply,
+  brushCount,
+  canAdd,
+  circleShape,
+  foundCount,
+  frameToSource,
+  fromOriginal,
+  matteKey,
+  MAX_BRUSHES,
+  MAX_FOUND,
+  MAX_MASKS,
+  MAX_PARTS,
+  newMask,
+  newShape,
+  nudge,
+  onOriginal,
+  partCount,
+  screenMap,
+  stillHeld,
+} from "./masks";
 
 const photo = { width: 300, height: 200 };
 const edited = (change: Partial<Adjustments>): Adjustments => ({ ...defaultAdjustments(), ...change });
@@ -130,6 +151,26 @@ describe("new masks", () => {
   });
 });
 
+describe("an arrow key on a mask's knob", () => {
+  test("moves it a pixel, or ten with Shift", () => {
+    expect(nudge("ArrowLeft", false)).toEqual([-1, 0]);
+    expect(nudge("ArrowDown", true)).toEqual([0, 10]);
+  });
+
+  test("leaves other keys alone", () => {
+    expect(nudge("Enter", false)).toBeNull();
+    expect(nudge("a", false, [10, 0])).toBeNull();
+  });
+
+  test("turns a turning knob round its centre, Right and Down clockwise", () => {
+    // On screen y runs down, so clockwise from the right is downwards.
+    near(nudge("ArrowRight", false, [30, 0])!, [0, 1]);
+    near(nudge("ArrowDown", false, [30, 0])!, [0, 1]);
+    near(nudge("ArrowLeft", true, [30, 0])!, [0, -10]);
+    near(nudge("ArrowUp", false, [0, -30])!, [-1, 0]);
+  });
+});
+
 describe("a drag on the photo", () => {
   const start = { maskId: 1, partIndex: 0 };
 
@@ -145,5 +186,82 @@ describe("a drag on the photo", () => {
   test("lets go when another part is chosen or a loop is drawn", () => {
     expect(stillHeld(start, { maskId: 1, partIndex: 1, circling: false })).toBe(false);
     expect(stillHeld(start, { maskId: 1, partIndex: 0, circling: true })).toBe(false);
+  });
+});
+
+describe("limits", () => {
+  const brush: MaskPart = { mode: "add", shape: { kind: "brush", strokes: [] } };
+  const linear: MaskPart = { mode: "add", shape: { kind: "linear", from: [0.5, 0.3], to: [0.5, 0.6] } };
+  const subject: MaskPart = { mode: "add", shape: { kind: "subject" } };
+  const masksOf = (...parts: MaskPart[][]): Mask[] =>
+    parts.map((list, i) => ({ ...newMask([], "linear", photo, defaultAdjustments()), id: i + 1, parts: list }));
+
+  test("are the ones the backend draws", () => {
+    const rust = readFileSync(new URL("../src-tauri/src/masks.rs", import.meta.url), "utf8");
+    const limit = (name: string) => Number(rust.match(new RegExp(`pub const ${name}: usize = (\\d+);`))?.[1]);
+    expect({ MAX_MASKS, MAX_PARTS, MAX_BRUSHES, MAX_FOUND }).toEqual({
+      MAX_MASKS: limit("MAX_MASKS"),
+      MAX_PARTS: limit("MAX_PARTS"),
+      MAX_BRUSHES: limit("MAX_BRUSHES"),
+      MAX_FOUND: limit("MAX_FOUND"),
+    });
+  });
+
+  test("parts are counted across every mask", () => {
+    const full = masksOf(Array(MAX_PARTS / 2).fill(linear), Array(MAX_PARTS / 2).fill(linear));
+    expect(partCount(full)).toBe(MAX_PARTS);
+    for (const kind of ["linear", "radial", "luminance", "brush", "subject", "object"] as const) {
+      expect(canAdd(full, kind)).toBe(false);
+    }
+    const short = masksOf(Array(MAX_PARTS / 2).fill(linear), Array(MAX_PARTS / 2 - 1).fill(linear));
+    expect(canAdd(short, "linear")).toBe(true);
+  });
+
+  test("brushes have a limit of their own, across every mask", () => {
+    expect(canAdd(masksOf(Array(MAX_BRUSHES - 1).fill(brush), [linear]), "brush")).toBe(true);
+    const full = masksOf(Array(MAX_BRUSHES - 1).fill(brush), [linear, brush]);
+    expect(brushCount(full)).toBe(MAX_BRUSHES);
+    expect(canAdd(full, "brush")).toBe(false);
+    expect(canAdd(full, "linear")).toBe(true);
+    expect(canAdd(full, "subject")).toBe(true);
+  });
+
+  test("with found parts full, the subject can be used again but nothing new can be found", () => {
+    const objects: MaskPart[] = Array.from({ length: MAX_FOUND - 1 }, (_, i) => ({
+      mode: "add",
+      shape: { kind: "object", points: [[i / 10, 0], [0.5, 0.5], [0, 0.5]] },
+    }));
+    const full = masksOf(objects, [subject, linear], [subject]);
+    expect(foundCount(full)).toBe(MAX_FOUND);
+    expect(canAdd(full, "subject")).toBe(true);
+    expect(canAdd(full, "sky")).toBe(false);
+    expect(canAdd(full, "object")).toBe(false);
+    expect(canAdd(full, "radial")).toBe(true);
+  });
+});
+
+describe("the masks' thumbnails", () => {
+  const radial = newMask([], "radial", photo, defaultAdjustments());
+  const masked = edited({ masks: [radial] });
+
+  test("are left alone by sliders that can't change a mask", () => {
+    const key = matteKey(masked);
+    expect(matteKey({ ...masked, exposure: 1, saturation: 30, grain: 20 })).toBe(key);
+    const brighter = { ...radial, name: "Face", adjustments: { ...radial.adjustments, exposure: 0.5 } };
+    expect(matteKey({ ...masked, masks: [brighter] })).toBe(key);
+  });
+
+  test("are redrawn when a part, the way a mask combines, or the framing changes", () => {
+    const key = matteKey(masked);
+    const moved = { ...radial, parts: [{ ...radial.parts[0], shape: { ...radial.parts[0].shape, angle: 30 } as Shape }] };
+    expect(matteKey({ ...masked, masks: [moved] })).not.toBe(key);
+    expect(matteKey({ ...masked, masks: [{ ...radial, invert: true }] })).not.toBe(key);
+    expect(matteKey({ ...masked, rotation: 1 })).not.toBe(key);
+    expect(matteKey({ ...masked, crop: { x: 0.5, y: 0.5, width: 0.5, height: 0.5 } })).not.toBe(key);
+  });
+
+  test("follow the exposure only when a brightness range reads it", () => {
+    const ranged = edited({ masks: [newMask([], "luminance", photo, defaultAdjustments())] });
+    expect(matteKey({ ...ranged, exposure: 1 })).not.toBe(matteKey(ranged));
   });
 });
