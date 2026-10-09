@@ -1,5 +1,6 @@
-import { useId, useMemo, useRef, useState } from "react";
-import { CurveChannel, CurvePoints, curveSampler, isStraight, POINT_GAP } from "../../adjustments";
+import { useId, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { CurveChannel, CurvePoints, curveSampler, isStraight } from "../../adjustments";
+import { addPointNear, movePoint, nudgePoint, removePoint } from "../../curve";
 import { useStore } from "../../store";
 import { onTabKey } from "../../tabs";
 
@@ -13,9 +14,14 @@ const CHANNELS: { key: CurveChannel; label: string }[] = [
 const SIZE = 100;
 const clamp = (v: number, low = 0, high = 1) => Math.min(high, Math.max(low, v));
 
+/** How long after the last arrow key a run of nudges becomes one step, as with a slider. */
+const NUDGE_PAUSE = 600;
+
 /**
  * The tone curve. Click the line to add a point, drag points to bend it,
  * double-click a point to remove it. The two end points only move up and down.
+ * From the keyboard each point takes the focus: the arrows move it, + adds
+ * one after it, Delete removes it.
  */
 export function CurveEditor() {
   const curves = useStore((s) => s.editor.adjustments.curves);
@@ -25,6 +31,14 @@ export function CurveEditor() {
   const svg = useRef<SVGSVGElement>(null);
   const dragging = useRef<number | null>(null);
   const points = curves[channel];
+  // The point to give the focus to once the points are redrawn, after one is added or removed.
+  const focusNext = useRef<number | null>(null);
+  const pause = useRef<ReturnType<typeof setTimeout>>(undefined);
+  useLayoutEffect(() => {
+    const index = focusNext.current;
+    focusNext.current = null;
+    if (index !== null) svg.current?.querySelectorAll<SVGCircleElement>(".curve-point")[index]?.focus();
+  }, [points]);
 
   const setPoints = (next: CurvePoints) => useStore.getState().adjust({ curves: { ...curves, [channel]: next } });
 
@@ -57,13 +71,6 @@ export function CurveEditor() {
     return [clamp((event.clientX - rect.left) / rect.width), clamp(1 - (event.clientY - rect.top) / rect.height)];
   };
 
-  const movePoint = (index: number, [x, y]: [number, number]) => {
-    const last = points.length - 1;
-    // Each point stays between its neighbours; the ends keep their place across.
-    const fixedX = index === 0 ? 0 : index === last ? 1 : clamp(x, points[index - 1][0] + POINT_GAP, points[index + 1][0] - POINT_GAP);
-    setPoints(points.map((p, i) => (i === index ? [fixedX, y] : p)));
-  };
-
   const onPointerDown = (event: React.PointerEvent<SVGSVGElement>) => {
     if (event.button !== 0) return;
     const [x, y] = locate(event);
@@ -82,7 +89,7 @@ export function CurveEditor() {
   };
 
   const onPointerMove = (event: React.PointerEvent) => {
-    if (dragging.current !== null) movePoint(dragging.current, locate(event));
+    if (dragging.current !== null) setPoints(movePoint(points, dragging.current, locate(event)));
   };
 
   const endDrag = () => {
@@ -91,15 +98,51 @@ export function CurveEditor() {
     useStore.getState().commitAdjust();
   };
 
-  const removePoint = (index: number) => {
-    const last = points.length - 1;
-    if (index === 0 || index === last) {
-      // End points can't be removed; put them back in their corner instead.
-      setPoints(points.map((p, i) => (i === index ? [p[0], index === 0 ? 0 : 1] : p)));
-    } else {
-      setPoints(points.filter((_, i) => i !== index));
-    }
+  const remove = (index: number) => {
+    setPoints(removePoint(points, index));
     useStore.getState().commitAdjust();
+  };
+
+  const commitNudges = () => {
+    clearTimeout(pause.current);
+    pause.current = undefined;
+    useStore.getState().commitAdjust();
+  };
+  const onPointKey = (index: number) => (event: React.KeyboardEvent<SVGCircleElement>) => {
+    if (event.ctrlKey || event.metaKey || event.altKey) return;
+    if (event.key === "Escape") {
+      // Off the point, as off a slider, rather than out of the photo.
+      event.stopPropagation();
+      event.currentTarget.blur();
+      return;
+    }
+    if (event.key === "Delete" || event.key === "Backspace") {
+      // Removes the point, and stops there: the photo isn't deleted.
+      event.preventDefault();
+      event.stopPropagation();
+      commitNudges();
+      focusNext.current = index === 0 || index === points.length - 1 ? index : index - 1;
+      remove(index);
+      return;
+    }
+    if (event.key === "+" || event.key === "=" || event.key === "Insert") {
+      event.preventDefault();
+      const added = addPointNear(points, index);
+      if (!added) return;
+      commitNudges();
+      focusNext.current = added.index;
+      setPoints(added.points);
+      useStore.getState().commitAdjust();
+      return;
+    }
+    const next = nudgePoint(points, index, event.key, event.shiftKey);
+    if (!next) return;
+    // The arrows would otherwise also change photo.
+    event.preventDefault();
+    event.stopPropagation();
+    setPoints(next);
+    clearTimeout(pause.current);
+    pause.current = setTimeout(commitNudges, NUDGE_PAUSE);
   };
 
   return (
@@ -149,7 +192,12 @@ export function CurveEditor() {
             cy={(1 - y) * SIZE}
             r={2.6}
             className="curve-point"
-            onDoubleClick={() => removePoint(index)}
+            tabIndex={0}
+            role="button"
+            aria-label={`Point ${index + 1} of ${points.length}: arrow keys move it, + adds one, Delete removes it`}
+            onDoubleClick={() => remove(index)}
+            onKeyDown={onPointKey(index)}
+            onBlur={() => pause.current !== undefined && commitNudges()}
           />
         ))}
       </svg>
