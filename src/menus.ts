@@ -1,4 +1,3 @@
-import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { api } from "./api";
 import { MenuEntry, useStore } from "./store";
 
@@ -65,7 +64,7 @@ export function photoMenu(ids: number[]): MenuEntry[] {
       ? [
           {
             label: "Show in file manager",
-            run: () => void api.getPhotoInfo(single).then((info) => revealItemInDir(info.path)),
+            run: () => void api.getPhotoInfo(single).then((info) => s.reveal(info.path)),
           },
         ]
       : []),

@@ -1,5 +1,4 @@
 import { create } from "zustand";
-import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import {
   Adjustments,
   DEFAULTS,
@@ -1487,9 +1486,9 @@ export const useStore = create<State>((set, get) => {
 
     async reveal(path) {
       try {
-        await revealItemInDir(path);
-      } catch {
-        get().toast({ text: `${path} is no longer there`, tone: "error" });
+        await api.reveal(path);
+      } catch (error) {
+        get().toast({ text: String(error), tone: "error" });
       }
     },
 

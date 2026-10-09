@@ -405,6 +405,9 @@ export const api = {
   planExport: (job: ExportJob, settings: ExportSettings | null) => invoke<ExportPlan>("plan_export", { job, settings }),
   runExport: (job: ExportJob, settings: ExportSettings) => invoke<ExportSummary>("run_export", { job, settings }),
   cancelExport: () => invoke<void>("cancel_export"),
+
+  /** Shows a file or folder in the file manager: only ones inside the library, written by an export, or chosen. */
+  reveal: (path: string) => invoke<void>("reveal", { path }),
 };
 
 // `photo://localhost/` on Linux and macOS, `http://photo.localhost/` on Windows.

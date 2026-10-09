@@ -373,6 +373,14 @@ impl Library {
         &self.root
     }
 
+    /// Whether `path` is the library folder or inside it, judged by the path
+    /// alone: one that climbs out with `..` is not.
+    pub fn holds(&self, path: &Path) -> bool {
+        use std::path::Component;
+        path.starts_with(&self.root)
+            && path.components().all(|part| matches!(part, Component::Prefix(_) | Component::RootDir | Component::Normal(_)))
+    }
+
     pub fn originals_dir(&self) -> PathBuf {
         self.root.join("Originals")
     }

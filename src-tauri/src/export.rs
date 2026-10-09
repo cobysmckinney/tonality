@@ -586,6 +586,12 @@ impl Library {
         let stored = self.setting(SETTINGS_KEY)?;
         Ok(stored.and_then(|json| serde_json::from_str::<Settings>(&json).ok()).unwrap_or_default().tidied())
     }
+
+    /// Whether an export wrote `path`, as a photo's history still records it.
+    pub fn exported(&self, path: &Path) -> Result<bool> {
+        let Some(path) = path.to_str() else { return Ok(false) };
+        Ok(self.db().query_row("SELECT EXISTS (SELECT 1 FROM exports WHERE path = ?1)", [path], |r| r.get(0))?)
+    }
 }
 
 fn folder_of(library: &Library, settings: &Settings) -> PathBuf {

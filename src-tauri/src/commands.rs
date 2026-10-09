@@ -1,7 +1,7 @@
 //! Everything the interface can ask the backend to do.
 
 use std::cell::RefCell;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
@@ -255,6 +255,35 @@ fn check_export_folder(state: &AppState, grants: &Grants, settings: &export::Set
     let Some(folder) = &settings.folder else { return Ok(()) };
     let last = state.library.export_settings().map_err(message)?.folder;
     grants.check([folder.as_path()], last.as_slice()).map_err(message)
+}
+
+// ---- showing files ----
+
+/// Shows `path` in the file manager. Only paths the app knows are shown:
+/// inside the library, files an export wrote, ones the person chose or
+/// dropped, and the library folder while it can't open.
+#[tauri::command(async)]
+pub fn reveal(app: AppHandle, path: PathBuf) -> CommandResult<()> {
+    let library = app.try_state::<AppState>().map(|state| state.library.clone());
+    let problem = app.state::<StartupProblem>().0.lock().unwrap().as_ref().and_then(|problem| problem.path.clone());
+    if !may_reveal(&path, library.as_deref(), &app.state::<Grants>(), problem.as_deref()).map_err(message)? {
+        return Err(format!("Tonality only shows its own files and ones you chose, and {} isn't one of them.", path.display()));
+    }
+    if !path.exists() {
+        return Err(format!("{} is no longer there", path.display()));
+    }
+    tauri_plugin_opener::reveal_item_in_dir(&path).map_err(|error| error.to_string())
+}
+
+/// Whether `reveal` may show `path`. `problem` is the library folder that couldn't open.
+fn may_reveal(path: &Path, library: Option<&Library>, grants: &Grants, problem: Option<&Path>) -> anyhow::Result<bool> {
+    if grants.allows(path) || problem == Some(path) {
+        return Ok(true);
+    }
+    match library {
+        Some(library) => Ok(library.holds(path) || library.exported(path)?),
+        None => Ok(false),
+    }
 }
 
 // ---- importing ----
@@ -915,5 +944,34 @@ mod tests {
         assert!(!lock.is_poisoned());
         *recover(&lock) = Some(2);
         assert_eq!(*recover(&lock), Some(2));
+    }
+
+    #[test]
+    fn only_known_paths_are_shown_in_the_file_manager() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let root = dir.path().join("Tonality");
+        let library = Library::open(&root).unwrap();
+        let grants = Grants::default();
+        let preset = dir.path().join("look.tonality-preset");
+        grants.allow([preset.clone()]);
+        let shown = |path: &Path| may_reveal(path, Some(&library), &grants, None).unwrap();
+
+        assert!(shown(&root.join("Originals/2026/2026-03-14/IMG_0462.CR2")), "a photo's original");
+        assert!(shown(&root.join("Exports")), "the library's own folders");
+        assert!(shown(&preset), "a file chosen in a dialog");
+        assert!(!shown(dir.path()), "the folder around the library");
+        assert!(!shown(&root.join("Originals/../../secret")), "climbs out of the library");
+        assert!(!shown(Path::new("/etc/passwd")));
+        assert!(!shown(&dir.path().join("look.tonality-preset/..")), "climbs out of a chosen file");
+        assert!(!shown(&dir.path().join("Tonality-other")), "only shares the library's name");
+    }
+
+    #[test]
+    fn a_library_that_could_not_open_shows_only_its_own_folder() {
+        let grants = Grants::default();
+        let root = Path::new("/home/me/Pictures/Tonality");
+        assert!(may_reveal(root, None, &grants, Some(root)).unwrap());
+        assert!(!may_reveal(&root.join("Originals"), None, &grants, Some(root)).unwrap(), "nothing to say what is inside");
+        assert!(!may_reveal(root, None, &grants, None).unwrap());
     }
 }
