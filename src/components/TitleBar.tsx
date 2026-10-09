@@ -3,6 +3,7 @@ import { Copy, Keyboard, Minus, Square, X } from "lucide-react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { count } from "../format";
 import { useStore } from "../store";
+import { AppMark } from "./About";
 
 /**
  * What the app is busy with, if anything. Lives in the title bar so it is
@@ -62,12 +63,14 @@ export function TitleBar() {
   return (
     <header className="titlebar" data-tauri-drag-region>
       {/* The app's mark: its icon's tone curve, without the tile, drawn heavier to hold up at this size. */}
-      <svg className="app-mark" viewBox="0 0 1024 1024" role="img" aria-label="Tonality">
-        <path d="M156 846C356 814 438 692 512 512C586 332 668 210 868 178" />
-        <circle cx="156" cy="846" r="92" />
-        <circle cx="512" cy="512" r="92" />
-        <circle cx="868" cy="178" r="92" />
-      </svg>
+      <button
+        className="app-mark-button"
+        aria-label="About Tonality"
+        title="About Tonality"
+        onClick={() => useStore.getState().setAboutOpen(true)}
+      >
+        <AppMark className="app-mark" />
+      </button>
       <Activity />
       <div className="window-controls">
         <button

@@ -152,7 +152,7 @@ export function PhotoGrid() {
     const onKey = (event: KeyboardEvent) => {
       const s = useStore.getState();
       const typing = (event.target as HTMLElement).closest("input, textarea");
-      if (typing || s.openId !== null || s.importState || s.exportState || s.filmSheet || s.confirmRequest || s.menu || s.shortcutsOpen) return;
+      if (typing || s.openId !== null || s.importState || s.exportState || s.filmSheet || s.confirmRequest || s.menu || s.shortcutsOpen || s.aboutOpen) return;
       const selected = [...s.selection];
       const inTrash = s.view.kind === "deleted";
       const key = event.key.length === 1 ? event.key.toLowerCase() : event.key;
