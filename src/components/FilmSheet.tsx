@@ -47,7 +47,9 @@ function Suggest(props: {
         aria-activedescendant={active >= 0 ? `${list}-${active}` : undefined}
         autoFocus={props.autoFocus}
         spellCheck={false}
-        onFocus={() => setOpen(true)}
+        // Offered on a click, while typing, or with the down arrow; not just
+        // for arriving in the field, where the list would cover the next one.
+        onMouseDown={() => setOpen(true)}
         onBlur={() => setOpen(false)}
         onChange={(event) => {
           props.onChange(event.currentTarget.value);
@@ -55,6 +57,11 @@ function Suggest(props: {
           setActive(-1);
         }}
         onKeyDown={(event) => {
+          if (!open && event.key === "ArrowDown") {
+            event.preventDefault();
+            setOpen(true);
+            return;
+          }
           if (shown.length === 0) return;
           if (event.key === "ArrowDown" || event.key === "ArrowUp") {
             event.preventDefault();
