@@ -9,7 +9,8 @@
 //!   .tonality/thumbs/…   .tonality/previews/…   .tonality/mattes/…
 //! ```
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
@@ -18,6 +19,7 @@ use anyhow::{bail, Context, Result};
 use rayon::prelude::*;
 use rusqlite::{params, Connection, OptionalExtension, Row};
 use serde::{Deserialize, Serialize};
+use walkdir::WalkDir;
 
 /// How long a photo stays in Recently Deleted before its files are removed.
 pub const TRASH_RETENTION_DAYS: i64 = 30;
@@ -416,13 +418,22 @@ impl Library {
         drop(stmt);
         drop(db);
         // A quick look at each file, in parallel, so a large library still lists promptly.
-        Ok(rows
+        let mut items: Vec<PhotoItem> = rows
             .into_par_iter()
             .map(|(mut item, path)| {
                 item.missing = !self.root.join(path).exists();
                 item
             })
-            .collect())
+            .collect();
+        let missing: Vec<i64> = items.iter().filter(|item| item.missing).map(|item| item.id).collect();
+        if !missing.is_empty() {
+            // Moved within the library folder, perhaps. Not finding them mustn't stop the library from showing.
+            match self.find_moved(&missing) {
+                Ok(found) => items.iter_mut().filter(|item| found.contains(&item.id)).for_each(|item| item.missing = false),
+                Err(error) => eprintln!("looking for moved originals: {error:#}"),
+            }
+        }
+        Ok(items)
     }
 
     pub fn photo_info(&self, id: i64) -> Result<PhotoInfo> {
@@ -461,27 +472,121 @@ impl Library {
         .with_context(|| format!("photo {id} is not in the library"))
     }
 
-    /// Fails with a plain message when the original has gone from the library folder.
-    pub fn photo_files(&self, id: i64) -> Result<PhotoFiles> {
-        let (relative, files) = self
-            .db()
+    /// Where the photo's files should be, whether or not they are there.
+    pub fn expected_files(&self, id: i64) -> Result<PhotoFiles> {
+        self.db()
             .query_row("SELECT path, jpeg_path, kind FROM photos WHERE id = ?1", [id], |r| {
-                let relative: String = r.get(0)?;
-                let files = PhotoFiles {
-                    path: self.root.join(&relative),
+                Ok(PhotoFiles {
+                    path: self.root.join(r.get::<_, String>(0)?),
                     jpeg_path: r.get::<_, Option<String>>(1)?.map(|p| self.root.join(p)),
                     is_raw: r.get::<_, String>(2)? == "raw",
-                };
-                Ok((relative, files))
+                })
             })
-            .with_context(|| format!("photo {id} is not in the library"))?;
-        if !files.path.exists() {
-            bail!(
-                "The original file is missing from the library folder ({relative}). \
-                 Put it back there to edit or export this photo."
-            );
+            .with_context(|| format!("photo {id} is not in the library"))
+    }
+
+    /// Fails with a plain message when the original has gone from the library
+    /// folder and can't be found elsewhere in it.
+    pub fn photo_files(&self, id: i64) -> Result<PhotoFiles> {
+        let files = self.expected_files(id)?;
+        if files.path.exists() {
+            return Ok(files);
         }
-        Ok(files)
+        if self.find_moved(&[id])?.contains(&id) {
+            return self.expected_files(id);
+        }
+        let relative = files.path.strip_prefix(&self.root).unwrap_or(&files.path);
+        bail!(
+            "The original file is missing from the library folder ({}). \
+             Put it back there to edit or export this photo.",
+            relative.display()
+        );
+    }
+
+    /// Which of these photos' originals are missing from the library folder,
+    /// after looking for any that were moved within it.
+    pub fn missing_originals(&self, ids: &[i64]) -> Result<HashSet<i64>> {
+        let mut missing = Vec::new();
+        for &id in ids {
+            if !self.expected_files(id)?.path.exists() {
+                missing.push(id);
+            }
+        }
+        if missing.is_empty() {
+            return Ok(HashSet::new());
+        }
+        let found = self.find_moved(&missing)?;
+        Ok(missing.into_iter().filter(|id| !found.contains(id)).collect())
+    }
+
+    /// Looks through `Originals` for these photos' originals, which aren't
+    /// where the library expects them: moved to another folder by hand, say.
+    /// A file with the photo's name and fingerprint is its original, and the
+    /// library follows it there, along with a paired JPEG of the same name
+    /// that sits next to it. Returns the photos found.
+    pub fn find_moved(&self, ids: &[i64]) -> Result<HashSet<i64>> {
+        struct Lost {
+            id: i64,
+            fingerprint: String,
+            size: u64,
+            jpeg: Option<PathBuf>,
+        }
+        // By file name, which is what a quick walk of the folders can match on.
+        let mut wanted: HashMap<OsString, Vec<Lost>> = HashMap::new();
+        {
+            let db = self.db();
+            let mut stmt = db.prepare("SELECT path, jpeg_path, fingerprint, file_size FROM photos WHERE id = ?1")?;
+            for &id in ids {
+                let row = stmt
+                    .query_row([id], |r| {
+                        Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?, r.get(2)?, r.get::<_, i64>(3)?))
+                    })
+                    .optional()?;
+                let Some((path, jpeg, fingerprint, size)) = row else { continue };
+                if let Some(name) = Path::new(&path).file_name() {
+                    let jpeg = jpeg.map(|jpeg| self.root.join(jpeg));
+                    wanted.entry(name.to_owned()).or_default().push(Lost { id, fingerprint, size: size as u64, jpeg });
+                }
+            }
+        }
+        let mut found = HashSet::new();
+        if wanted.is_empty() {
+            return Ok(found);
+        }
+        let hidden = |entry: &walkdir::DirEntry| entry.file_name().to_string_lossy().starts_with('.');
+        let walker = WalkDir::new(self.originals_dir()).into_iter().filter_entry(|entry| entry.depth() == 0 || !hidden(entry));
+        let relative = |path: &Path| path.strip_prefix(&self.root).unwrap_or(path).to_string_lossy().into_owned();
+        for entry in walker.flatten().filter(|entry| entry.file_type().is_file()) {
+            let Some(lost) = wanted.get_mut(entry.file_name()) else { continue };
+            // The size first: it's free, and rules out most files that only share a name.
+            let Ok(size) = entry.metadata().map(|meta| meta.len()) else { continue };
+            if !lost.iter().any(|photo| photo.size == size) {
+                continue;
+            }
+            let Ok((fingerprint, _)) = crate::media::fingerprint(entry.path()) else { continue };
+            let Some(at) = lost.iter().position(|photo| photo.size == size && photo.fingerprint == fingerprint) else {
+                continue;
+            };
+            let photo = lost.swap_remove(at);
+            // A paired JPEG that is no longer where it was is looked for next to its RAW.
+            let jpeg = match photo.jpeg {
+                Some(jpeg) if !jpeg.exists() => {
+                    let beside = jpeg.file_name().and_then(|name| Some(entry.path().parent()?.join(name)));
+                    Some(beside.filter(|beside| beside.is_file()).unwrap_or(jpeg))
+                }
+                jpeg => jpeg,
+            };
+            // A file another photo already stands for is left to it.
+            let updated = self.db().execute(
+                "UPDATE photos SET path = ?2, jpeg_path = ?3 WHERE id = ?1
+                 AND NOT EXISTS (SELECT 1 FROM photos WHERE path = ?2 AND id != ?1)",
+                params![photo.id, relative(entry.path()), jpeg.as_deref().map(relative)],
+            )?;
+            if updated == 1 {
+                found.insert(photo.id);
+            }
+        }
+        Ok(found)
     }
 
     /// Every fingerprint in the library, mapped to its photo and whether that
