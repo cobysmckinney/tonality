@@ -50,7 +50,8 @@ struct Params {
     color: vec4f,
     // sharpening, noise reduction, vignette, grain
     detail: vec4f,
-    // show clipping, leave outside the photo transparent, draw the mask to tint as a matte, unused
+    // show clipping, leave outside the photo transparent, draw the mask to tint as a matte,
+    // 1 if the source is a film negative's positive
     flags: vec4f,
     // Per colour band: hue shift, saturation, luminance, unused.
     mixer: array<vec4f, 8>,
@@ -336,9 +337,11 @@ fn fragment(in: VertexOutput) -> @location(0) vec4f {
         return vec4f(vec3f(tint), 1.0);
     }
 
-    if (scene_referred) {
+    if (scene_referred && p.flags.w < 0.5) {
         // Where one sensor channel has clipped the colour can't be trusted;
         // fade it to neutral so blown highlights come out white, not pink.
+        // Not in a negative's positive: what clipped in its scan was the
+        // light around the film, which is black now.
         let peak = max(c.r, max(c.g, c.b));
         c = mix(c, vec3f(peak), smoothstep(0.82, 1.0, peak));
     }

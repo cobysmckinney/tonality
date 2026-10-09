@@ -50,6 +50,8 @@ export function photoMenu(ids: number[]): MenuEntry[] {
     ...(single !== null ? [{ label: "Copy edits", hint: "Ctrl+C", run: () => void s.copyEdits(single) }] : []),
     { label: "Paste edits", hint: "Ctrl+V", disabled: s.clipboard === null, run: () => void s.pasteEdits(ids) },
     { label: "Apply preset", submenu: presetEntries(ids) },
+    // Frames of one roll of film, measured together so they match and keep their own colours.
+    ...(ids.length > 1 ? [{ label: "Balance as one roll", run: () => void s.balanceRoll(ids) }] : []),
     { label: "Revert to original", disabled: !photos.some((p) => p.edited), run: () => void s.revertEdits(ids) },
     "separator",
     { label: "Export…", hint: "Ctrl+E", run: () => void s.startExport(ids) },

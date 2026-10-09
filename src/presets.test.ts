@@ -39,6 +39,13 @@ describe("what a preset covers", () => {
     ]);
   });
 
+  test("the film settings belong to the scan, not to a preset", () => {
+    const scan = edited({ exposure: 0.5, film: { kind: "colour", base: [0.7, 0.4, 0.2], range: null } });
+    expect(changedSections(scan)).toEqual(["Light"]);
+    expect(settingsFrom(scan, ["Light", "Film"])).not.toHaveProperty("film");
+    expect(withPreset(scan, fade.settings).film).toEqual(scan.film);
+  });
+
   test("applying changes the covered settings and nothing else", () => {
     const photo = edited({ exposure: 0.7, vibrance: 50, crop: { x: 0.4, y: 0.5, width: 0.5, height: 0.5 } });
     const after = withPreset(photo, fade.settings);

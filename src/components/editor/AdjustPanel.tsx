@@ -1,8 +1,11 @@
-import { ReactNode, useId, useState } from "react";
-import { ChevronDown } from "lucide-react";
-import { Band, DEFAULTS, LABELS, MIXER_BANDS, rangeOf, same, SECTIONS, SliderKey } from "../../adjustments";
+import { ReactNode, useEffect, useId, useState } from "react";
+import { ChevronDown, Pipette } from "lucide-react";
+import { Band, DEFAULTS, FILM_KINDS, LABELS, MIXER_BANDS, rangeOf, Rgb, same, SECTIONS, SliderKey } from "../../adjustments";
+import { api } from "../../api";
+import { cssColour } from "../../film";
 import { useStore } from "../../store";
 import { onTabKey } from "../../tabs";
+import { menuBelow } from "../Toolbar";
 import { CurveEditor } from "./CurveEditor";
 import { Slider } from "./Slider";
 
@@ -111,6 +114,82 @@ function Mixer() {
   );
 }
 
+/** The film setting: turns a scan of a negative into a positive, then the rest works on that. */
+function FilmTools() {
+  const film = useStore((s) => s.editor.adjustments.film);
+  const photoId = useStore((s) => s.editor.photoId);
+  const picking = useStore((s) => s.editor.pickingBase);
+  const s = useStore.getState();
+  const kind = FILM_KINDS.find((k) => k.kind === film.kind)!;
+  const [swatch, setSwatch] = useState<Rgb | null>(null);
+
+  // The base in use, picked or guessed, for its swatch.
+  const negative = film.kind !== "none";
+  const base = film.base?.join();
+  useEffect(() => {
+    if (!negative || photoId === null) return setSwatch(null);
+    let current = true;
+    api
+      .filmBase(photoId, useStore.getState().editor.adjustments)
+      .then((answer) => current && setSwatch(answer.swatch))
+      .catch(() => current && setSwatch(null));
+    return () => {
+      current = false;
+    };
+  }, [negative, base, photoId]);
+
+  const kinds = (event: React.MouseEvent) =>
+    menuBelow(
+      event,
+      FILM_KINDS.map((k) => ({
+        label: k.name,
+        checked: k.kind === film.kind,
+        run: () => k.kind !== film.kind && s.setFilm({ kind: k.kind }),
+      })),
+    );
+
+  return (
+    <>
+      <button className="button film-kind" aria-label={`Film: ${kind.name}`} onClick={kinds}>
+        <span>{kind.name}</span>
+        <ChevronDown size={14} />
+      </button>
+      {!negative && <p className="panel-hint">For scans of negatives. Slides and digital photos need nothing.</p>}
+      {negative && (
+        <div className="film-base">
+          <span className="film-base-label">Film base</span>
+          <span
+            className="film-swatch"
+            title={film.base ? "Picked from the photo" : "Guessed from the clear film"}
+            style={swatch ? { background: cssColour(swatch) } : undefined}
+          />
+          {film.base && !film.range && (
+            <button className="button quiet" title="Guess the film base from the scan again" onClick={() => s.setFilm({ base: null }, "Film base guessed")}>
+              Auto
+            </button>
+          )}
+          <button
+            className={`button quiet ${picking ? "engaged" : ""}`}
+            title="Click the clear film at the edge of a frame to set the base"
+            aria-pressed={picking}
+            onClick={() => s.setPickingBase(!picking)}
+          >
+            <Pipette size={14} /> Pick
+          </button>
+        </div>
+      )}
+      {negative && film.range && (
+        <div className="film-roll">
+          <p className="panel-hint">Balanced with the rest of its roll.</p>
+          <button className="button quiet" onClick={() => s.setFilm({ range: null }, "Balanced on its own")}>
+            Balance on its own
+          </button>
+        </div>
+      )}
+    </>
+  );
+}
+
 const TEMPERATURE_TRACK = "linear-gradient(to right, #4f8fe6, #b9b9b9, #f0a63c)";
 const TINT_TRACK = "linear-gradient(to right, #4fb866, #b9b9b9, #d756b8)";
 
@@ -119,6 +198,9 @@ export function AdjustPanel() {
   const ready = useStore((s) => s.editor.ready);
   return (
     <div className={`adjust ${ready ? "" : "waiting"}`} inert={!ready}>
+      <Section title="Film">
+        <FilmTools />
+      </Section>
       <Section title="Light">
         <Tool name="exposure" />
         <Tool name="contrast" />

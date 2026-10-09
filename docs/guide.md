@@ -4,6 +4,7 @@ How Tonality works, area by area. New here? The [README](../README.md) has the s
 
 - [The library](#the-library)
 - [The editor](#the-editor)
+- [Film scans](#film-scans)
 - [Presets](#presets)
 - [Masks](#masks)
 - [History and branches](#history-and-branches)
@@ -41,9 +42,22 @@ Opening a photo (double-click or Enter) loads it at full resolution onto the gra
 - **Histogram** with clipping markers; `J` shows clipped areas on the photo.
 - **Tools** sit in a rail of icons along the right edge; `A` adjust, `C` crop, `M` masks, `Shift+P` presets, `H` history, `I` info; `Ctrl+Z` / `Ctrl+Shift+Z` undo and redo, hold `\` for the original, `Z` or double-click for 100%, scroll to zoom, `Ctrl+C` / `Ctrl+V` copy and paste edits (in the grid too, onto a whole selection), double-click a slider to reset it.
 
+## Film scans
+
+A negative photographed on a light (a camera scan) or scanned opens as a negative: orange for colour film, grey for black and white. **Film**, at the top of Adjust, turns it into a picture.
+
+- **Choose the film**: *Colour negative* or *Black and white negative*. That is usually all it takes. Tonality takes off the clear film's own tint and balances the colours, so shadows and highlights both come out neutral. Black and white negatives come out grey, with no tint from the film or the light.
+- **Crop to the frame.** The balance is measured inside the crop, so the film holder, sprocket holes and the light around the frame don't count. Until you crop, the middle of the scan is measured.
+- **After that the photo works like any other.** Exposure, temperature and tint, curves, masks, the histogram and clipping warnings all work on the positive, and the subject and sky are found in it.
+- **Film base**: the clear film between and around the frames. Tonality guesses it from the clearest film in the scan, and the swatch shows what it is using. If the colours look off, choose **Pick** and click the clear film at the edge of a frame; **Auto** goes back to the guess.
+- **A whole roll**: balanced on its own, a frame that should have a colour (a sunset, say) comes out grey, and frames of the same scene can drift apart. Select the roll's frames in the grid, right-click and choose **Balance as one roll**: the base and colours are measured across all of them together and every frame gets the same balance, as a step in its history ("Balanced with the roll"). One of them needs its film chosen first; a base picked by hand on one frame goes to the whole roll. **Balance on its own** in Adjust puts a frame back to its own balance. Pasting edits carries the film settings too, which is another way to give a roll the same settings.
+- **Mirrored scans** (photographed from the wrong side of the film): **Flip** in Crop.
+- **Slides** are already positives and need nothing: leave Film at *None*.
+- Presets never change the film settings.
+
 ## Presets
 
-A preset is a named look to lay over a photo's edits. Each one *covers* some settings and leaves the rest alone, so a look keeps the exposure you already corrected, and a grain preset goes on top of a look. No preset touches the crop.
+A preset is a named look to lay over a photo's edits. Each one *covers* some settings and leaves the rest alone, so a look keeps the exposure you already corrected, and a grain preset goes on top of a look. No preset touches the crop or the film settings.
 
 - **The Presets tool** (`Shift+P`) shows each preset as a small picture of the open photo wearing it, drawn over the photo's current edits. Point at one, or walk the grid with the arrow keys, to see it large; click or Enter applies it. Tab stops at one preset, then at its star and, on your own, its "…" menu. An outline marks the presets the photo is wearing.
 - **Favorites**: the star on a preset lists it again in a Favorites group at the top, in the order you starred them. Stars are kept in the library.

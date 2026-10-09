@@ -3,6 +3,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::film::Film;
+
 /// A tone curve as control points from (0, 0) black to (1, 1) white.
 pub type CurvePoints = Vec<[f32; 2]>;
 
@@ -209,6 +211,9 @@ pub struct Adjustments {
 
     /// Local adjustments, laid over the rest in order.
     pub masks: Vec<Mask>,
+
+    /// For scans of film negatives: turns them into positives before anything else.
+    pub film: Film,
 }
 
 impl Adjustments {
@@ -311,6 +316,21 @@ mod tests {
         assert!(Adjustments::from_json(Some("not json")).is_default());
         // Recipes saved before a slider existed still load.
         assert_eq!(Adjustments::from_json(Some(r#"{"exposure":0.5}"#)), edited);
+    }
+
+    #[test]
+    fn film_settings_are_kept_and_old_recipes_have_none() {
+        use crate::film::{Kind, Range};
+        assert_eq!(Adjustments::from_json(Some(r#"{"exposure":0.5}"#)).film, Film::default());
+        let range = Range { low: [0.1, 0.2, 0.3], high: [1.0, 1.1, 1.2] };
+        let film = Film { kind: Kind::BlackAndWhite, base: Some([0.6, 0.5, 0.55]), range: Some(range) };
+        let scan = Adjustments { film, ..Default::default() };
+        let json = scan.to_json().unwrap();
+        assert!(json.contains(r#""kind":"blackAndWhite""#), "{json}");
+        assert_eq!(Adjustments::from_json(Some(&json)), scan);
+        // The interface sends a guessed base and an unbalanced range as null.
+        let guessed = Adjustments::from_json(Some(r#"{"film":{"kind":"colour","base":null,"range":null}}"#));
+        assert_eq!(guessed.film, Film { kind: Kind::Colour, base: None, range: None });
     }
 
     #[test]

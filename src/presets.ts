@@ -16,9 +16,10 @@ import {
 /**
  * Part of a recipe: values for the settings a preset covers. Applying the
  * preset changes those and leaves the rest of the photo's edits alone. The
- * crop and the other framing settings are never part of one, and nor are masks.
+ * crop and the other framing settings are never part of one, and nor are
+ * masks or the film settings, which belong to the scan.
  */
-export type PresetSettings = Partial<Omit<Adjustments, (typeof GEOMETRY)[number] | "masks">>;
+export type PresetSettings = Partial<Omit<Adjustments, (typeof GEOMETRY)[number] | "masks" | "film">>;
 
 /** A named look. Mirrors `Preset` in the backend's presets.rs. */
 export interface Preset {
@@ -30,8 +31,8 @@ export interface Preset {
   settings: PresetSettings;
 }
 
-/** The groups of settings a preset of your own can cover: the adjust panel's sections. */
-export const PRESET_SECTIONS = SECTIONS.filter((section) => section.title !== "Crop");
+/** The groups of settings a preset of your own can cover: the adjust panel's sections, but for those that belong to the photo. */
+export const PRESET_SECTIONS = SECTIONS.filter((section) => section.title !== "Crop" && section.title !== "Film");
 
 const keysOf = (settings: PresetSettings) => Object.keys(settings) as (keyof PresetSettings)[];
 

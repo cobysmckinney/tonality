@@ -75,6 +75,30 @@ export interface Mask {
   adjustments: LocalAdjustments;
 }
 
+/** What kind of film a scan is of. "none" is a digital photo, or a slide, which is already a positive. */
+export type FilmKind = "none" | "colour" | "blackAndWhite";
+
+export type Rgb = [number, number, number];
+
+/**
+ * A scan of a film negative, turned into a positive before anything else.
+ * Mirrors `Film` in the backend's film.rs.
+ */
+export interface Film {
+  kind: FilmKind;
+  /** The clear film's colour in the scan; null while it is guessed. */
+  base: Rgb | null;
+  /** Each channel's density range; null while it is measured from the frame alone. Set when a roll is balanced together. */
+  range: { low: Rgb; high: Rgb } | null;
+}
+
+/** The film types, as the Film setting lists them. */
+export const FILM_KINDS: { kind: FilmKind; name: string }[] = [
+  { kind: "none", name: "None" },
+  { kind: "colour", name: "Colour negative" },
+  { kind: "blackAndWhite", name: "Black and white negative" },
+];
+
 /**
  * Every slider in the editor; zero everywhere means "as shot". Exposure is in
  * stops (-5..5), everything else runs -100..100 or 0..100. Mirrors
@@ -108,6 +132,8 @@ export interface Adjustments {
   flipVertical: boolean;
   /** Local adjustments, laid over the rest in order. */
   masks: Mask[];
+  /** For scans of film negatives. */
+  film: Film;
 }
 
 /** The adjustments that reshape the picture rather than recolour it. */
@@ -183,6 +209,7 @@ export function defaultAdjustments(): Adjustments {
     flipHorizontal: false,
     flipVertical: false,
     masks: [],
+    film: { kind: "none", base: null, range: null },
   };
 }
 
@@ -221,6 +248,7 @@ export const rangeOf = (key: SliderKey) => ({ min: -100, max: 100, step: 1, ...R
 
 /** The groups of tools in the adjust panel, in order. */
 export const SECTIONS: { title: string; keys: (keyof Adjustments)[] }[] = [
+  { title: "Film", keys: ["film"] },
   { title: "Light", keys: ["exposure", "contrast", "highlights", "shadows", "whites", "blacks"] },
   { title: "Color", keys: ["temperature", "tint", "vibrance", "saturation"] },
   { title: "Curve", keys: ["curves"] },
@@ -250,6 +278,22 @@ export function same(a: unknown, b: unknown): boolean {
   return keys.length === Object.keys(y).length && keys.every((key) => key in y && same(x[key], y[key]));
 }
 
+/** Names a change to the film settings for the history. */
+export function describeFilm(before: Film, after: Film): string {
+  if (before.kind !== after.kind) {
+    const name = FILM_KINDS.find((k) => k.kind === after.kind)!.name;
+    return after.kind === "none" ? "Film: none" : `Film: ${name.toLowerCase()}`;
+  }
+  if (!same(before.range, after.range) && same(before.base, after.base)) {
+    return after.range ? "Balanced with the roll" : "Balanced on its own";
+  }
+  if (!same(before.base, after.base)) {
+    if (after.range) return "Balanced with the roll";
+    return after.base ? "Film base picked" : "Film base guessed";
+  }
+  return "Film";
+}
+
 /** Names the difference between two recipes for the history: "Exposure +0.50". */
 export function describeChange(before: Adjustments, after: Adjustments): string {
   const changed = (Object.keys(after) as (keyof Adjustments)[]).filter((key) => !same(before[key], after[key]));
@@ -268,6 +312,7 @@ export function describeChange(before: Adjustments, after: Adjustments): string 
     const key = changed[0];
     // The masks panel names its own steps; this is only a fallback.
     if (key === "masks") return "Masks";
+    if (key === "film") return describeFilm(before.film, after.film);
     if (key === "curves") {
       if (same(after.curves, DEFAULTS.curves)) return "Reset curve";
       const channels = (Object.keys(after.curves) as CurveChannel[]).filter((c) => !same(before.curves[c], after.curves[c]));

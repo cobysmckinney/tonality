@@ -31,6 +31,7 @@ import { onTabKey } from "../../tabs";
 import { menuBelow, useTitle } from "../Toolbar";
 import { frameSize, Size } from "../../crop";
 import { fromOriginal, onOriginal } from "../../masks";
+import { pickedPoint } from "../../film";
 import { FIT, heldFrame, pannedView, place as placeOn, View, zoomedView } from "../../zoom";
 import { AdjustPanel } from "./AdjustPanel";
 import { CropOverlay } from "./CropOverlay";
@@ -232,7 +233,10 @@ function Stage({ photo, onZoomChange }: { photo: Photo; onZoomChange: (label: st
   const current = useMemo(() => (trying ? withPreset(own, trying.settings) : own), [own, trying]);
   const showOriginal = useStore((s) => s.editor.showOriginal);
   const showClipping = useStore((s) => s.editor.showClipping && !s.editor.showOriginal);
-  const uncropped = useStore((s) => s.sidePanel === "crop" && !s.editor.showOriginal);
+  // Picking the film base shows the whole scan, rebate and all, as the crop tool does.
+  const pickingBase = useStore((s) => s.sidePanel === "adjust" && s.editor.pickingBase && !s.editor.showOriginal);
+  const cropping = useStore((s) => s.sidePanel === "crop" && !s.editor.showOriginal);
+  const uncropped = cropping || pickingBase;
   const masking = useStore((s) => s.sidePanel === "masks" && !s.editor.showOriginal);
   const circling = useStore((s) => s.sidePanel === "masks" && s.editor.circling !== null && !s.editor.circling.points);
   const maskOverlay = useStore((s) =>
@@ -418,11 +422,23 @@ function Stage({ photo, onZoomChange }: { photo: Photo; onZoomChange: (label: st
           <canvas ref={canvas} style={placed} />
         </div>
         {/* The frame goes on only once the canvas really shows the uncropped photo underneath it. */}
-        {live && uncropped && painted?.uncropped && shown && frame && photoSize && (
+        {live && cropping && painted?.uncropped && shown && frame && photoSize && (
           <CropOverlay photo={photoSize} scale={shown.width / frame.width} width={shown.width} height={shown.height} />
         )}
         {live && masking && shown && photoSize && (
           <MaskOverlay photo={photoSize} region={geometry.region} width={shown.width} height={shown.height} />
+        )}
+        {live && pickingBase && painted?.uncropped && shown && photoSize && (
+          <div
+            className="film-picker"
+            onPointerDown={(event) => event.stopPropagation()}
+            onClick={(event) => {
+              const rect = event.currentTarget.getBoundingClientRect();
+              const at: [number, number] = [event.clientX - rect.left, event.clientY - rect.top];
+              const point = pickedPoint(photoSize, adjustments, geometry.region, shown, at);
+              void useStore.getState().pickBase(point);
+            }}
+          />
         )}
       </div>
       {!ready && !failed && <span className="stage-note">Preparing photo…</span>}
@@ -434,6 +450,9 @@ function Stage({ photo, onZoomChange }: { photo: Photo; onZoomChange: (label: st
         </div>
       )}
       {ready && circling && <span className="stage-note centered">Draw a loop around what you want · Esc cancels</span>}
+      {ready && pickingBase && (
+        <span className="stage-note centered">Click the clear film at the edge of a frame · Esc cancels</span>
+      )}
     </div>
   );
 }
@@ -557,6 +576,7 @@ export function Editor({ photo, inert }: { photo: Photo; inert: boolean }) {
         // Escape backs out one level at a time: off a slider, out of a circle being drawn, off the chosen mask, out of the crop or mask tools, out of the photo.
         if (onSlider) target.blur();
         else if (state.editor.circling && !state.editor.circling.points) state.cancelCircle();
+        else if (state.editor.pickingBase) state.setPickingBase(false);
         else if (state.sidePanel === "masks" && state.editor.maskId !== null) state.selectMask(null);
         else if (state.sidePanel === "crop" || state.sidePanel === "masks") state.setSidePanel("adjust");
         else state.closePhoto();

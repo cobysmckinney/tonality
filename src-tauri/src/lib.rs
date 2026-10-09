@@ -2,6 +2,7 @@ mod commands;
 pub mod develop;
 pub mod edit;
 pub mod export;
+pub mod film;
 pub mod geometry;
 pub mod grants;
 pub mod gpu;
@@ -232,6 +233,9 @@ pub fn run() {
             commands::render_frame,
             commands::mask_mattes,
             commands::find_parts,
+            commands::film_base,
+            commands::pick_film_base,
+            commands::balance_roll,
             commands::prepare_circles,
             commands::refresh_rendered,
             commands::apply_edits,
