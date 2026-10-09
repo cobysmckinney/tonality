@@ -2,7 +2,7 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, SystemTime};
 
 use image::{Rgb, RgbImage};
@@ -410,6 +410,188 @@ fn an_update_that_changes_the_look_redraws_edited_photos_only() {
     assert!(plain_images.iter().all(|path| path.is_file()), "the camera's own picture is kept");
     assert!(version(&library, edited) > before, "so the window doesn't show a copy it kept");
     assert_eq!(library.setting(thumbs::LOOK_SETTING).unwrap(), Some(LOOK_VERSION.to_string()));
+}
+
+#[test]
+fn an_import_cancelled_before_it_starts_leaves_no_trace() {
+    let f = fixture();
+    let session = scan(&f.library, std::slice::from_ref(&f.card));
+    let all: Vec<usize> = (0..session.items.len()).collect();
+    let summary = import::run(&f.library, &session, &all, &AtomicBool::new(true), &|_, _| {}).unwrap();
+    assert!(summary.cancelled);
+    assert_eq!((summary.imported, summary.restored, summary.failed.len()), (0, 0, 0));
+    assert!(f.library.list_photos(View::Library).unwrap().is_empty());
+    assert!(f.library.list_photos(View::Imports).unwrap().is_empty());
+    let db = rusqlite::Connection::open(f.library.root().join(".tonality/library.db")).unwrap();
+    let imports: i64 = db.query_row("SELECT COUNT(*) FROM imports", [], |r| r.get(0)).unwrap();
+    assert_eq!(imports, 0, "an import with nothing in it isn't kept");
+    assert!(!f.library.incoming_dir().exists());
+    assert_eq!(fs::read_dir(f.library.originals_dir()).unwrap().count(), 0);
+}
+
+#[test]
+fn an_import_stopped_partway_keeps_what_it_finished_and_can_pick_up_the_rest() {
+    let dir = TempDir::new().unwrap();
+    let library = Library::open(&dir.path().join("Tonality")).unwrap();
+    let card = dir.path().join("card");
+    const PHOTOS: u32 = 24;
+    for i in 0..PHOTOS {
+        write_image(&card.join(format!("DCIM/100CANON/IMG_{i:04}.JPG")), i as u8 * 10);
+    }
+    let session = scan(&library, std::slice::from_ref(&card));
+    let all: Vec<usize> = (0..session.items.len()).collect();
+    assert_eq!(all.len(), PHOTOS as usize);
+
+    // Stop as soon as the first photo is in.
+    let cancel = AtomicBool::new(false);
+    let summary = import::run(&library, &session, &all, &cancel, &|_, _| cancel.store(true, Ordering::Relaxed)).unwrap();
+    assert!(summary.cancelled);
+    assert!(summary.failed.is_empty(), "{:?}", summary.failed.iter().map(|f| &f.reason).collect::<Vec<_>>());
+    // Photos already on their way when it stopped are finished, not left half copied.
+    assert!((1..PHOTOS / 2).contains(&summary.imported), "{} imported", summary.imported);
+    let photos = library.list_photos(View::Library).unwrap();
+    assert_eq!(photos.len() as u32, summary.imported);
+    for photo in &photos {
+        assert!(library.photo_files(photo.id).unwrap().path.exists());
+    }
+    assert!(!library.incoming_dir().exists(), "nothing is left in the holding folder");
+
+    // Scanning the card again offers just the rest, and importing them finishes the job.
+    let session = scan(&library, std::slice::from_ref(&card));
+    let new = session.view().items.iter().filter(|item| item.status == "new").count() as u32;
+    assert_eq!(new, PHOTOS - summary.imported);
+    let summary = import_all(&library, &session);
+    assert_eq!(summary.imported, PHOTOS - photos.len() as u32);
+    assert_eq!(library.list_photos(View::Library).unwrap().len() as u32, PHOTOS);
+}
+
+#[test]
+fn purging_a_photo_takes_its_cached_mattes_with_it() {
+    let f = fixture();
+    import_all(&f.library, &scan(&f.library, std::slice::from_ref(&f.card)));
+    let ids: Vec<i64> = f.library.list_photos(View::Library).unwrap().iter().map(|p| p.id).collect();
+    let matte = |id: i64, key: &str| {
+        let start = f.library.matte_files(id);
+        start.with_file_name(format!("{}{key}.png", start.file_name().unwrap().to_string_lossy()))
+    };
+    for &id in &ids {
+        fs::create_dir_all(matte(id, "subject").parent().unwrap()).unwrap();
+        for key in ["subject-x", "sky-y"] {
+            image::GrayImage::new(4, 4).save(matte(id, key)).unwrap();
+        }
+    }
+    f.library.trash(&ids[..1]).unwrap();
+    assert_eq!(f.library.purge(&ids[..1]).unwrap(), 1);
+    assert!(!matte(ids[0], "subject-x").exists() && !matte(ids[0], "sky-y").exists());
+    for &id in &ids[1..] {
+        assert!(matte(id, "subject-x").exists(), "other photos keep theirs");
+    }
+}
+
+#[test]
+fn a_deleted_photo_stays_until_its_time_is_up() {
+    let f = fixture();
+    import_all(&f.library, &scan(&f.library, std::slice::from_ref(&f.card)));
+    let ids: Vec<i64> = f.library.list_photos(View::Library).unwrap().iter().map(|p| p.id).collect();
+    f.library.trash(&ids).unwrap();
+    let now = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_secs() as i64;
+    let retention = library::TRASH_RETENTION_DAYS * 24 * 60 * 60;
+    let db = rusqlite::Connection::open(f.library.root().join(".tonality/library.db")).unwrap();
+    // One a minute short of the limit, one a minute past it.
+    db.execute("UPDATE photos SET deleted_at = ?1 WHERE id = ?2", [now - retention + 60, ids[0]]).unwrap();
+    db.execute("UPDATE photos SET deleted_at = ?1 WHERE id = ?2", [now - retention - 60, ids[1]]).unwrap();
+    assert_eq!(f.library.purge_expired().unwrap(), 1);
+    let left: Vec<i64> = f.library.list_photos(View::Deleted).unwrap().iter().map(|p| p.id).collect();
+    assert!(left.contains(&ids[0]) && !left.contains(&ids[1]), "{left:?}");
+}
+
+/// The library as the first version of Tonality made it.
+const FIRST_SCHEMA: &str = "
+CREATE TABLE imports (id INTEGER PRIMARY KEY, created_at INTEGER NOT NULL, source TEXT NOT NULL);
+CREATE TABLE photos (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    path          TEXT NOT NULL UNIQUE,
+    jpeg_path     TEXT,
+    file_name     TEXT NOT NULL,
+    kind          TEXT NOT NULL,
+    fingerprint   TEXT NOT NULL,
+    file_size     INTEGER NOT NULL,
+    taken_at      TEXT NOT NULL,
+    width         INTEGER,
+    height        INTEGER,
+    make          TEXT,
+    model         TEXT,
+    lens          TEXT,
+    iso           INTEGER,
+    aperture      REAL,
+    shutter       REAL,
+    focal_length  REAL,
+    favorite      INTEGER NOT NULL DEFAULT 0,
+    flag          INTEGER NOT NULL DEFAULT 0,
+    import_id     INTEGER NOT NULL REFERENCES imports(id),
+    deleted_at    INTEGER
+);
+CREATE INDEX photos_taken_at ON photos(taken_at);
+CREATE INDEX photos_fingerprint ON photos(fingerprint);
+CREATE INDEX photos_import ON photos(import_id);
+CREATE TABLE albums (id INTEGER PRIMARY KEY, name TEXT NOT NULL, created_at INTEGER NOT NULL);
+CREATE TABLE album_photos (
+    album_id  INTEGER NOT NULL REFERENCES albums(id) ON DELETE CASCADE,
+    photo_id  INTEGER NOT NULL REFERENCES photos(id) ON DELETE CASCADE,
+    PRIMARY KEY (album_id, photo_id)
+) WITHOUT ROWID;
+CREATE INDEX album_photos_photo ON album_photos(photo_id);
+PRAGMA user_version = 1;
+";
+
+#[test]
+fn a_library_from_the_first_version_is_brought_up_to_date() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path().join("Tonality");
+    let original = root.join("Originals/2026/2026-03-14/IMG_0001.png");
+    write_image(&original, 50);
+    fs::create_dir_all(root.join(".tonality")).unwrap();
+    {
+        let db = rusqlite::Connection::open(root.join(".tonality/library.db")).unwrap();
+        db.execute_batch(FIRST_SCHEMA).unwrap();
+        db.execute_batch(
+            "INSERT INTO imports (id, created_at, source) VALUES (1, 1773489600, '/media/card');
+             INSERT INTO photos (path, file_name, kind, fingerprint, file_size, taken_at, width, height, favorite, import_id)
+                 VALUES ('Originals/2026/2026-03-14/IMG_0001.png', 'IMG_0001.png', 'image', 'abc', 100,
+                         '2026-03-14T12:00:00', 96, 64, 1, 1);
+             INSERT INTO albums (id, name, created_at) VALUES (1, 'Trip', 1773489600);
+             INSERT INTO album_photos (album_id, photo_id) VALUES (1, 1);",
+        )
+        .unwrap();
+    }
+
+    let library = Library::open(&root).unwrap();
+    let photos = library.list_photos(View::Library).unwrap();
+    assert_eq!(photos.len(), 1, "photos survive the upgrade");
+    let id = photos[0].id;
+    assert!(photos[0].favorite);
+    assert_eq!(library.list_photos(View::Album { id: 1 }).unwrap().len(), 1, "and so do albums");
+    assert_eq!(library.edits(id).unwrap(), None, "an old photo is as shot");
+
+    // Everything later versions added works.
+    let edited = Adjustments { exposure: 0.5, ..Default::default() };
+    let history = library.history_commit(id, &edited, "Exposure +0.50").unwrap();
+    assert!(history.steps.len() >= 2, "edits are kept as history");
+    assert!(library.edits(id).unwrap().is_some());
+    library.set_setting("test", "1").unwrap();
+    assert_eq!(library.setting("test").unwrap().as_deref(), Some("1"));
+    let bright = tonality_lib::presets::Settings { exposure: Some(0.3), ..Default::default() };
+    let preset = library.create_preset("Bright", bright).unwrap();
+    assert_eq!(library.set_preset_favorite(preset.id, true).unwrap(), [preset.id]);
+    drop(library);
+
+    // Opening it again changes nothing.
+    let db = rusqlite::Connection::open(root.join(".tonality/library.db")).unwrap();
+    let version: i64 = db.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
+    assert!(version >= 6, "at version {version}");
+    let library = Library::open(&root).unwrap();
+    assert!(library.edits(id).unwrap().is_some());
+    assert_eq!(library.favorite_presets().unwrap(), [preset.id]);
 }
 
 /// Runs the real decoders over a folder of camera files:
