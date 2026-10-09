@@ -156,6 +156,20 @@ fn temperature_and_tint_shift_white_balance() {
 }
 
 #[test]
+fn a_picked_white_balance_makes_its_colour_grey_however_far_it_goes() {
+    let Some(gpu) = gpu() else { return };
+    // A grey card as a photo might hold it under lamplight, shade and
+    // fluorescent light: the first two need more than 100 to fix.
+    for colour in [[0.30, 0.18, 0.06], [0.08, 0.14, 0.25], [0.15, 0.22, 0.12]] {
+        let session = picture(gpu, (64, 48), false, |_, _| colour);
+        let (temperature, tint) = tonality_lib::white::neutralising(colour, false).unwrap();
+        let picked = recipe(|a| (a.temperature, a.tint) = (temperature, tint));
+        let shown = middle(&draw(gpu, &session, &picked));
+        assert!(chroma(shown) <= 2, "{colour:?} with {temperature}, {tint} came out {shown:?}");
+    }
+}
+
+#[test]
 fn vibrance_favours_muted_colours_and_saturation_treats_all_alike() {
     let Some(gpu) = gpu() else { return };
     // A muted colour on the left, a vivid one on the right.

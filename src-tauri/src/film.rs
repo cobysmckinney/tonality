@@ -220,6 +220,12 @@ impl Sample {
     /// The film base at a point on the photo file (0..1 across and down): the
     /// scan averaged over a small patch there, so grain and noise don't count.
     pub fn base_at(&self, x: f32, y: f32) -> [f32; 3] {
+        self.colour_at(x, y).map(|v| v.max(DARKEST))
+    }
+
+    /// The colour at a point on the photo file (0..1 across and down),
+    /// averaged over a small patch so grain and noise don't count.
+    pub fn colour_at(&self, x: f32, y: f32) -> [f32; 3] {
         let (cx, cy) = ((x.clamp(0.0, 1.0) * self.width as f32) as i64, (y.clamp(0.0, 1.0) * self.height as f32) as i64);
         let mut sum = [0f32; 3];
         let mut count = 0.0f32;
@@ -230,7 +236,7 @@ impl Sample {
                 count += 1.0;
             }
         }
-        sum.map(|v| (v / count.max(1.0)).max(DARKEST))
+        sum.map(|v| v / count.max(1.0))
     }
 
     /// The pixels inside the crop `adjustments` make. Until the photo is

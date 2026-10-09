@@ -92,6 +92,10 @@ fn a_preset_stays_inside_the_editor_ranges() {
     assert_eq!(wild.curves.unwrap().master, [[0.0, 0.2], [1.0, 1.0]]);
     let mixer = wild.mixer.unwrap();
     assert_eq!((mixer[0].hue, mixer[7].luminance), (100.0, -100.0));
+    // White balance goes as far as a RAW's Kelvin sliders take it, and no further.
+    let max = tonality_lib::edit::MAX_WHITE_BALANCE;
+    let warm = presets::read(&json!({ "temperature": 450, "tint": -9000 })).unwrap();
+    assert_eq!((warm.temperature, warm.tint), (Some(450.0), Some(-max)));
 
     // A number too large for a recipe is refused outright, before anything is stored.
     assert!(presets::read(&json!({ "grain": 1e40 })).is_err());

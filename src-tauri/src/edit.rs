@@ -171,8 +171,15 @@ impl Default for Mask {
 /// mask's, and all of them added together.
 pub const MAX_EXPOSURE: f32 = 5.0;
 
+/// How far the photo's own Temperature and Tint go either way. Past 100 is
+/// only reached on RAWs, whose sliders read in Kelvin (`white.rs`): enough
+/// for 2000 K to 50000 K from whatever the camera balanced for.
+pub const MAX_WHITE_BALANCE: f32 = 2000.0;
+
 /// Every slider in the editor. Zero everywhere means "as shot".
-/// Exposure is in stops (-5..5); everything else runs -100..100 or 0..100.
+/// Exposure is in stops (-5..5); Temperature and Tint are relative to the
+/// camera's white balance (-2000..2000, `MAX_WHITE_BALANCE`); everything
+/// else runs -100..100 or 0..100.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Adjustments {

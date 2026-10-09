@@ -40,6 +40,7 @@ import { canAdd, circleShape, foundShapes, isFound, MaskStart, MAX_MASKS, newMas
 import { blend, holds, Preset, settingsFrom } from "./presets";
 import { forget } from "./selection";
 import { canStartExport, canStartFilm, canStartImport } from "./sheets";
+import { Camera, sliderScale, withinReach } from "./whiteBalance";
 
 export type Filter = "all" | "picks" | "unrejected" | "rejects";
 
@@ -157,6 +158,10 @@ export interface EditorState {
   circling: { mode: MaskMode | null; replace?: number; points?: Point[] } | null;
   /** Waiting for a click on the clear film, to set a negative's film base. */
   pickingBase: boolean;
+  /** Waiting for a click on something that should be grey, to set white balance. */
+  pickingWhite: boolean;
+  /** How the camera white balanced the photo, for showing it in Kelvin; null but for colour RAWs. */
+  camera: Camera | null;
   histogram: Uint32Array | null;
   highlightsClipped: boolean;
   shadowsClipped: boolean;
@@ -180,6 +185,8 @@ const idleEditor: EditorState = {
   finding: null,
   circling: null,
   pickingBase: false,
+  pickingWhite: false,
+  camera: null,
   histogram: null,
   highlightsClipped: false,
   shadowsClipped: false,
@@ -321,6 +328,10 @@ interface State {
   setPickingBase: (picking: boolean) => void;
   /** Sets the open photo's film base from a point on its file (0..1 across and down). */
   pickBase: (point: Point) => Promise<void>;
+  /** Starts or stops waiting for a click on something grey. */
+  setPickingWhite: (picking: boolean) => void;
+  /** Sets the open photo's white balance so a point on its file (0..1 across and down) comes out grey. */
+  pickWhite: (point: Point) => Promise<void>;
   /** Balances these frames of a roll of film together: a step in each one's history. */
   balanceRoll: (ids: number[]) => Promise<void>;
 
@@ -871,6 +882,7 @@ export const useStore = create<State>((set, get) => {
           setEditor({
             ready: true,
             size: { width: photo.width, height: photo.height },
+            camera: photo.camera,
             history: photo.history,
             adjustments: photo.history.adjustments,
             committed: photo.history.adjustments,
@@ -1034,7 +1046,25 @@ export const useStore = create<State>((set, get) => {
       get().commitAdjust(label);
     },
 
-    setPickingBase: (pickingBase) => setEditor({ pickingBase }),
+    setPickingBase: (pickingBase) => setEditor({ pickingBase, pickingWhite: false }),
+
+    setPickingWhite: (pickingWhite) => setEditor({ pickingWhite, pickingBase: false }),
+
+    async pickWhite([x, y]) {
+      const { photoId, adjustments } = get().editor;
+      setEditor({ pickingWhite: false });
+      if (photoId === null) return;
+      try {
+        const picked = await api.pickWhiteBalance(photoId, x, y, adjustments);
+        const { editor } = get();
+        if (editor.photoId !== photoId) return;
+        const scale = sliderScale(editor.camera, editor.adjustments.film.kind !== "none");
+        get().adjust(withinReach(picked, scale));
+        get().commitAdjust("White balance picked");
+      } catch (error) {
+        get().toast({ text: String(error), tone: "error" });
+      }
+    },
 
     async pickBase([x, y]) {
       const { photoId } = get().editor;

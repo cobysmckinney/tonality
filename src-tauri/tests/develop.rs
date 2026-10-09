@@ -122,6 +122,12 @@ const TILE_SHADES: [f32; 4] = [1.0, 0.75, 0.5, 0.25];
 /// colour matrix for no particular illuminant; and the white point, if
 /// given, as a chromaticity rather than a camera neutral.
 fn converted_dng(white_as_xy: bool) -> Vec<u8> {
+    converted_dng_of(LIGHT, [1.0; 3], white_as_xy)
+}
+
+/// `converted_dng` for a camera that sees in linear sRGB scaled by
+/// `sensitivity`, of a grey card that looks `light` to it.
+fn converted_dng_of(light: [f32; 3], sensitivity: [f32; 3], white_as_xy: bool) -> Vec<u8> {
     use rawler::formats::tiff::writer::{DirectoryWriter, TiffWriter};
     use rawler::formats::tiff::{Rational, SRational};
     use rawler::tags::{DngTag, ExifTag, TiffCommonTag};
@@ -130,7 +136,7 @@ fn converted_dng(white_as_xy: bool) -> Vec<u8> {
     let mut tiff = TiffWriter::new(std::io::Cursor::new(&mut bytes)).unwrap();
     let (mut offsets, mut counts) = (Vec::new(), Vec::new());
     for shade in TILE_SHADES {
-        let level = LIGHT.map(|v| (v * shade * 320.0).round() as u8);
+        let level = light.map(|v| (v * shade * 320.0).round() as u8);
         let tile = image::RgbImage::from_pixel(TILE, TILE, image::Rgb(level));
         let mut jpeg = Vec::new();
         image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpeg, 100).encode_image(&tile).unwrap();
@@ -159,10 +165,15 @@ fn converted_dng(white_as_xy: bool) -> Vec<u8> {
     root.add_tag(DngTag::WhiteLevel, [255u16; 3]);
     // No particular illuminant: the matrix applies to any light.
     root.add_tag(DngTag::CalibrationIlluminant1, 0u16);
-    let matrix: Vec<SRational> = XYZ_TO_SRGB.iter().flatten().map(|v| SRational::new((v * 10_000.0).round() as i32, 10_000)).collect();
+    let matrix: Vec<SRational> = XYZ_TO_SRGB
+        .iter()
+        .zip(sensitivity)
+        .flat_map(|(row, scale)| row.map(|v| SRational::new((v * scale * 10_000.0).round() as i32, 10_000)))
+        .collect();
     root.add_tag(DngTag::ColorMatrix1, matrix.as_slice());
     if white_as_xy {
-        let xyz = SRGB_TO_XYZ.map(|row| row.iter().zip(LIGHT).map(|(m, v)| m * v).sum::<f32>());
+        let srgb: Vec<f32> = light.iter().zip(sensitivity).map(|(v, scale)| v / scale).collect();
+        let xyz = SRGB_TO_XYZ.map(|row| row.iter().zip(&srgb).map(|(m, v)| m * v).sum::<f32>());
         let sum: f32 = xyz.iter().sum();
         let xy = [xyz[0] / sum, xyz[1] / sum].map(|v| Rational::new((v * 1_000_000.0).round() as u32, 1_000_000));
         root.add_tag(DngTag::AsShotWhiteXY, xy);
@@ -211,4 +222,31 @@ fn a_dng_that_gives_its_white_as_a_chromaticity_is_white_balanced() {
     // ...where without the white point it would keep the light's colour.
     let [r, g, b] = develop(false);
     assert!(r > b * 1.5, "{:?}", [r, g, b]);
+}
+
+#[test]
+fn a_dng_with_no_white_balance_at_all_is_balanced_for_daylight() {
+    // A grey card in daylight, to a camera whose green is the most
+    // sensitive (as in real ones): unbalanced, it comes out green.
+    let sensitivity = [0.5, 1.0, 0.6];
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().join("no-white.dng");
+    std::fs::write(&path, converted_dng_of(sensitivity.map(|v| v * 0.75), sensitivity, false)).unwrap();
+    let (image, camera) = tonality_lib::develop::load_for_editing(&path, true).unwrap();
+    let [r, g, b] = tile_colours(&image)[0];
+    assert!((r / g - 1.0).abs() < 0.03 && (b / g - 1.0).abs() < 0.03, "{:?}", [r, g, b]);
+    // And it says so: the light it was balanced for is daylight.
+    let [x, y] = camera.unwrap().as_shot;
+    assert!((x - 0.3127).abs() < 0.002 && (y - 0.329).abs() < 0.002, "{:?}", [x, y]);
+}
+
+#[test]
+fn a_dng_says_what_light_it_was_balanced_for() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().join("warm.dng");
+    std::fs::write(&path, converted_dng(true)).unwrap();
+    let (_, camera) = tonality_lib::develop::load_for_editing(&path, true).unwrap();
+    // The warm light (x 0.357, y 0.377), where daylight is x 0.313, y 0.329.
+    let [x, y] = camera.unwrap().as_shot;
+    assert!((x - 0.357).abs() < 0.003 && (y - 0.377).abs() < 0.003, "{:?}", [x, y]);
 }
