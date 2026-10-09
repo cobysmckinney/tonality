@@ -16,7 +16,7 @@ use crate::grants::Grants;
 use crate::gpu::{self, Region, Session};
 use crate::history::History;
 use crate::import::{self, ImportSummary, ScanSession, ScanView};
-use crate::library::{Library, Overview, PhotoInfo, PhotoItem, View};
+use crate::library::{FilmPhoto, FilmSuggestions, Library, Overview, PhotoInfo, PhotoItem, View};
 use crate::media;
 use crate::presets::{self, ImportedPresets, Preset, Settings};
 use crate::segment::Found;
@@ -123,6 +123,24 @@ pub fn set_favorite(state: State<AppState>, ids: Vec<i64>, favorite: bool) -> Co
 #[tauri::command(async)]
 pub fn set_flag(state: State<AppState>, ids: Vec<i64>, flag: i8) -> CommandResult<()> {
     state.library.set_flag(&ids, flag).map_err(message)
+}
+
+// ---- film details ----
+
+#[tauri::command(async)]
+pub fn get_film_details(state: State<AppState>, ids: Vec<i64>) -> CommandResult<Vec<FilmPhoto>> {
+    state.library.film_details(&ids).map_err(message)
+}
+
+/// Each photo gets the details it comes with, in place of what it had.
+#[tauri::command(async)]
+pub fn set_film_details(state: State<AppState>, photos: Vec<FilmPhoto>) -> CommandResult<()> {
+    state.library.set_film_details(&photos).map_err(message)
+}
+
+#[tauri::command(async)]
+pub fn film_suggestions(state: State<AppState>) -> CommandResult<FilmSuggestions> {
+    state.library.film_suggestions().map_err(message)
 }
 
 // ---- deleting ----

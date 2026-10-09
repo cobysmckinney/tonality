@@ -2235,6 +2235,12 @@ button {
 .link:hover {
   text-decoration-color: var(--text);
 }
+.link.quiet {
+  color: var(--muted);
+}
+.link.quiet:hover {
+  color: var(--text);
+}
 .link svg {
   flex: none;
   color: var(--muted);
@@ -2745,6 +2751,75 @@ kbd {
 }
 .step-export:hover {
   color: var(--text);
+}
+
+/* ---- film details ---- */
+
+.dialog.film {
+  width: min(460px, 100%);
+}
+.film-rows .export-row {
+  grid-template-columns: 76px minmax(0, 1fr);
+}
+.film-input {
+  width: 100%;
+  height: 30px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: var(--r-control);
+  outline: 0;
+  background: var(--well);
+  user-select: text;
+  -webkit-user-select: text;
+}
+.film-input:focus {
+  box-shadow: inset 0 0 0 1.5px var(--accent);
+}
+.film-input::placeholder {
+  color: var(--faint);
+}
+/* Room for "Each keeps its own". */
+.film-number {
+  width: 150px;
+}
+.suggest {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+}
+/* What was typed before, offered under the field like a menu. */
+.suggestions {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  z-index: 1;
+  max-height: 200px;
+  overflow-y: auto;
+  padding: 5px;
+  list-style: none;
+  border: 1px solid rgb(255 255 255 / 0.06);
+  border-radius: 10px;
+  background: #26282b;
+  box-shadow: 0 16px 40px rgb(0 0 0 / 0.45);
+}
+.suggestions li {
+  padding: 6px 8px;
+  border-radius: 6px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.suggestions li:hover,
+.suggestions li.active {
+  background: #34373b;
+}
+.dialog p.film-mixed {
+  margin-top: 16px;
+  font-size: 12px;
+}
+.film-clear {
+  margin-right: auto;
 }
 
 /* ---- menus, toasts, drop ---- */

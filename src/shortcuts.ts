@@ -9,8 +9,9 @@ interface Open {
   shortcutsOpen: boolean;
   importState: unknown;
   exportState: unknown;
+  filmSheet: unknown;
   openId: number | null;
 }
 
 export const editorKeysBlocked = (s: Open) =>
-  Boolean(s.confirmRequest || s.menu || s.shortcutsOpen || s.importState || s.exportState) || s.openId === null;
+  Boolean(s.confirmRequest || s.menu || s.shortcutsOpen || s.importState || s.exportState || s.filmSheet) || s.openId === null;

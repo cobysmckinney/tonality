@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import { ExportSheet } from "./components/ExportSheet";
+import { FilmSheet } from "./components/FilmSheet";
 import { ImportSheet } from "./components/ImportSheet";
 import { Overlays } from "./components/Overlays";
 import { PhotoGrid } from "./components/PhotoGrid";
@@ -76,7 +77,8 @@ export default function App() {
   const empty = useStore((s) => visiblePhotos(s).length === 0);
   const openPhoto = useStore((s) => (s.openId === null ? undefined : s.photos.find((p) => p.id === s.openId)));
   const modal = useStore(
-    (s) => s.importState !== null || s.exportState !== null || s.confirmRequest !== null || s.shortcutsOpen,
+    (s) =>
+      s.importState !== null || s.exportState !== null || s.filmSheet !== null || s.confirmRequest !== null || s.shortcutsOpen,
   );
 
   useEffect(() => {
@@ -118,6 +120,7 @@ export default function App() {
       </div>
       <ImportSheet />
       <ExportSheet />
+      <FilmSheet />
       <Overlays />
     </>
   );

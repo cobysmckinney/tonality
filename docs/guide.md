@@ -19,7 +19,7 @@ Tonality keeps one managed library, like Apple Photos. Importing copies photos i
 ~/Pictures/Tonality/
   Originals/2026/2026-09-19/IMG_0462.CR2   your files, original names, browsable without the app
   Exports/IMG_0462.jpg                     exported pictures, unless you choose another folder
-  .tonality/library.db                     the index: favorites, flags, albums, imports
+  .tonality/library.db                     the index: favorites, flags, albums, imports, film details
   .tonality/thumbs, previews               generated images, safe to delete
 ```
 
@@ -29,6 +29,7 @@ Tonality keeps one managed library, like Apple Photos. Importing copies photos i
 - **Moving or deleting files in `Originals` yourself**: a file moved to another folder inside `Originals`, keeping its name, is found there and the photo follows it (a RAW's JPEG too, if it went alongside). A photo whose original is gone keeps its thumbnail but gets a crossed-out file mark in the grid, and can't be edited or exported until the file is back. Opening it in the editor says what's wrong in place of the photo, and the same goes for a file that's damaged and can't be read. Importing the photo again from its card or folder copies the file back to where it was; this works for photos in Recently Deleted too, which come back to the library at the same time.
 - **RAW + JPEG pairs** shot together are one photo.
 - **A damaged original**, or a file that isn't a photo Tonality can read, can't be edited or exported, and trying says so. If the photo is still on the camera card, deleting it permanently and importing it again may help.
+- **Film details**: a scan of a negative or slide carries the details of the camera that scanned it, not the film's. Right-click a selection (usually one roll) and choose **Film details…** to give the photos their film stock, the ISO it was shot at, the camera and lens, and frame numbers. Frames count up from the first frame (1 to begin with) in the order the photos were scanned. A field left as it is keeps each photo's own, so a roll can be filled in a batch at a time, and **Clear details** removes them. Stocks, cameras and lenses already used are offered as you type. In the editor, the Info tab (`I`) shows them in place of the scanner's, with the scanning camera listed under "Scanned with"; **Change film details** there corrects one frame. They are details about the photo, like flags, so they aren't steps in its history.
 - **Culling**: `F` favorite, `P` pick, `X` reject, `U` unflag, `Delete` to delete. Arrows move, Shift extends, Enter opens, Escape goes back. When a photo leaves the grid (deleted, or hidden by the filter after you reject it under Hide rejected, say), the next one is selected, so you can keep going without reaching for the mouse; in the editor, the next photo opens.
 - **If the library can't open** (say the folder can't be changed), the window says why. Fix the problem and choose Try again.
 
@@ -106,7 +107,7 @@ History works like a small git repository per photo, and takes the place of "vir
 - **Nothing is replaced**: a name that is taken, in the folder or by another file in the same export, gets a number (`IMG_0462-2.jpg`), and the sheet shows the exact name beforehand.
 - **Afterwards**: the step that was exported is marked in the History tab with the file it became; click the mark to show the file.
 
-Exports are sRGB and carry the capture date, camera, lens and exposure.
+Exports are sRGB and carry the capture date, camera, lens and exposure. A photo with film details carries the film camera, lens and ISO in place of the scanning camera's, and the film stock and frame number as its description (`Kodak Portra 400, frame 12`). The scan's aperture, shutter speed and focal length are left out, since they describe the scan rather than the picture.
 
 ## Keyboard shortcuts
 

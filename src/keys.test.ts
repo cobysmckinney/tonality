@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { opensShortcuts, SHORTCUTS } from "./keys";
 
-const nothing = { menu: null, confirmRequest: null, importState: null, exportState: null };
+const nothing = { menu: null, confirmRequest: null, importState: null, exportState: null, filmSheet: null };
 
 describe("the list of shortcuts", () => {
   test("opens with ?", () => {
@@ -15,6 +15,7 @@ describe("the list of shortcuts", () => {
     expect(opensShortcuts("?", false, { ...nothing, confirmRequest: { title: "Delete?" } })).toBe(false);
     expect(opensShortcuts("?", false, { ...nothing, importState: { phase: "review" } })).toBe(false);
     expect(opensShortcuts("?", false, { ...nothing, exportState: { phase: "setup" } })).toBe(false);
+    expect(opensShortcuts("?", false, { ...nothing, filmSheet: { photos: [] } })).toBe(false);
   });
 
   test("says what each key does once per group", () => {

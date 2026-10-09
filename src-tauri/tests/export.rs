@@ -11,7 +11,7 @@ use tempfile::TempDir;
 use tonality_lib::edit::Adjustments;
 use tonality_lib::export::{self, Branches, Format, Job, Settings, Summary};
 use tonality_lib::import;
-use tonality_lib::library::{Library, View};
+use tonality_lib::library::{FilmDetails, FilmPhoto, Library, View};
 
 struct Fixture {
     dir: TempDir,
@@ -354,4 +354,51 @@ fn every_branch_can_be_exported_at_once() {
     assert!(export::plan(&f.library, &none, None, u32::MAX).is_err());
     let two_photos = Job { branches: Branches::Chosen(vec![warm]), ..Job::of(&f.photos) };
     assert!(export::plan(&f.library, &two_photos, None, u32::MAX).is_err(), "branches are chosen for one photo at a time");
+}
+
+#[test]
+fn a_film_photo_exports_with_the_film_cameras_details_and_its_stock() {
+    let f = fixture();
+    // Both photos are camera scans: their own details describe the scanner.
+    let db = rusqlite::Connection::open(f.dir.path().join("Tonality/.tonality/library.db")).unwrap();
+    db.execute(
+        "UPDATE photos SET make = 'SONY', model = 'ILCE-7M4', lens = 'FE 90mm F2.8 Macro G OSS', iso = 100,
+                           aperture = 8.0, shutter = 0.0125, focal_length = 90.0",
+        [],
+    )
+    .unwrap();
+    let film = FilmDetails {
+        stock: Some("Kodak Portra 400".into()),
+        iso: Some(800),
+        camera: Some("Nikon FM2".into()),
+        lens: Some("Nikkor 50mm f/1.4".into()),
+        frame: Some(12),
+    };
+    let photo = FilmPhoto { id: f.photos[0], taken_at: String::new(), file_name: String::new(), film };
+    f.library.set_film_details(&[photo]).unwrap();
+
+    for settings in [Settings::default(), png(), Settings { format: Format::Tiff, ..Default::default() }] {
+        let summary = f.export(&f.photos, None, &settings);
+        let read = |at: usize| {
+            let file = fs::File::open(&summary.exported[at].path).unwrap();
+            exif::Reader::new().read_from_container(&mut std::io::BufReader::new(file)).unwrap()
+        };
+        let shown = |exif: &exif::Exif, tag| exif.get_field(tag, exif::In::PRIMARY).map(|field| field.display_value().to_string());
+
+        let film = read(0);
+        assert_eq!(shown(&film, exif::Tag::Make).as_deref(), Some("\"Nikon\""), "{:?}", settings.format);
+        assert_eq!(shown(&film, exif::Tag::Model).as_deref(), Some("\"Nikon FM2\""));
+        assert_eq!(shown(&film, exif::Tag::LensModel).as_deref(), Some("\"Nikkor 50mm f/1.4\""));
+        assert_eq!(shown(&film, exif::Tag::PhotographicSensitivity).as_deref(), Some("800"));
+        assert_eq!(shown(&film, exif::Tag::ImageDescription).as_deref(), Some("\"Kodak Portra 400, frame 12\""));
+        for scans in [exif::Tag::FNumber, exif::Tag::ExposureTime, exif::Tag::FocalLength] {
+            assert_eq!(shown(&film, scans), None, "the scan's {scans} doesn't describe the film");
+        }
+        assert!(shown(&film, exif::Tag::DateTimeOriginal).is_some());
+
+        let scan = read(1);
+        assert_eq!(shown(&scan, exif::Tag::Model).as_deref(), Some("\"ILCE-7M4\""), "a photo without film details is as shot");
+        assert_eq!(shown(&scan, exif::Tag::FNumber).as_deref(), Some("8"));
+        assert_eq!(shown(&scan, exif::Tag::ImageDescription), None);
+    }
 }
