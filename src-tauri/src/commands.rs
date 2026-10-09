@@ -6,14 +6,17 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State, Window};
+use tauri_plugin_dialog::{DialogExt, FileDialogBuilder, FilePath};
 
 use crate::edit::{Adjustments, Shape};
 use crate::export;
+use crate::grants::Grants;
 use crate::gpu::{self, Region, Session};
 use crate::history::History;
 use crate::import::{self, ImportSummary, ScanSession, ScanView};
 use crate::library::{Library, Overview, PhotoInfo, PhotoItem, View};
+use crate::media;
 use crate::presets::{self, ImportedPresets, Preset, Settings};
 use crate::segment::Found;
 use crate::thumbs;
@@ -167,6 +170,74 @@ pub fn remove_from_album(state: State<AppState>, album_id: i64, ids: Vec<i64>) -
     state.library.remove_from_album(album_id, &ids).map_err(message)
 }
 
+// ---- choosing files ----
+//
+// The dialogs are opened here rather than by the interface, so the paths the
+// commands below are given are ones the person chose (see grants.rs).
+
+fn dialog(window: &Window, title: &str) -> FileDialogBuilder<tauri::Wry> {
+    let builder = window.dialog().file().set_title(title);
+    // As the dialog plugin does: GTK dialogs place themselves.
+    #[cfg(any(windows, target_os = "macos"))]
+    let builder = builder.set_parent(window);
+    builder
+}
+
+/// The paths chosen in a dialog, now allowed to commands.
+fn chosen(window: &Window, picked: Option<Vec<FilePath>>) -> Vec<PathBuf> {
+    let paths: Vec<PathBuf> = picked.unwrap_or_default().into_iter().filter_map(|p| p.simplified().into_path().ok()).collect();
+    window.state::<Grants>().allow(paths.iter().cloned());
+    paths
+}
+
+/// Asks for photos to import, or with `folders` for folders of them.
+#[tauri::command]
+pub async fn choose_import(window: Window, folders: bool) -> CommandResult<Vec<PathBuf>> {
+    let picked = if folders {
+        dialog(&window, "Import a folder").blocking_pick_folders()
+    } else {
+        let extensions = media::extensions();
+        let extensions: Vec<&str> = extensions.iter().map(String::as_str).collect();
+        dialog(&window, "Import photos").add_filter("Photos", &extensions).blocking_pick_files()
+    };
+    Ok(chosen(&window, picked))
+}
+
+/// Asks for preset files to import.
+#[tauri::command]
+pub async fn choose_preset_files(window: Window) -> CommandResult<Vec<PathBuf>> {
+    let picked = dialog(&window, "Import presets").add_filter("Tonality presets", &[presets::FILE_EXTENSION, "json"]).blocking_pick_files();
+    Ok(chosen(&window, picked))
+}
+
+/// Asks where to save a preset as a file, offering `name`.
+#[tauri::command]
+pub async fn choose_preset_destination(window: Window, name: String) -> CommandResult<Option<PathBuf>> {
+    let picked = dialog(&window, "Export preset")
+        .set_file_name(format!("{name}.{}", presets::FILE_EXTENSION))
+        .add_filter("Tonality presets", &[presets::FILE_EXTENSION])
+        .blocking_save_file();
+    Ok(chosen(&window, picked.map(|path| vec![path])).pop())
+}
+
+/// Asks for a folder to export to, starting in `current`.
+#[tauri::command]
+pub async fn choose_export_folder(window: Window, current: Option<PathBuf>) -> CommandResult<Option<PathBuf>> {
+    let mut builder = dialog(&window, "Export to");
+    if let Some(current) = current.filter(|folder| folder.is_dir()) {
+        builder = builder.set_directory(current);
+    }
+    Ok(chosen(&window, builder.blocking_pick_folder().map(|path| vec![path])).pop())
+}
+
+/// Fails unless the export folder is the library's own, one chosen in
+/// `choose_export_folder`, or the one used last time.
+fn check_export_folder(state: &AppState, grants: &Grants, settings: &export::Settings) -> CommandResult<()> {
+    let Some(folder) = &settings.folder else { return Ok(()) };
+    let last = state.library.export_settings().map_err(message)?.folder;
+    grants.check([folder.as_path()], last.as_slice()).map_err(message)
+}
+
 // ---- importing ----
 
 #[tauri::command(async)]
@@ -185,6 +256,9 @@ fn forget_scan(state: &AppState) {
 #[tauri::command]
 pub async fn scan_import(app: AppHandle, paths: Vec<PathBuf>, source: Option<String>) -> CommandResult<ScanView> {
     tauri::async_runtime::spawn_blocking(move || {
+        // Only what was chosen or dropped, or a camera card.
+        let cards: Vec<PathBuf> = volumes::list().into_iter().map(|card| PathBuf::from(card.path)).collect();
+        app.state::<Grants>().check(paths.iter().map(PathBuf::as_path), &cards).map_err(message)?;
         let state = app.state::<AppState>();
         forget_scan(&state);
         // Time-based so a review sheet never shows thumbnails cached from an earlier run.
@@ -634,12 +708,14 @@ pub fn delete_preset(state: State<AppState>, id: i64) -> CommandResult<()> {
 }
 
 #[tauri::command(async)]
-pub fn export_preset(state: State<AppState>, id: i64, path: PathBuf) -> CommandResult<()> {
+pub fn export_preset(state: State<AppState>, grants: State<Grants>, id: i64, path: PathBuf) -> CommandResult<()> {
+    grants.check([path.as_path()], &[]).map_err(message)?;
     state.library.export_preset(id, &path).map_err(message)
 }
 
 #[tauri::command(async)]
-pub fn import_presets(state: State<AppState>, paths: Vec<PathBuf>) -> CommandResult<ImportedPresets> {
+pub fn import_presets(state: State<AppState>, grants: State<Grants>, paths: Vec<PathBuf>) -> CommandResult<ImportedPresets> {
+    grants.check(paths.iter().map(PathBuf::as_path), &[]).map_err(message)?;
     state.library.import_presets(&paths).map_err(message)
 }
 
@@ -688,9 +764,13 @@ pub fn history_delete_branch(state: State<AppState>, id: i64, branch_id: i64) ->
 #[tauri::command(async)]
 pub fn plan_export(
     state: State<AppState>,
+    grants: State<Grants>,
     job: export::Job,
     settings: Option<export::Settings>,
 ) -> CommandResult<export::Plan> {
+    if let Some(settings) = &settings {
+        check_export_folder(&state, &grants, settings)?;
+    }
     let largest = gpu::shared().map_or(u32::MAX, gpu::Gpu::largest_picture);
     export::plan(&state.library, &job, settings.as_ref(), largest).map_err(message)
 }
@@ -700,6 +780,7 @@ pub fn plan_export(
 pub async fn run_export(app: AppHandle, job: export::Job, settings: export::Settings) -> CommandResult<export::Summary> {
     tauri::async_runtime::spawn_blocking(move || {
         let state = app.state::<AppState>();
+        check_export_folder(&state, &app.state::<Grants>(), &settings)?;
         state.cancel_export.store(false, Ordering::Relaxed);
         // A photo that is not in the editor is loaded here, and kept while
         // the files that follow are of the same photo (its other branches).
