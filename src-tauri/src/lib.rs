@@ -15,6 +15,7 @@ pub mod presets;
 pub mod segment;
 pub mod thumbs;
 pub mod volumes;
+pub mod xmp;
 
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
