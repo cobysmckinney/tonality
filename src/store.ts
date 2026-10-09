@@ -33,11 +33,12 @@ import {
   Volume,
 } from "./api";
 import { listenAll, settleEach } from "./events";
+import { FilmPhoto, FilmSuggestions } from "./film";
 import { plural } from "./format";
 import { canAdd, circleShape, foundShapes, isFound, MaskStart, MAX_MASKS, newMask, newShape, SHAPE_NAMES, startKind } from "./masks";
 import { blend, holds, Preset, settingsFrom } from "./presets";
 import { forget } from "./selection";
-import { canStartExport, canStartImport } from "./sheets";
+import { canStartExport, canStartFilm, canStartImport } from "./sheets";
 
 export type Filter = "all" | "picks" | "unrejected" | "rejects";
 
@@ -233,6 +234,10 @@ interface State {
   volumes: Volume[];
   importState: ImportState | null;
   exportState: ExportState | null;
+  /** The film details sheet: the photos it is for, as they are now, and what to offer while typing. */
+  filmSheet: { photos: FilmPhoto[]; suggestions: FilmSuggestions } | null;
+  /** Counts film details saved, so what shows them knows to look again. */
+  filmSaves: number;
   toasts: Toast[];
   /** Work in progress, oldest first. */
   activities: Activity[];
@@ -359,6 +364,11 @@ interface State {
   chooseExportFolder: () => Promise<void>;
   runExport: () => Promise<void>;
   dismissExport: () => Promise<void>;
+  /** Opens the film details sheet for these photos. */
+  editFilmDetails: (ids: number[]) => Promise<void>;
+  /** Gives each photo these details, and closes the sheet. */
+  saveFilmDetails: (photos: FilmPhoto[]) => Promise<void>;
+  closeFilmDetails: () => void;
   /** Shows a file in the system's file manager. */
   reveal: (path: string) => Promise<void>;
 
@@ -626,6 +636,8 @@ export const useStore = create<State>((set, get) => {
     volumes: [],
     importState: null,
     exportState: null,
+    filmSheet: null,
+    filmSaves: 0,
     toasts: [],
     activities: [],
     confirmRequest: null,
@@ -1402,6 +1414,27 @@ export const useStore = create<State>((set, get) => {
       // A running export notices, finishes the photo in hand, and reports what it wrote.
       if (get().exportState?.phase === "exporting") await api.cancelExport();
       else set({ exportState: null });
+    },
+
+    async editFilmDetails(ids) {
+      if (ids.length === 0 || !canStartFilm(get())) return;
+      set({ menu: null });
+      try {
+        const [photos, suggestions] = await Promise.all([api.getFilmDetails(ids), api.filmSuggestions()]);
+        if (photos.length > 0 && canStartFilm(get())) set({ filmSheet: { photos, suggestions } });
+      } catch (error) {
+        get().toast({ text: String(error), tone: "error" });
+      }
+    },
+
+    async saveFilmDetails(photos) {
+      if (!(await attempt(() => api.setFilmDetails(photos)))) return;
+      set((s) => ({ filmSheet: null, filmSaves: s.filmSaves + 1 }));
+      if (photos.length > 1) get().toast({ text: `Saved film details for ${plural(photos.length, "photo")}` });
+    },
+
+    closeFilmDetails() {
+      set({ filmSheet: null });
     },
 
     async reveal(path) {

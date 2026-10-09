@@ -1,12 +1,13 @@
 import { describe, expect, test } from "bun:test";
-import { canStartExport, canStartImport } from "./sheets";
+import { canStartExport, canStartFilm, canStartImport } from "./sheets";
 
-const nothing = { importState: null, exportState: null, confirmRequest: null };
+const nothing = { importState: null, exportState: null, filmSheet: null, confirmRequest: null };
 
 describe("one sheet at a time", () => {
-  test("either can start when nothing is open", () => {
+  test("any can start when nothing is open", () => {
     expect(canStartImport(nothing)).toBe(true);
     expect(canStartExport(nothing)).toBe(true);
+    expect(canStartFilm(nothing)).toBe(true);
   });
 
   test("an import doesn't open over the export sheet or a question", () => {
@@ -24,5 +25,14 @@ describe("one sheet at a time", () => {
   test("an export doesn't open over the import sheet", () => {
     expect(canStartExport({ ...nothing, importState: { phase: "review" } })).toBe(false);
     expect(canStartExport({ ...nothing, exportState: { phase: "setup" } })).toBe(false);
+  });
+
+  test("film details don't open over another sheet, and nothing opens over them", () => {
+    const film = { ...nothing, filmSheet: { photos: [] } };
+    expect(canStartImport(film)).toBe(false);
+    expect(canStartExport(film)).toBe(false);
+    expect(canStartFilm(film)).toBe(false);
+    expect(canStartFilm({ ...nothing, importState: { phase: "review" } })).toBe(false);
+    expect(canStartFilm({ ...nothing, exportState: { phase: "setup" } })).toBe(false);
   });
 });

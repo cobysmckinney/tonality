@@ -23,6 +23,7 @@ import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { Adjustments, DEFAULTS, isAsShot } from "../../adjustments";
 import { withPreset } from "../../presets";
 import { api, Photo, PhotoInfo, previewUrl, Region, thumbUrl } from "../../api";
+import { hasFilm } from "../../film";
 import * as format from "../../format";
 import { albumEntries } from "../../menus";
 import { MenuEntry, neighbours, SidePanel as SidePanelName, useStore, visiblePhotos } from "../../store";
@@ -111,24 +112,37 @@ function Info({ photo }: { photo: Photo }) {
   const [info, setInfo] = useState<PhotoInfo | null>(null);
   const size = useStore((s) => s.editor.size);
   const adjustments = useStore((s) => s.editor.adjustments);
+  const filmSaves = useStore((s) => s.filmSaves);
+  const shownId = useRef<number | null>(null);
   useEffect(() => {
     let current = true;
-    setInfo(null);
+    // Kept on screen while film details just saved are read back, so the panel doesn't blink.
+    if (shownId.current !== photo.id) setInfo(null);
+    shownId.current = photo.id;
     void api.getPhotoInfo(photo.id).then((loaded) => current && setInfo(loaded));
     return () => {
       current = false;
     };
-  }, [photo.id]);
+  }, [photo.id, filmSaves]);
 
   const camera = [info?.make, info?.model].filter(Boolean).join(" ");
-  const readings = info
+  // A film photo's own details are the scanner's: the film's stand in for them.
+  const film = info && hasFilm(info.film) ? info.film : null;
+  const scanner = [camera, info?.lens].filter(Boolean).join(", ");
+  const readings = film
     ? [
-        { label: "Shutter", value: info.shutter !== null ? format.shutter(info.shutter) : null },
-        { label: "Aperture", value: info.aperture !== null ? format.aperture(info.aperture) : null },
-        { label: "Focal length", value: info.focalLength !== null ? format.focalLength(info.focalLength) : null },
-        { label: "ISO", value: info.iso !== null ? String(info.iso) : null },
+        { label: "Frame", value: film.frame !== null ? String(film.frame) : null },
+        { label: "ISO", value: film.iso !== null ? String(film.iso) : null },
       ].filter((reading) => reading.value !== null)
-    : [];
+    : info
+      ? [
+          { label: "Shutter", value: info.shutter !== null ? format.shutter(info.shutter) : null },
+          { label: "Aperture", value: info.aperture !== null ? format.aperture(info.aperture) : null },
+          { label: "Focal length", value: info.focalLength !== null ? format.focalLength(info.focalLength) : null },
+          { label: "ISO", value: info.iso !== null ? String(info.iso) : null },
+        ].filter((reading) => reading.value !== null)
+      : [];
+  const editFilm = () => void useStore.getState().editFilmDetails([photo.id]);
   // What an export at full size would measure, once the crop is taken into account.
   const cropped = size && frameSize(size, adjustments, false);
   const croppedSize = cropped && { width: Math.round(cropped.width), height: Math.round(cropped.height) };
@@ -157,10 +171,29 @@ function Info({ photo }: { photo: Photo }) {
         </dl>
       )}
 
-      {info && (camera || info.lens) && (
+      {film && (
+        <dl className="facts">
+          {film.stock && <Fact label="Film">{film.stock}</Fact>}
+          {film.camera && <Fact label="Camera">{film.camera}</Fact>}
+          {film.lens && <Fact label="Lens">{film.lens}</Fact>}
+          {scanner && <Fact label="Scanned with">{scanner}</Fact>}
+          <Fact label="">
+            <button className="link" onClick={editFilm}>
+              Change film details
+            </button>
+          </Fact>
+        </dl>
+      )}
+
+      {info && !film && (
         <dl className="facts">
           {camera && <Fact label="Camera">{camera}</Fact>}
           {info.lens && <Fact label="Lens">{info.lens}</Fact>}
+          <Fact label="">
+            <button className="link quiet" onClick={editFilm} title="For a scan of film: the stock, camera, lens and frame">
+              Add film details
+            </button>
+          </Fact>
         </dl>
       )}
 

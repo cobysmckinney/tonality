@@ -1,5 +1,6 @@
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import type { Adjustments, Shape } from "./adjustments";
+import type { FilmDetails, FilmPhoto, FilmSuggestions } from "./film";
 import type { Preset, PresetSettings } from "./presets";
 
 export type View =
@@ -49,6 +50,8 @@ export interface PhotoInfo {
   focalLength: number | null;
   importedAt: number;
   albums: string[];
+  /** What a photo of film was shot on, as typed in; the details above are then the scanner's. */
+  film: FilmDetails;
 }
 
 export interface Album {
@@ -277,6 +280,11 @@ export const api = {
 
   setFavorite: (ids: number[], favorite: boolean) => invoke<void>("set_favorite", { ids, favorite }),
   setFlag: (ids: number[], flag: Flag) => invoke<void>("set_flag", { ids, flag }),
+
+  getFilmDetails: (ids: number[]) => invoke<FilmPhoto[]>("get_film_details", { ids }),
+  /** Each photo gets the details it comes with, in place of what it had. */
+  setFilmDetails: (photos: FilmPhoto[]) => invoke<void>("set_film_details", { photos }),
+  filmSuggestions: () => invoke<FilmSuggestions>("film_suggestions"),
 
   trashPhotos: (ids: number[]) => invoke<void>("trash_photos", { ids }),
   restorePhotos: (ids: number[]) => invoke<void>("restore_photos", { ids }),

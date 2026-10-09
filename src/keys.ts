@@ -79,6 +79,7 @@ interface Open {
   confirmRequest: unknown;
   importState: unknown;
   exportState: unknown;
+  filmSheet: unknown;
 }
 
 /**
@@ -86,4 +87,4 @@ interface Open {
  * else (a menu, a question, a sheet) on top.
  */
 export const opensShortcuts = (key: string, typing: boolean, s: Open) =>
-  key === "?" && !typing && !s.menu && !s.confirmRequest && !s.importState && !s.exportState;
+  key === "?" && !typing && !s.menu && !s.confirmRequest && !s.importState && !s.exportState && !s.filmSheet;

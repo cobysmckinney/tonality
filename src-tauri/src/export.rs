@@ -30,7 +30,7 @@ use serde::{Deserialize, Serialize};
 use crate::edit::Adjustments;
 use crate::gpu::{self, DeepImage};
 use crate::history::Branch;
-use crate::library::Library;
+use crate::library::{FilmDetails, Library, FILM_COLUMNS};
 
 pub(crate) const SCHEMA: &str = "
 -- One row per file an export wrote.
@@ -253,6 +253,40 @@ struct Capture {
     aperture: Option<f64>,
     shutter: Option<f64>,
     focal_length: Option<f64>,
+    /// What the picture shows besides: the film stock and frame of a film photo.
+    description: Option<String>,
+}
+
+impl Capture {
+    /// The capture as the film it is of was shot, if it has film details: a
+    /// scan's own details describe the scanning camera and lens. The film
+    /// camera, lens and ISO stand in for the scanner's, and the scanner's
+    /// aperture, shutter speed and focal length go, since they were the
+    /// scan's. The film stock and frame number become the description.
+    fn on_film(self, film: FilmDetails) -> Self {
+        if !film.is_set() {
+            return self;
+        }
+        // Cameras give their make as a word of its own: "Nikon", then "Nikon FM2".
+        let make = film.camera.as_deref().and_then(|camera| camera.split_whitespace().next()).map(str::to_string);
+        let description = match (film.stock, film.frame) {
+            (Some(stock), Some(frame)) => Some(format!("{stock}, frame {frame}")),
+            (Some(stock), None) => Some(stock),
+            (None, Some(frame)) => Some(format!("Frame {frame}")),
+            (None, None) => None,
+        };
+        Capture {
+            taken_at: self.taken_at,
+            make,
+            model: film.camera,
+            lens: film.lens,
+            iso: film.iso,
+            aperture: None,
+            shutter: None,
+            focal_length: None,
+            description,
+        }
+    }
 }
 
 /// What one photo contributes to an export.
@@ -278,13 +312,15 @@ impl Source {
     fn read(db: &Connection, photo_id: i64, branch_id: Option<i64>) -> Result<Self> {
         let (source, own_edits, step_recipe) = db
             .query_row(
-                "SELECT p.file_name, p.edits, p.taken_at, p.make, p.model, p.lens, p.iso, p.aperture, p.shutter,
-                        p.focal_length, (SELECT COUNT(*) FROM edit_branches WHERE photo_id = p.id),
-                        b.id, b.name, s.id, s.recipe, p.branch_id, p.width, p.height
-                 FROM photos p
-                 LEFT JOIN edit_branches b ON b.photo_id = p.id AND b.id = COALESCE(?2, p.branch_id)
-                 LEFT JOIN edit_steps s ON s.id = b.head_id
-                 WHERE p.id = ?1",
+                &format!(
+                    "SELECT p.file_name, p.edits, p.taken_at, p.make, p.model, p.lens, p.iso, p.aperture, p.shutter,
+                            p.focal_length, (SELECT COUNT(*) FROM edit_branches WHERE photo_id = p.id),
+                            b.id, b.name, s.id, s.recipe, p.branch_id, p.width, p.height, {FILM_COLUMNS}
+                     FROM photos p
+                     LEFT JOIN edit_branches b ON b.photo_id = p.id AND b.id = COALESCE(?2, p.branch_id)
+                     LEFT JOIN edit_steps s ON s.id = b.head_id
+                     WHERE p.id = ?1"
+                ),
                 params![photo_id, branch_id],
                 |r| {
                     let branch = match (r.get::<_, Option<i64>>(11)?, r.get::<_, Option<String>>(12)?) {
@@ -308,7 +344,9 @@ impl Source {
                             aperture: r.get(7)?,
                             shutter: r.get(8)?,
                             focal_length: r.get(9)?,
-                        },
+                            description: None,
+                        }
+                        .on_film(FilmDetails::from_row(r, 18)?),
                     };
                     Ok((source, r.get::<_, Option<String>>(1)?, r.get::<_, Option<String>>(14)?))
                 },
@@ -431,6 +469,7 @@ fn capture_fields(capture: &Capture) -> Vec<Field> {
         text(Tag::Software, "Tonality"),
         // 1 is sRGB, which is what the develop shader produces.
         Some(field(Tag::ColorSpace, Value::Short(vec![1]))),
+        capture.description.as_deref().and_then(|description| text(Tag::ImageDescription, description)),
         capture.make.as_deref().and_then(|make| text(Tag::Make, make)),
         capture.model.as_deref().and_then(|model| text(Tag::Model, model)),
         capture.lens.as_deref().and_then(|lens| text(Tag::LensModel, lens)),
@@ -718,6 +757,7 @@ mod tests {
             aperture: Some(2.8),
             shutter: Some(1.0 / 250.0),
             focal_length: Some(35.0),
+            description: None,
         }
     }
 
@@ -807,6 +847,27 @@ mod tests {
         let bytes = write_tiff(&capture_fields(&fast), None, 0).unwrap();
         let read = exif::Reader::new().read_raw(bytes).unwrap();
         assert_eq!(read.get_field(Tag::FNumber, In::PRIMARY).unwrap().display_value().to_string(), "0.95", "not rounded to f/1");
+    }
+
+    #[test]
+    fn a_film_photo_carries_the_film_cameras_details_rather_than_the_scanners() {
+        let film = FilmDetails { camera: Some("Nikon FM2".into()), iso: Some(800), ..Default::default() };
+        let on_film = capture().on_film(film);
+        assert_eq!((on_film.make.as_deref(), on_film.model.as_deref()), (Some("Nikon"), Some("Nikon FM2")));
+        assert_eq!((on_film.lens, on_film.iso), (None, Some(800)), "the scanner's macro lens is not the film camera's");
+        assert_eq!((on_film.aperture, on_film.shutter, on_film.focal_length), (None, None, None));
+        assert_eq!(on_film.taken_at, capture().taken_at);
+
+        let described = |stock: Option<&str>, frame| {
+            let film = FilmDetails { stock: stock.map(str::to_string), frame, ..Default::default() };
+            capture().on_film(film).description
+        };
+        assert_eq!(described(Some("Kodak Portra 400"), Some(12)).as_deref(), Some("Kodak Portra 400, frame 12"));
+        assert_eq!(described(Some("Ilford HP5 Plus"), None).as_deref(), Some("Ilford HP5 Plus"));
+        assert_eq!(described(None, Some(0)).as_deref(), Some("Frame 0"));
+
+        let digital = capture().on_film(FilmDetails::default());
+        assert_eq!((digital.model.as_deref(), digital.aperture), (Some("Canon EOS R6"), Some(2.8)), "a digital photo is as shot");
     }
 
     #[test]

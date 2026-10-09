@@ -158,7 +158,9 @@ function Keys({ keys }: { keys: string[] }) {
 /** Every keyboard shortcut, opened with ? or the keyboard button in the title bar. */
 function Shortcuts() {
   const open = useStore((s) => s.shortcutsOpen);
-  const busy = useStore((s) => s.importState !== null || s.exportState !== null || s.confirmRequest !== null);
+  const busy = useStore(
+    (s) => s.importState !== null || s.exportState !== null || s.filmSheet !== null || s.confirmRequest !== null,
+  );
   const opener = useRef<HTMLElement | null>(null);
   const closeButton = useRef<HTMLButtonElement>(null);
 

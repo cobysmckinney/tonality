@@ -58,6 +58,7 @@ export function photoMenu(ids: number[]): MenuEntry[] {
     ...(view.kind === "album"
       ? [{ label: "Remove from this album", run: () => void s.removeFromAlbum(view.id, ids) }]
       : []),
+    { label: "Film details…", run: () => void s.editFilmDetails(ids) },
     ...(single !== null
       ? [
           {

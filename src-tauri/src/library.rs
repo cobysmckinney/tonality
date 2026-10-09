@@ -94,6 +94,17 @@ CREATE TABLE settings (
 ) WITHOUT ROWID;
 ";
 
+/// Version 7: photos of film carry the film's own details.
+const ADD_FILM: &str = "
+-- What a film photo was shot on, typed in by hand: a camera scan's own
+-- details describe the scanning camera instead. NULL where not given.
+ALTER TABLE photos ADD COLUMN film_stock TEXT;
+ALTER TABLE photos ADD COLUMN film_iso INTEGER;
+ALTER TABLE photos ADD COLUMN film_camera TEXT;
+ALTER TABLE photos ADD COLUMN film_lens TEXT;
+ALTER TABLE photos ADD COLUMN film_frame INTEGER;
+";
+
 /// Which slice of the library a grid shows.
 #[derive(Debug, Clone, Copy, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
@@ -146,6 +157,70 @@ pub struct PhotoInfo {
     pub focal_length: Option<f64>,
     pub imported_at: i64,
     pub albums: Vec<String>,
+    pub film: FilmDetails,
+}
+
+/// What a photo of film was shot on and with, as typed in. These are details
+/// about the photo, like its flag, rather than edits.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FilmDetails {
+    /// The film stock: "Kodak Portra 400".
+    pub stock: Option<String>,
+    /// The speed the film was shot at, which may not be the box speed.
+    pub iso: Option<u32>,
+    pub camera: Option<String>,
+    pub lens: Option<String>,
+    /// The frame's number on the roll.
+    pub frame: Option<u32>,
+}
+
+impl FilmDetails {
+    /// Whether any detail is given, which makes the photo one of film.
+    pub fn is_set(&self) -> bool {
+        *self != Self::default()
+    }
+
+    /// Text trimmed, with blanks and an ISO of 0 left out.
+    pub fn tidied(self) -> Self {
+        let text = |value: Option<String>| value.map(|v| v.trim().to_string()).filter(|v| !v.is_empty());
+        Self {
+            stock: text(self.stock),
+            iso: self.iso.filter(|&iso| iso > 0),
+            camera: text(self.camera),
+            lens: text(self.lens),
+            frame: self.frame,
+        }
+    }
+
+    /// Reads the columns of [`FILM_COLUMNS`], starting at column `at`.
+    pub(crate) fn from_row(r: &Row, at: usize) -> rusqlite::Result<Self> {
+        Ok(Self { stock: r.get(at)?, iso: r.get(at + 1)?, camera: r.get(at + 2)?, lens: r.get(at + 3)?, frame: r.get(at + 4)? })
+    }
+}
+
+/// The film columns, in the order [`FilmDetails::from_row`] reads them.
+pub(crate) const FILM_COLUMNS: &str = "p.film_stock, p.film_iso, p.film_camera, p.film_lens, p.film_frame";
+
+/// One photo's film details, with what puts photos in the order they were taken.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FilmPhoto {
+    pub id: i64,
+    #[serde(default)]
+    pub taken_at: String,
+    #[serde(default)]
+    pub file_name: String,
+    pub film: FilmDetails,
+}
+
+/// Film details already in use, to offer while typing; the most used first.
+#[derive(Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FilmSuggestions {
+    pub stocks: Vec<String>,
+    pub cameras: Vec<String>,
+    pub lenses: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -277,6 +352,10 @@ impl Library {
         if version < 6 {
             db.execute_batch(&format!("BEGIN; {} PRAGMA user_version = 6; COMMIT;", crate::presets::FAVORITES_SCHEMA))
                 .context("upgrading library to hold favorite presets")?;
+        }
+        if version < 7 {
+            db.execute_batch(&format!("BEGIN; {ADD_FILM} PRAGMA user_version = 7; COMMIT;"))
+                .context("upgrading library to hold film details")?;
         }
         let library = Self { root: root.to_path_buf(), db: Mutex::new(db), _lock: lock };
         // Leftovers from an import or review that was interrupted.
@@ -447,9 +526,11 @@ impl Library {
             .collect::<rusqlite::Result<_>>()?;
         let absolute = |relative: String| self.root.join(relative).to_string_lossy().into_owned();
         db.query_row(
-            "SELECT p.path, p.jpeg_path, p.file_size, p.make, p.model, p.lens, p.iso, p.aperture,
-                    p.shutter, p.focal_length, i.created_at
-             FROM photos p JOIN imports i ON i.id = p.import_id WHERE p.id = ?1",
+            &format!(
+                "SELECT p.path, p.jpeg_path, p.file_size, p.make, p.model, p.lens, p.iso, p.aperture,
+                        p.shutter, p.focal_length, i.created_at, {FILM_COLUMNS}
+                 FROM photos p JOIN imports i ON i.id = p.import_id WHERE p.id = ?1"
+            ),
             [id],
             |r| {
                 Ok(PhotoInfo {
@@ -466,6 +547,7 @@ impl Library {
                     focal_length: r.get(9)?,
                     imported_at: r.get(10)?,
                     albums,
+                    film: FilmDetails::from_row(r, 11)?,
                 })
             },
         )
@@ -688,6 +770,58 @@ impl Library {
 
     pub fn set_flag(&self, ids: &[i64], flag: i8) -> Result<()> {
         self.for_each_id("UPDATE photos SET flag = ?2 WHERE id = ?1", ids, Some(flag.signum() as i64))
+    }
+
+    // ---- film details ----
+
+    /// These photos' film details. Photos not in the library are left out.
+    pub fn film_details(&self, ids: &[i64]) -> Result<Vec<FilmPhoto>> {
+        let db = self.db();
+        let mut stmt = db.prepare(&format!("SELECT p.taken_at, p.file_name, {FILM_COLUMNS} FROM photos p WHERE p.id = ?1"))?;
+        let mut photos = Vec::with_capacity(ids.len());
+        for &id in ids {
+            let photo = stmt
+                .query_row([id], |r| {
+                    Ok(FilmPhoto { id, taken_at: r.get(0)?, file_name: r.get(1)?, film: FilmDetails::from_row(r, 2)? })
+                })
+                .optional()?;
+            photos.extend(photo);
+        }
+        Ok(photos)
+    }
+
+    /// Gives each photo the film details that come with it, in place of
+    /// what it had: a detail left empty is cleared.
+    pub fn set_film_details(&self, photos: &[FilmPhoto]) -> Result<()> {
+        let mut db = self.db();
+        let tx = db.transaction()?;
+        {
+            let mut stmt = tx.prepare(
+                "UPDATE photos SET film_stock = ?2, film_iso = ?3, film_camera = ?4, film_lens = ?5, film_frame = ?6
+                 WHERE id = ?1",
+            )?;
+            for photo in photos {
+                let film = photo.film.clone().tidied();
+                stmt.execute(params![photo.id, film.stock, film.iso, film.camera, film.lens, film.frame])?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// The stocks, cameras and lenses already given to photos in the
+    /// library, the most used first.
+    pub fn film_suggestions(&self) -> Result<FilmSuggestions> {
+        let db = self.db();
+        let used = |column: &str| -> Result<Vec<String>> {
+            let mut stmt = db.prepare(&format!(
+                "SELECT {column} FROM photos WHERE {column} IS NOT NULL AND deleted_at IS NULL
+                 GROUP BY {column} ORDER BY COUNT(*) DESC, {column} COLLATE NOCASE"
+            ))?;
+            let values = stmt.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
+            Ok(values)
+        };
+        Ok(FilmSuggestions { stocks: used("film_stock")?, cameras: used("film_camera")?, lenses: used("film_lens")? })
     }
 
     // ---- deleting ----

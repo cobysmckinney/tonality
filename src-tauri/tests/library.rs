@@ -10,7 +10,7 @@ use tempfile::TempDir;
 use tonality_lib::edit::Adjustments;
 use tonality_lib::gpu::LOOK_VERSION;
 use tonality_lib::import::{self, ScanSession};
-use tonality_lib::library::{self, Library, LibraryInUse, View};
+use tonality_lib::library::{self, FilmDetails, FilmPhoto, Library, LibraryInUse, View};
 use tonality_lib::thumbs;
 
 /// 2026-03-14 around midday UTC; far enough from midnight to be the same day in any timezone that matters here.
@@ -451,6 +451,58 @@ fn favorites_flags_and_albums() {
     assert_eq!(f.library.list_photos(View::Library).unwrap().len(), 2, "deleting an album keeps its photos");
 }
 
+fn on_film(id: i64, stock: &str, camera: &str, frame: u32) -> FilmPhoto {
+    let film = FilmDetails {
+        stock: Some(stock.into()),
+        iso: Some(400),
+        camera: Some(camera.into()),
+        lens: None,
+        frame: Some(frame),
+    };
+    FilmPhoto { id, taken_at: String::new(), file_name: String::new(), film }
+}
+
+#[test]
+fn film_details_are_kept_per_photo_and_offered_again() {
+    let f = fixture();
+    import_all(&f.library, &scan(&f.library, std::slice::from_ref(&f.card)));
+    let ids: Vec<i64> = f.library.list_photos(View::Library).unwrap().iter().map(|p| p.id).collect();
+    let versions: Vec<i64> = f.library.list_photos(View::Library).unwrap().iter().map(|p| p.version).collect();
+    assert!(!f.library.photo_info(ids[0]).unwrap().film.is_set(), "a photo starts with none");
+
+    f.library
+        .set_film_details(&[
+            on_film(ids[0], " Kodak Portra 400 ", "Nikon FM2", 1),
+            on_film(ids[1], "Kodak Portra 400", "Nikon FM2", 2),
+            on_film(ids[2], "Ilford HP5 Plus", "  ", 0),
+        ])
+        .unwrap();
+    let info = f.library.photo_info(ids[0]).unwrap();
+    assert_eq!(info.film.stock.as_deref(), Some("Kodak Portra 400"), "typed text is trimmed");
+    assert_eq!((info.film.iso, info.film.frame), (Some(400), Some(1)));
+    let read = f.library.film_details(&[ids[2], -1]).unwrap();
+    assert_eq!(read.len(), 1, "a photo not in the library is left out");
+    assert_eq!(read[0].film.camera, None, "a blank detail is no detail");
+    assert_eq!(read[0].film.frame, Some(0), "rolls start at frame 0 as often as 1");
+    assert!(!read[0].taken_at.is_empty() && !read[0].file_name.is_empty());
+
+    let suggestions = f.library.film_suggestions().unwrap();
+    assert_eq!(suggestions.stocks, ["Kodak Portra 400", "Ilford HP5 Plus"], "the most used first");
+    assert_eq!(suggestions.cameras, ["Nikon FM2"]);
+    assert!(suggestions.lenses.is_empty());
+
+    // Details about the photo, not edits: nothing is redrawn and the history has no step for them.
+    let after: Vec<i64> = f.library.list_photos(View::Library).unwrap().iter().map(|p| p.version).collect();
+    assert_eq!(after, versions);
+    assert!(f.library.list_photos(View::Library).unwrap().iter().all(|p| !p.edited));
+
+    // Clearing them.
+    let cleared = FilmPhoto { film: FilmDetails::default(), ..on_film(ids[2], "", "", 0) };
+    f.library.set_film_details(&[cleared]).unwrap();
+    assert!(!f.library.photo_info(ids[2]).unwrap().film.is_set());
+    assert_eq!(f.library.film_suggestions().unwrap().stocks, ["Kodak Portra 400"]);
+}
+
 #[test]
 fn a_library_opens_in_one_copy_at_a_time() {
     let dir = TempDir::new().unwrap();
@@ -666,15 +718,18 @@ fn a_library_from_the_first_version_is_brought_up_to_date() {
     let bright = tonality_lib::presets::Settings { exposure: Some(0.3), ..Default::default() };
     let preset = library.create_preset("Bright", bright).unwrap();
     assert_eq!(library.set_preset_favorite(preset.id, true).unwrap(), [preset.id]);
+    assert!(!library.photo_info(id).unwrap().film.is_set(), "an old photo has no film details");
+    library.set_film_details(&[on_film(id, "Kodak Gold 200", "Olympus OM-1", 7)]).unwrap();
     drop(library);
 
     // Opening it again changes nothing.
     let db = rusqlite::Connection::open(root.join(".tonality/library.db")).unwrap();
     let version: i64 = db.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
-    assert!(version >= 6, "at version {version}");
+    assert!(version >= 7, "at version {version}");
     let library = Library::open(&root).unwrap();
     assert!(library.edits(id).unwrap().is_some());
     assert_eq!(library.favorite_presets().unwrap(), [preset.id]);
+    assert_eq!(library.photo_info(id).unwrap().film.frame, Some(7));
 }
 
 /// Runs the real decoders over a folder of camera files:
