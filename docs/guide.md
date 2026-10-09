@@ -96,11 +96,15 @@ Exports are sRGB and carry the capture date, camera, lens and exposure.
 
 ## Keyboard shortcuts
 
+`?`, or the keyboard button in the title bar, lists them in the app. Menus show each item's key too.
+
 | Where | Key | Does |
 |---|---|---|
+| Anywhere | `?` | List the shortcuts |
 | Grid | Arrows, Shift+arrows | Move, extend the selection |
 | Grid | `Ctrl+A` | Select all |
 | Grid | Enter, double-click | Open the photo |
+| Grid | `Esc` | Clear the selection |
 | Grid, editor | `F` / `P` / `X` / `U` | Favorite / pick / reject / unflag |
 | Grid, editor | `Delete` | Move to Recently Deleted (kept 30 days). In the editor, not while a button or slider has focus: click the photo first |
 | Grid, editor | `Ctrl+C` / `Ctrl+V` | Copy / paste edits (in the grid, onto every selected photo) |
@@ -114,4 +118,6 @@ Exports are sRGB and carry the capture date, camera, lens and exposure.
 | Editor | `J` | Show clipped areas |
 | Editor | `O` | Mask overlay |
 | Editor | `[` / `]` | Brush size |
+| Editor | Alt while painting | Erase with the brush |
+| Editor | Enter, in the crop tool | Finish cropping |
 | Editor | double-click a slider | Reset it |
