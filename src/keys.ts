@@ -47,6 +47,7 @@ export const SHORTCUTS: ShortcutGroup[] = [
       { keys: ["Esc"], does: "Back, one step at a time" },
       { keys: ["Ctrl+Z"], does: "Undo" },
       { keys: ["Ctrl+Shift+Z", "Ctrl+Y"], does: "Redo" },
+      { keys: ["Y"], does: "Before and after" },
       { keys: ["\\"], does: "Hold to see the original" },
       { keys: ["Z"], does: "Fit or 100%" },
       { keys: ["J"], does: "Show clipped areas" },

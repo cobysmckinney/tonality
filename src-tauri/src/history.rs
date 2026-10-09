@@ -283,6 +283,21 @@ impl Library {
         })
     }
 
+    /// The recipe as of one of the photo's steps, on any branch, without
+    /// moving to it: what the editor compares the photo with.
+    pub fn step_recipe(&self, photo_id: i64, step_id: i64) -> Result<Adjustments> {
+        let recipe: Option<Option<String>> = self
+            .db()
+            .query_row(
+                "SELECT recipe FROM edit_steps WHERE id = ?1 AND photo_id = ?2",
+                params![step_id, photo_id],
+                |r| r.get(0),
+            )
+            .optional()?;
+        let Some(recipe) = recipe else { bail!("that step is not one of this photo's") };
+        Ok(Adjustments::from_json(recipe.as_deref()))
+    }
+
     /// Starts a new branch at `step_id` and switches to it. The branch you
     /// were on keeps everything it had.
     pub fn history_branch(&self, photo_id: i64, step_id: i64, name: &str) -> Result<History> {

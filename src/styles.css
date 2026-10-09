@@ -881,6 +881,73 @@ button {
   height: 100%;
 }
 
+/* Before and after: the before side is laid over the photo up to the split line. */
+.compare-before {
+  pointer-events: none;
+}
+.compare-split {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 21px;
+  margin-left: -10px;
+  cursor: ew-resize;
+  touch-action: none;
+  outline: none;
+}
+.compare-split::before {
+  content: "";
+  position: absolute;
+  left: 10px;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: rgb(255 255 255 / 0.8);
+  box-shadow: 0 0 2px rgb(0 0 0 / 0.5);
+}
+.compare-grip {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border: 1px solid rgb(255 255 255 / 0.8);
+  border-radius: 50%;
+  background: rgb(0 0 0 / 0.55);
+  color: var(--text);
+  transform: translate(-50%, -50%);
+}
+.compare-split:focus-visible .compare-grip {
+  outline: 1.5px solid var(--accent);
+  outline-offset: 1px;
+}
+.compare-label {
+  position: absolute;
+  top: 10px;
+  max-width: calc(50% - 30px);
+  overflow: hidden;
+  padding: 3px 8px;
+  border-radius: 6px;
+  background: rgb(0 0 0 / 0.55);
+  color: var(--text);
+  font-size: 12px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  pointer-events: none;
+  transition: opacity 120ms;
+}
+.compare-label.before {
+  left: 10px;
+}
+.compare-label.after {
+  right: 10px;
+}
+.compare-label.hidden {
+  opacity: 0;
+}
+
 /* The crop frame, drawn over the whole photo. */
 .crop-overlay {
   position: absolute;
@@ -1679,7 +1746,7 @@ button {
 .step {
   position: relative;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) auto auto;
   align-items: center;
 }
 /* The rail joining the steps; it stops at the oldest. */
@@ -1749,12 +1816,16 @@ button {
 .step.undone .step-dot {
   border-style: dashed;
 }
-.step-branch {
+.step-branch,
+.step-compare {
   margin-left: 2px;
   opacity: 0;
 }
 .step:hover .step-branch,
-.step-branch:focus-visible {
+.step-branch:focus-visible,
+.step:hover .step-compare,
+.step-compare:focus-visible,
+.step-compare.engaged {
   opacity: 1;
 }
 .step-fork {

@@ -1,19 +1,36 @@
 import { useState } from "react";
-import { ChevronDown, Download, GitBranch, GitBranchPlus } from "lucide-react";
+import { ChevronDown, Download, GitBranch, GitBranchPlus, SquareSplitHorizontal } from "lucide-react";
 import { Step } from "../../api";
 import { ago } from "../../format";
 import { useStore } from "../../store";
 import { menuBelow } from "../Toolbar";
 import { NameInput } from "./NameInput";
 
-function StepRow(props: { step: Step; state: "done" | "current" | "undone"; onGo: () => void; onBranch: () => void }) {
-  const { step, state } = props;
+function StepRow(props: {
+  step: Step;
+  state: "done" | "current" | "undone";
+  /** The photo is being compared with this step. */
+  compared: boolean;
+  onGo: () => void;
+  onCompare: () => void;
+  onBranch: () => void;
+}) {
+  const { step, state, compared } = props;
   return (
     <li className={`step ${state}`}>
       <button className="step-main" aria-current={state === "current" ? "step" : undefined} onClick={props.onGo}>
         <span className="step-dot" />
         <span className="step-label">{step.label}</span>
         <span className="step-time">{ago(step.createdAt)}</span>
+      </button>
+      <button
+        className={`icon-button small step-compare ${compared ? "engaged" : ""}`}
+        title="Compare with this step (side by side with how the photo is now)"
+        aria-label="Compare with this step"
+        aria-pressed={compared}
+        onClick={props.onCompare}
+      >
+        <SquareSplitHorizontal size={14} />
       </button>
       <button className="icon-button small step-branch" title="Start a branch from this step" aria-label="Start a branch from this step" onClick={props.onBranch}>
         <GitBranchPlus size={14} />
@@ -43,11 +60,13 @@ function StepRow(props: { step: Step; state: "done" | "current" | "undone"; onGo
 /**
  * The photo's edit history: the steps of the current branch, newest first,
  * and the branches to switch between. A step that was exported says so, with
- * the file it became. Click a step to go back to it; branch
+ * the file it became. Click a step to go back to it, or compare the photo
+ * with it in the split view without going back; branch
  * from any step to take the edit in another direction without losing this one.
  */
 export function HistoryPanel() {
   const history = useStore((s) => s.editor.history);
+  const compare = useStore((s) => s.editor.compare);
   const [renaming, setRenaming] = useState(false);
   const s = useStore.getState();
   if (!history) return <div className="history waiting" />;
@@ -112,15 +131,22 @@ export function HistoryPanel() {
 
       <ol className="steps">
         {history.steps
-          .map((step, index) => (
-            <StepRow
-              key={step.id}
-              step={step}
-              state={index === headIndex ? "current" : index > headIndex ? "undone" : "done"}
-              onGo={() => void s.goToStep(step.id)}
-              onBranch={() => void startBranch(step.id)}
-            />
-          ))
+          .map((step, index) => {
+            // The first step is the photo as shot: the original.
+            const original = index === 0;
+            const compared = compare !== null && (original ? compare.step === null : compare.step?.id === step.id);
+            return (
+              <StepRow
+                key={step.id}
+                step={step}
+                state={index === headIndex ? "current" : index > headIndex ? "undone" : "done"}
+                compared={compared}
+                onGo={() => void s.goToStep(step.id)}
+                onCompare={() => (compared ? s.toggleCompare() : void s.compareWith(original ? null : step.id))}
+                onBranch={() => void startBranch(step.id)}
+              />
+            );
+          })
           .reverse()}
       </ol>
     </div>

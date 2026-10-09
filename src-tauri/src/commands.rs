@@ -511,7 +511,9 @@ pub fn close_editor(state: State<AppState>) {
 ///
 /// The reply is binary: width, height and clipping flags (three u32s and a
 /// spare), then a 256-bin histogram each for red, green, blue and brightness
-/// (u32s), then the frame as RGBA bytes.
+/// (u32s), then the frame as RGBA bytes. Without `histogram` the flags and
+/// bins are zero: a frame that is only looked at, like the before side of a
+/// comparison, doesn't need them measured.
 #[tauri::command(async)]
 #[allow(clippy::too_many_arguments)]
 pub fn render_frame(
@@ -524,6 +526,7 @@ pub fn render_frame(
     show_clipping: bool,
     uncropped: bool,
     mask_overlay: Option<u32>,
+    histogram: bool,
 ) -> Result<tauri::ipc::Response, String> {
     let editing = state.editing();
     let Some((_, session)) = editing.as_ref().filter(|(open, _)| *open == id) else {
@@ -536,15 +539,20 @@ pub fn render_frame(
     let frame = gpu.render(session, &adjustments, region, (width, height), guides).map_err(message)?;
 
     // The histogram always describes the whole photo, whatever the zoom.
-    let histogram = gpu.histogram(session, &adjustments).map_err(message)?;
-    let flags = histogram.blown as u32 | (histogram.crushed as u32) << 1;
+    let histogram = if histogram { Some(gpu.histogram(session, &adjustments).map_err(message)?) } else { None };
+    let flags = histogram.as_ref().map_or(0, |h| h.blown as u32 | (h.crushed as u32) << 1);
 
     let mut reply = Vec::with_capacity(16 + 4 * 256 * 4 + frame.len());
     for value in [width, height, flags, 0] {
         reply.extend_from_slice(&value.to_le_bytes());
     }
-    for bin in histogram.bins.iter().flatten() {
-        reply.extend_from_slice(&bin.to_le_bytes());
+    match &histogram {
+        Some(histogram) => {
+            for bin in histogram.bins.iter().flatten() {
+                reply.extend_from_slice(&bin.to_le_bytes());
+            }
+        }
+        None => reply.resize(reply.len() + 4 * 256 * 4, 0),
     }
     reply.extend_from_slice(&frame);
     Ok(tauri::ipc::Response::new(reply))
@@ -810,6 +818,11 @@ pub fn history_commit(state: State<AppState>, id: i64, adjustments: Adjustments,
 #[tauri::command(async)]
 pub fn history_goto(state: State<AppState>, id: i64, step_id: i64) -> CommandResult<History> {
     state.library.history_goto(id, step_id).map_err(message)
+}
+
+#[tauri::command(async)]
+pub fn history_step_recipe(state: State<AppState>, id: i64, step_id: i64) -> CommandResult<Adjustments> {
+    state.library.step_recipe(id, step_id).map_err(message)
 }
 
 #[tauri::command(async)]

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import {
   ArrowLeft,
   Check,
+  ChevronsLeftRight,
   Crop,
   Download,
   Ellipsis,
@@ -22,6 +23,7 @@ import {
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { Adjustments, DEFAULTS, isAsShot } from "../../adjustments";
 import { withPreset } from "../../presets";
+import { beforeLabel, beforeRecipe, splitAt } from "../../compare";
 import { api, Photo, PhotoInfo, previewUrl, Region, thumbUrl } from "../../api";
 import { hasFilm } from "../../filmDetails";
 import * as format from "../../format";
@@ -232,6 +234,8 @@ function Info({ photo }: { photo: Photo }) {
 }
 
 interface FrameRequest {
+  /** The edit, or the before side of the split view. */
+  side: "after" | "before";
   id: number;
   adjustments: Adjustments;
   region: Region;
@@ -243,6 +247,15 @@ interface FrameRequest {
   maskOverlay: number | null;
 }
 
+interface Painted {
+  id: number;
+  region: Region;
+  uncropped: boolean;
+  original: boolean;
+}
+
+const sameRegion = (a: Region, b: Region) => a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height;
+
 /**
  * The photo itself: a canvas the backend paints edited frames into. It asks
  * for exactly the pixels on screen, so zooming in asks for a smaller part of
@@ -252,10 +265,13 @@ interface FrameRequest {
 function Stage({ photo, onZoomChange }: { photo: Photo; onZoomChange: (label: string) => void }) {
   const box = useRef<HTMLDivElement>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
+  const beforeCanvas = useRef<HTMLCanvasElement>(null);
   const [area, setArea] = useState({ width: 0, height: 0 });
   const [view, setView] = useState<View>(FIT);
   /** What is on the canvas: which photo, which part of it, and whether it is the crop tool's uncropped view or the original. */
-  const [painted, setPainted] = useState<{ id: number; region: Region; uncropped: boolean; original: boolean } | null>(null);
+  const [painted, setPainted] = useState<Painted | null>(null);
+  /** The same for the before side of the split view, and the recipe it was drawn with. */
+  const [paintedBefore, setPaintedBefore] = useState<(Painted & { adjustments: Adjustments }) | null>(null);
 
   const ready = useStore((s) => s.editor.ready && s.editor.photoId === photo.id);
   const failed = useStore((s) => (s.editor.photoId === photo.id ? s.editor.failed : null));
@@ -275,8 +291,20 @@ function Stage({ photo, onZoomChange }: { photo: Photo; onZoomChange: (label: st
   const maskOverlay = useStore((s) =>
     s.sidePanel === "masks" && s.editor.showMask && !s.editor.showOriginal ? s.editor.maskId : null,
   );
+  const compare = useStore((s) => s.editor.compare);
+  // The crop tool shows the whole photo, and holding \ the whole original: neither is split.
+  const comparing = compare !== null && !showOriginal && !uncropped;
+  /** Where the split sits across the photo: the before side is to its left. */
+  const [split, setSplit] = useState(0.5);
 
   const adjustments = useMemo(() => (showOriginal ? DEFAULTS : current), [current, showOriginal]);
+  // Only a change of framing redraws the before side; the sliders, and undo to a step with the same crop, leave it alone.
+  const { crop, straighten, rotation, flipHorizontal, flipVertical } = current;
+  const framing = JSON.stringify({ crop, straighten, rotation, flipHorizontal, flipVertical });
+  const before = useMemo(
+    () => (comparing ? beforeRecipe(compare.adjustments, { ...DEFAULTS, ...JSON.parse(framing) }) : null),
+    [comparing, compare, framing],
+  );
   /** The size, in photo pixels, of the picture being shown. */
   const frame = useMemo(
     () => (photoSize ? frameSize(photoSize, adjustments, uncropped) : null),
@@ -327,15 +355,19 @@ function Stage({ photo, onZoomChange }: { photo: Photo; onZoomChange: (label: st
     onZoomChange(!geometry || geometry.fitted ? "Fit" : `${Math.round(geometry.zoom * 100)}%`);
   }, [geometry, onZoomChange]);
 
-  // One frame is in flight at a time; while it is, only the newest request is kept.
+  // One frame is in flight at a time; while it is, only the newest request for each side is kept.
+  // The edit goes first: the before side only waits on a zoom or pan, never on a slider.
   const wanted = useRef<FrameRequest | null>(null);
+  const wantedBefore = useRef<FrameRequest | null>(null);
   const busy = useRef(false);
   const pump = useCallback(async () => {
     if (busy.current) return;
     busy.current = true;
-    while (wanted.current) {
-      const request = wanted.current;
-      wanted.current = null;
+    while (wanted.current || wantedBefore.current) {
+      const request = (wanted.current ?? wantedBefore.current)!;
+      const after = request.side === "after";
+      if (after) wanted.current = null;
+      else wantedBefore.current = null;
       try {
         const rendered = await api.renderFrame(
           request.id,
@@ -346,16 +378,23 @@ function Stage({ photo, onZoomChange }: { photo: Photo; onZoomChange: (label: st
           request.showClipping,
           request.uncropped,
           request.maskOverlay,
+          // The histogram describes the edit, so the before side doesn't measure one.
+          after,
         );
-        const target = canvas.current;
+        const target = after ? canvas.current : beforeCanvas.current;
         if (target && useStore.getState().editor.photoId === request.id) {
           if (target.width !== rendered.pixels.width || target.height !== rendered.pixels.height) {
             target.width = rendered.pixels.width;
             target.height = rendered.pixels.height;
           }
           target.getContext("2d")!.putImageData(rendered.pixels, 0, 0);
-          useStore.getState().noteFrame(rendered);
-          setPainted({ id: request.id, region: request.region, uncropped: request.uncropped, original: request.original });
+          const shown = { id: request.id, region: request.region, uncropped: request.uncropped, original: request.original };
+          if (after) {
+            useStore.getState().noteFrame(rendered);
+            setPainted(shown);
+          } else {
+            setPaintedBefore({ ...shown, adjustments: request.adjustments });
+          }
         }
       } catch {
         // The photo was closed or swapped while this frame was on its way.
@@ -368,9 +407,46 @@ function Stage({ photo, onZoomChange }: { photo: Photo; onZoomChange: (label: st
     if (!geometry) return;
     const { region, width, height } = geometry;
     const original = showOriginal;
-    wanted.current = { id: photo.id, adjustments, region, width, height, showClipping, uncropped, original, maskOverlay };
+    wanted.current = { side: "after", id: photo.id, adjustments, region, width, height, showClipping, uncropped, original, maskOverlay };
     void pump();
   }, [geometry, adjustments, showClipping, uncropped, showOriginal, maskOverlay, photo.id, pump]);
+
+  // The before side, asked for again only when it or the part of the photo on screen changes.
+  const beforeAsked = useRef<FrameRequest | null>(null);
+  useEffect(() => {
+    if (!geometry || !before) {
+      beforeAsked.current = null;
+      wantedBefore.current = null;
+      return;
+    }
+    const { region, width, height } = geometry;
+    const last = beforeAsked.current;
+    if (
+      last &&
+      last.id === photo.id &&
+      last.adjustments === before &&
+      last.width === width &&
+      last.height === height &&
+      sameRegion(last.region, region)
+    ) {
+      return;
+    }
+    const request: FrameRequest = {
+      side: "before",
+      id: photo.id,
+      adjustments: before,
+      region,
+      width,
+      height,
+      showClipping: false,
+      uncropped: false,
+      original: false,
+      maskOverlay: null,
+    };
+    beforeAsked.current = request;
+    wantedBefore.current = request;
+    void pump();
+  }, [geometry, before, photo.id, pump]);
 
   /** Zooms to `zoom`, keeping the point under the pointer where it is. */
   const zoomAt = useCallback(
@@ -429,6 +505,17 @@ function Stage({ photo, onZoomChange }: { photo: Photo; onZoomChange: (label: st
     live && shown && painted.uncropped === uncropped && painted.original === showOriginal
       ? heldFrame(painted.region, geometry.region, shown)
       : undefined;
+  // The before side waits hidden until it is drawn with the look and framing it should have.
+  const beforeShown =
+    live && shown && before && paintedBefore?.id === photo.id && paintedBefore.adjustments === before
+      ? heldFrame(paintedBefore.region, geometry.region, shown)
+      : null;
+
+  const splitDrag = useRef(false);
+  const dragSplit = (event: React.PointerEvent) => {
+    const box = event.currentTarget.parentElement!.getBoundingClientRect();
+    setSplit(splitAt(event.clientX, box));
+  };
   return (
     <div
       ref={box}
@@ -454,6 +541,11 @@ function Stage({ photo, onZoomChange }: { photo: Photo; onZoomChange: (label: st
         <div className="canvas-clip">
           <canvas ref={canvas} style={placed} />
         </div>
+        {comparing && (
+          <div className="canvas-clip compare-before" style={{ clipPath: `inset(0 ${(1 - split) * 100}% 0 0)` }}>
+            <canvas ref={beforeCanvas} style={beforeShown ?? { visibility: "hidden" }} />
+          </div>
+        )}
         {/* The frame goes on only once the canvas really shows the uncropped photo underneath it. */}
         {live && cropping && painted?.uncropped && shown && frame && photoSize && (
           <CropOverlay photo={photoSize} scale={shown.width / frame.width} width={shown.width} height={shown.height} />
@@ -472,6 +564,53 @@ function Stage({ photo, onZoomChange }: { photo: Photo; onZoomChange: (label: st
               void useStore.getState().pickBase(point);
             }}
           />
+        )}
+        {live && comparing && (
+          <>
+            <span className={`compare-label before ${split < 0.12 ? "hidden" : ""}`}>{beforeLabel(compare)}</span>
+            <span className={`compare-label after ${split > 0.88 ? "hidden" : ""}`}>Edited</span>
+            <div
+              className="compare-split"
+              style={{ left: `${split * 100}%` }}
+              role="slider"
+              tabIndex={0}
+              aria-label="Split between before and after"
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={Math.round(split * 100)}
+              title="Drag to move the split · double-click to centre it"
+              onPointerDown={(event) => {
+                // Not a pan of the photo underneath.
+                event.stopPropagation();
+                if (event.button !== 0) return;
+                event.currentTarget.setPointerCapture(event.pointerId);
+                splitDrag.current = true;
+              }}
+              onPointerMove={(event) => {
+                if (!splitDrag.current) return;
+                if (!(event.buttons & 1)) splitDrag.current = false;
+                else dragSplit(event);
+              }}
+              onPointerUp={() => (splitDrag.current = false)}
+              onPointerCancel={() => (splitDrag.current = false)}
+              onDoubleClick={(event) => {
+                event.stopPropagation();
+                setSplit(0.5);
+              }}
+              onKeyDown={(event) => {
+                if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+                // The arrows move the split here, rather than changing photo.
+                event.preventDefault();
+                event.stopPropagation();
+                const step = (event.shiftKey ? 0.1 : 0.01) * (event.key === "ArrowLeft" ? -1 : 1);
+                setSplit((at) => Math.min(1, Math.max(0, at + step)));
+              }}
+            >
+              <span className="compare-grip">
+                <ChevronsLeftRight size={14} />
+              </span>
+            </div>
+          </>
         )}
       </div>
       {!ready && !failed && <span className="stage-note">Preparing photo…</span>}
@@ -563,6 +702,7 @@ export function Editor({ photo, inert }: { photo: Photo; inert: boolean }) {
   const canRedo = useStore((s) => neighbours(s.editor.history).redo !== null);
   const edited = useStore((s) => s.editor.ready && !isAsShot(s.editor.adjustments));
   const showOriginal = useStore((s) => s.editor.showOriginal);
+  const comparing = useStore((s) => s.editor.compare !== null);
   const hasClipboard = useStore((s) => s.clipboard !== null);
   const failed = useStore((s) => s.editor.failed !== null);
   const [zoomLabel, setZoomLabel] = useState("Fit");
@@ -606,14 +746,16 @@ export function Editor({ photo, inert }: { photo: Photo; inert: boolean }) {
         const next = at < 0 ? undefined : list[at + (key === "ArrowLeft" ? -1 : 1)];
         if (next) state.openPhoto(next.id);
       } else if (key === "Escape" || (key === "Enter" && state.sidePanel === "crop" && !target.closest("button"))) {
-        // Escape backs out one level at a time: off a slider, out of a circle being drawn, off the chosen mask, out of the crop or mask tools, out of the photo.
+        // Escape backs out one level at a time: off a slider, out of a circle being drawn, off the chosen mask, out of the crop or mask tools, out of the split view, out of the photo.
         if (onSlider) target.blur();
         else if (state.editor.circling && !state.editor.circling.points) state.cancelCircle();
         else if (state.editor.pickingBase) state.setPickingBase(false);
         else if (state.sidePanel === "masks" && state.editor.maskId !== null) state.selectMask(null);
         else if (state.sidePanel === "crop" || state.sidePanel === "masks") state.setSidePanel("adjust");
+        else if (state.editor.compare) state.toggleCompare();
         else state.closePhoto();
       } else if (key === "\\") state.setShowOriginal(true);
+      else if (key === "y") state.toggleCompare();
       else if (key === "j") state.toggleClipping();
       else if (key === "a") state.setSidePanel("adjust");
       else if (key === "c") state.setSidePanel(state.sidePanel === "crop" ? "adjust" : "crop");
@@ -682,21 +824,12 @@ export function Editor({ photo, inert }: { photo: Photo; inert: boolean }) {
               <Redo2 size={16} />
             </button>
             <button
-              className={`icon-button ${showOriginal ? "engaged" : ""}`}
-              title="Hold to see the original (\)"
-              aria-label="Show original"
-              disabled={!edited}
-              onPointerDown={() => s.setShowOriginal(true)}
-              onPointerUp={() => s.setShowOriginal(false)}
-              onPointerLeave={() => s.setShowOriginal(false)}
-              // Holding Space or Enter on it works like holding the pointer down.
-              onKeyDown={(event) => {
-                if (event.key !== " " && event.key !== "Enter") return;
-                event.preventDefault();
-                if (!event.repeat) s.setShowOriginal(true);
-              }}
-              onKeyUp={(event) => (event.key === " " || event.key === "Enter") && s.setShowOriginal(false)}
-              onBlur={() => s.setShowOriginal(false)}
+              className={`icon-button ${comparing ? "engaged" : ""}`}
+              title="Compare before and after (Y) · hold \ to see the original"
+              aria-label="Compare before and after"
+              aria-pressed={comparing}
+              disabled={failed && !comparing}
+              onClick={s.toggleCompare}
             >
               <SquareSplitHorizontal size={16} />
             </button>
