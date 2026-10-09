@@ -33,6 +33,7 @@ import {
   View,
   Volume,
 } from "./api";
+import { CompareWith, ORIGINAL } from "./compare";
 import { listenAll, settleEach } from "./events";
 import { FilmPhoto, FilmSuggestions } from "./filmDetails";
 import { plural } from "./format";
@@ -139,6 +140,8 @@ export interface EditorState {
   preview: Preset | null;
   applied: AppliedPreset | null;
   showOriginal: boolean;
+  /** The split view, and what its before side shows; null when it is off. A view, not an edit. */
+  compare: CompareWith | null;
   showClipping: boolean;
   /** The mask being worked on in the Masks panel, by id. */
   maskId: number | null;
@@ -173,6 +176,7 @@ const idleEditor: EditorState = {
   preview: null,
   applied: null,
   showOriginal: false,
+  compare: null,
   showClipping: false,
   maskId: null,
   partIndex: null,
@@ -310,6 +314,10 @@ interface State {
   deleteBranch: (branchId: number) => Promise<void>;
   resetEdits: () => void;
   setShowOriginal: (show: boolean) => void;
+  /** Turns the split view of before and after on (against the original) or off. */
+  toggleCompare: () => void;
+  /** Compares the photo with how it was at a step of its history; null for the original. */
+  compareWith: (stepId: number | null) => Promise<void>;
   toggleClipping: () => void;
   noteFrame: (frame: Frame) => void;
   copyEdits: (id: number) => Promise<void>;
@@ -862,9 +870,14 @@ export const useStore = create<State>((set, get) => {
       settle();
       return inTurn(async () => {
         if (get().openId !== id) return;
-        const { showClipping, showMask } = get().editor;
-        // A crop shape chosen for one photo doesn't carry over to the next.
-        set({ editor: { ...idleEditor, photoId: id, showClipping, showMask }, cropShape: "Free", cropAspect: null });
+        const { showClipping, showMask, compare } = get().editor;
+        // A crop shape chosen for one photo doesn't carry over to the next. Nor does a step to compare
+        // with, but the split view stays on, against the next photo's original.
+        set({
+          editor: { ...idleEditor, photoId: id, showClipping, showMask, compare: compare && ORIGINAL },
+          cropShape: "Free",
+          cropAspect: null,
+        });
         try {
           const photo = await api.openEditor(id);
           if (get().openId !== id) return;
@@ -954,6 +967,21 @@ export const useStore = create<State>((set, get) => {
     },
 
     setShowOriginal: (showOriginal) => setEditor({ showOriginal }),
+    toggleCompare: () => {
+      const { compare, failed } = get().editor;
+      if (!failed || compare) setEditor({ compare: compare ? null : ORIGINAL });
+    },
+    async compareWith(stepId) {
+      const { photoId, history } = get().editor;
+      const step = history?.steps.find((s) => s.id === stepId);
+      if (photoId === null || !step) return setEditor({ compare: ORIGINAL });
+      try {
+        const adjustments = await api.historyStepRecipe(photoId, step.id);
+        if (get().editor.photoId === photoId) setEditor({ compare: { step: { id: step.id, label: step.label }, adjustments } });
+      } catch (error) {
+        get().toast({ text: `Couldn’t compare with that step: ${error}`, tone: "error" });
+      }
+    },
     toggleClipping: () => setEditor({ showClipping: !get().editor.showClipping }),
     noteFrame: (frame) =>
       setEditor({

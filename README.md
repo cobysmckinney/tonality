@@ -51,7 +51,8 @@ Import from a camera card, a folder or by dragging files in. You review what was
 - **Detail and effects**: clarity, dehaze, sharpening, noise reduction, vignette, grain.
 - **Crop and straighten**, with common ratios, quarter-turns and flips.
 - **A good starting point**: RAW files open with a look matched to your camera's own JPEGs, not a flat grey negative.
-- **Histogram with clipping warnings**, and hold `\` to see the original.
+- **Histogram with clipping warnings**.
+- **Before and after** on a split you can drag, against the original or any earlier step in the history.
 
 ### Masks without the fiddling
 

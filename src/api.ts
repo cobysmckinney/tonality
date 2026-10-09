@@ -326,10 +326,20 @@ export const api = {
     uncropped: boolean,
     /** The mask, by id, to tint red where it applies. */
     maskOverlay: number | null,
+    /** Measure the histogram and clipping too; without, they come back empty. */
+    histogram = true,
   ) =>
-    invoke<ArrayBuffer>("render_frame", { id, adjustments, region, width, height, showClipping, uncropped, maskOverlay }).then(
-      decodeFrame,
-    ),
+    invoke<ArrayBuffer>("render_frame", {
+      id,
+      adjustments,
+      region,
+      width,
+      height,
+      showClipping,
+      uncropped,
+      maskOverlay,
+      histogram,
+    }).then(decodeFrame),
   /** Each mask's coverage as a small black-and-white picture, in the order of `adjustments.masks`. */
   maskMattes: (id: number, adjustments: Adjustments, longEdge: number) =>
     invoke<ArrayBuffer>("mask_mattes", { id, adjustments, longEdge }).then((buffer) => {
@@ -395,6 +405,8 @@ export const api = {
   historyCommit: (id: number, adjustments: Adjustments, label: string) =>
     invoke<History>("history_commit", { id, adjustments, label }),
   historyGoto: (id: number, stepId: number) => invoke<History>("history_goto", { id, stepId }),
+  /** The recipe as of a step, without moving to it. */
+  historyStepRecipe: (id: number, stepId: number) => invoke<Adjustments>("history_step_recipe", { id, stepId }),
   historyBranch: (id: number, stepId: number, name: string) => invoke<History>("history_branch", { id, stepId, name }),
   historySwitch: (id: number, branchId: number) => invoke<History>("history_switch", { id, branchId }),
   historyRenameBranch: (id: number, branchId: number, name: string) =>

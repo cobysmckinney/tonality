@@ -223,6 +223,22 @@ fn history_cannot_reach_into_other_branches_or_photos() {
 }
 
 #[test]
+fn a_step_can_be_looked_at_without_moving_to_it() {
+    let f = fixture();
+    f.commit(0.5);
+    let history = f.commit(1.0);
+    let [original, first, _] = [0, 1, 2].map(|i| history.steps[i].id);
+
+    assert_eq!(f.library.step_recipe(f.photo, first).unwrap(), exposure(0.5));
+    assert_eq!(f.library.step_recipe(f.photo, original).unwrap(), Adjustments::default());
+    assert_eq!(f.library.history(f.photo).unwrap().head_id, history.head_id, "the head stays put");
+    assert_eq!(f.shown(), exposure(1.0));
+
+    assert!(f.library.step_recipe(f.photo, 9999).is_err());
+    assert!(f.library.step_recipe(f.photo + 1, first).is_err(), "another photo's step");
+}
+
+#[test]
 fn deleting_a_photo_takes_its_history_with_it() {
     let f = fixture();
     let main = f.commit(0.5);

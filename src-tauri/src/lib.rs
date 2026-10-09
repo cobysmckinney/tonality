@@ -258,6 +258,7 @@ pub fn run() {
             commands::get_history,
             commands::history_commit,
             commands::history_goto,
+            commands::history_step_recipe,
             commands::history_branch,
             commands::history_switch,
             commands::history_rename_branch,

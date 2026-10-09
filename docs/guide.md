@@ -41,7 +41,8 @@ Opening a photo (double-click or Enter) loads it at full resolution onto the gra
 - **Crop** (`C`): the photo is shown whole with an upright crop frame over it. Shapes (free, original, 1:1, 5:4, 4:3, 3:2, 16:9) keep the crop the way up it already is, and a square crop takes the photo's way up. A shape holds while you drag the frame (undo back to a crop of another shape and it is free again). A straighten slider turns the photo under the frame and keeps the frame on the photo, and there are quarter-turns and flips. A vignette frames the crop, and moves with the frame as you drag it. From the keyboard, Tab reaches the frame and then its corners, and the arrow keys move them a pixel at a time (ten with Shift); Enter finishes. Pasting edits onto another photo leaves that photo's own crop alone.
 - **Starting look**: RAW files open with a built-in tone curve fitted to match camera JPEGs.
 - **Histogram** with clipping markers; `J` shows clipped areas on the photo.
-- **Tools** sit in a rail of icons along the right edge; `A` adjust, `C` crop, `M` masks, `Shift+P` presets, `H` history, `I` info; `Ctrl+Z` / `Ctrl+Shift+Z` undo and redo, hold `\` for the original, `Z` or double-click for 100%, scroll to zoom, `Ctrl+C` / `Ctrl+V` copy and paste edits (in the grid too, onto a whole selection), double-click a slider to reset it.
+- **Before and after** (`Y`, or the split-square button in the toolbar): a line splits the photo, with the original on the left and your edit on the right, at the same zoom and position. Drag the line (or Tab to it and use the arrow keys) to move it, double-click it to centre it; zooming and panning move both sides together. The original is shown framed the way the photo is now (cropped, straightened, turned), so the two sides line up and only the look differs. To compare with an earlier point instead, use the split-square button on a step in the History tab: the left side then shows the photo as it was at that step, and keeps showing it while you carry on editing. For a film scan, that is the way to see your edits against the plain positive rather than the negative. The split view isn't an edit, so it isn't a step in the history; `Y` or `Esc` closes it, and it stays on as you move from photo to photo. The crop tool and picking the film base show the whole photo instead, and holding `\` still shows the whole original.
+- **Tools** sit in a rail of icons along the right edge; `A` adjust, `C` crop, `M` masks, `Shift+P` presets, `H` history, `I` info; `Ctrl+Z` / `Ctrl+Shift+Z` undo and redo, `Y` before and after, hold `\` for the original, `Z` or double-click for 100%, scroll to zoom, `Ctrl+C` / `Ctrl+V` copy and paste edits (in the grid too, onto a whole selection), double-click a slider to reset it.
 
 ## Film scans
 
@@ -86,7 +87,7 @@ Subject, sky and object finding all run on your computer, from small models bund
 
 ## History and branches
 
-Every change is a step in the photo's history, kept in the library, so undo and redo still work after a restart. The History tab (`H`) lists the steps of the current branch, newest first; click one to go back to it.
+Every change is a step in the photo's history, kept in the library, so undo and redo still work after a restart. The History tab (`H`) lists the steps of the current branch, newest first; click one to go back to it, or use its split-square button to compare the photo with how it was then without going back (see [Before and after](#the-editor)).
 
 History works like a small git repository per photo, and takes the place of "virtual copies":
 
@@ -128,7 +129,9 @@ Exports are sRGB and carry the capture date, camera, lens and exposure. A photo 
 | Editor | Left / Right | Previous / next photo. On a slider they nudge it, and on a row of tabs (the tool rail, the curve's channels, the mixer's colours) they move along it |
 | Editor | `A` / `C` / `M` / `Shift+P` / `H` / `I` | Adjust / crop / masks / presets / history / info |
 | Editor | `Ctrl+Z` / `Ctrl+Shift+Z` or `Ctrl+Y` | Undo / redo |
-| Editor | hold `\`, or hold Space or Enter on the Show original button | Show the original |
+| Editor | `Y` | Before and after, side by side across a split line |
+| Editor | Left / Right, Shift+Left / Right, on the split line | Move it a little, or more |
+| Editor | hold `\` | Show the original |
 | Editor | `Z`, double-click | Fit / 100% |
 | Editor | `J` | Show clipped areas |
 | Editor | Arrows, Shift+arrows, on the crop frame or a corner | Move it a pixel, or ten |
