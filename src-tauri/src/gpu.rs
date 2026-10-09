@@ -24,8 +24,9 @@ use crate::segment::{self, Found};
 /// `shaders/develop.wgsl`, in `develop.rs`, or in how a recipe becomes the
 /// shader's input (`edit.rs`, `masks.rs`, `segment.rs`). On its next start a
 /// library then redraws the thumbnails and previews of its edited photos, so
-/// the grid keeps matching the editor (`thumbs::forget_old_looks`).
-pub const LOOK_VERSION: u32 = 2;
+/// the grid keeps matching the editor (`thumbs::forget_old_looks`), and
+/// developed RAWs kept on disk are developed again (`developed`).
+pub const LOOK_VERSION: u32 = 3;
 
 const WORKING_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 const OUTPUT_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;

@@ -486,7 +486,7 @@ pub async fn balance_roll(app: AppHandle, ids: Vec<i64>) -> CommandResult<Applie
         let mut frames = Vec::with_capacity(ids.len());
         for (&id, recipe) in ids.iter().zip(&recipes) {
             let files = state.library.photo_files(id).map_err(message)?;
-            let sample = film::Sample::of(&crate::develop::load(&files.path, files.is_raw).map_err(message)?);
+            let sample = film::Sample::of(&state.library.developed().load(&files.path, files.is_raw).map_err(message)?);
             let mut recipe = recipe.clone();
             recipe.film.kind = kind;
             frames.push((sample, recipe));

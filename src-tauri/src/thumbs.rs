@@ -50,7 +50,7 @@ fn render_photo(library: &Library, id: i64, dest: PathBuf, edge: u32, quality: u
 /// Loads a photo onto the GPU, ready to edit or render.
 pub fn open_session(library: &Library, id: i64) -> Result<Session> {
     let files = library.photo_files(id)?;
-    let image = crate::develop::load(&files.path, files.is_raw)?;
+    let image = library.developed().load(&files.path, files.is_raw)?;
     let mut session = gpu::shared()?.open(image)?;
     session.matte_files = Some(library.matte_files(id));
     Ok(session)
