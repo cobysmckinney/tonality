@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Copy, Minus, Square, X } from "lucide-react";
+import { Copy, Keyboard, Minus, Square, X } from "lucide-react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { count } from "../format";
 import { useStore } from "../store";
@@ -70,6 +70,14 @@ export function TitleBar() {
       </svg>
       <Activity />
       <div className="window-controls">
+        <button
+          className="shortcuts-button"
+          aria-label="Keyboard shortcuts"
+          title="Keyboard shortcuts (?)"
+          onClick={() => useStore.getState().setShortcutsOpen(true)}
+        >
+          <Keyboard size={16} />
+        </button>
         <button aria-label="Minimize" title="Minimize" onClick={() => void appWindow.minimize()}>
           <Minus size={15} />
         </button>

@@ -1,7 +1,7 @@
 import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Adjustments, Mask, MaskPart, Point, Stroke } from "../../adjustments";
 import { Size } from "../../crop";
-import { brushRadius, ScreenMap, screenMap, SHAPE_NAMES, stillHeld, tidy } from "../../masks";
+import { brushRadius, nudge, ScreenMap, screenMap, SHAPE_NAMES, stillHeld, tidy } from "../../masks";
 import { useStore } from "../../store";
 
 interface Props {
@@ -23,6 +23,17 @@ const ACROSS = 6000;
 
 type Drag = (photo: Point, pointer: Point) => MaskPart | null;
 
+/** What a knob does: a press starts a drag; an arrow key moves it from `at` (on screen), round `around` if it turns. */
+interface KnobActions {
+  begin: (move: Drag) => (event: React.PointerEvent<SVGElement>) => void;
+  keys: (move: Drag, at: Point, around?: Point) => (event: React.KeyboardEvent<SVGElement>) => void;
+  /** Records the nudges made so far as a step. */
+  done: () => void;
+}
+
+/** How long after the last arrow key a run of nudges becomes one step, as with a slider. */
+const NUDGE_PAUSE = 600;
+
 /**
  * The parts of the mask being worked on, drawn over the photo with handles
  * to move and shape them. When the part chosen in the Masks panel is a
@@ -39,6 +50,9 @@ export function MaskOverlay({ photo, region, width, height }: Props) {
   const drag = useRef<{ maskId: number; index: number; move: Drag; label: string } | null>(null);
   const painting = useRef<{ maskId: number; index: number; erase: boolean; last: Point; label: string } | null>(null);
   const [pointer, setPointer] = useState<{ at: Point; alt: boolean } | null>(null);
+  // Arrow-key nudges waiting to be recorded, under this step name.
+  const nudged = useRef<string | null>(null);
+  const pause = useRef<ReturnType<typeof setTimeout>>(undefined);
 
   // Only the framing matters here; a brush stroke shouldn't rebuild the map.
   const { crop, straighten, rotation, flipHorizontal, flipVertical } = adjustments;
@@ -60,13 +74,25 @@ export function MaskOverlay({ photo, region, width, height }: Props) {
     painting.current = null;
     if (held) useStore.getState().commitAdjust(held.label);
   };
+  const finishNudges = () => {
+    clearTimeout(pause.current);
+    const label = nudged.current;
+    nudged.current = null;
+    if (label) useStore.getState().commitAdjust(label);
+  };
   // Choosing another mask or part, drawing a loop or closing the tool takes the handles away: the drag ends there,
   // rather than carrying on into whatever is chosen next. Layout effects, so no pointer event slips in first.
   useLayoutEffect(() => {
     const held = drag.current ?? painting.current;
     if (held && !stillHeld({ maskId: held.maskId, partIndex: held.index }, { maskId, partIndex, circling: circling !== null })) finish();
   }, [maskId, partIndex, circling]);
-  useLayoutEffect(() => () => finish(), []);
+  useLayoutEffect(
+    () => () => {
+      finish();
+      finishNudges();
+    },
+    [],
+  );
 
   if (circling) return <CircleDrawing map={map} width={width} height={height} finished={circling.points} />;
   const mask = adjustments.masks.find((m) => m.id === maskId);
@@ -86,6 +112,26 @@ export function MaskOverlay({ photo, region, width, height }: Props) {
     drag.current = { maskId: mask.id, index, move, label: `${mask.name}: ${SHAPE_NAMES[part.shape.kind].toLowerCase()}` };
     if (index !== partIndex) useStore.getState().selectMask(mask.id, index);
     event.currentTarget.setPointerCapture(event.pointerId);
+  };
+
+  // An arrow key moves the knob as a short drag would, from where it is to a pixel or ten away.
+  const keys = (index: number, move: Drag, at: Point, around?: Point) => (event: React.KeyboardEvent<SVGElement>) => {
+    if (event.ctrlKey || event.metaKey || event.altKey) return;
+    // Delete on a knob shouldn't fall through to deleting the photo.
+    if (event.key === "Delete" || event.key === "Backspace") return event.stopPropagation();
+    const offset = nudge(event.key, event.shiftKey, around && sub(at, around));
+    if (!offset) return;
+    // The arrows would otherwise also change photo.
+    event.preventDefault();
+    event.stopPropagation();
+    const to = add(at, offset);
+    move(map.toPhoto(at), at);
+    const part = move(map.toPhoto(to), to);
+    if (!part) return;
+    useStore.getState().updateMaskPart(index, part);
+    nudged.current = `${mask.name}: ${SHAPE_NAMES[part.shape.kind].toLowerCase()}`;
+    clearTimeout(pause.current);
+    pause.current = setTimeout(finishNudges, NUDGE_PAUSE);
   };
 
   const radius = brushRadius(brush.size) * map.scale;
@@ -147,7 +193,7 @@ export function MaskOverlay({ photo, region, width, height }: Props) {
           part={part}
           map={map}
           active={index === partIndex}
-          begin={(move) => begin(index, move)}
+          actions={{ begin: (move) => begin(index, move), keys: (move, at, around) => keys(index, move, at, around), done: finishNudges }}
         />
       ))}
       {brushing && pointer && (
@@ -238,8 +284,10 @@ const sub = (a: Point, b: Point): Point => [a[0] - b[0], a[1] - b[1]];
 const times = (a: Point, k: number): Point => [a[0] * k, a[1] * k];
 const length = (a: Point) => Math.hypot(a[0], a[1]);
 
-function PartHandles(props: { part: MaskPart; map: ScreenMap; active: boolean; begin: (move: Drag) => (event: React.PointerEvent<SVGElement>) => void }) {
-  const { part, map, active, begin } = props;
+function PartHandles(props: { part: MaskPart; map: ScreenMap; active: boolean; actions: KnobActions }) {
+  const { part, map, active, actions } = props;
+  // Only the chosen part's knobs take the focus; the others are a click away.
+  const handle = { focusable: active, actions };
   const { shape } = part;
   const className = `mask-part ${active ? "active" : ""} ${part.mode === "add" ? "" : part.mode}`;
 
@@ -266,9 +314,9 @@ function PartHandles(props: { part: MaskPart; map: ScreenMap; active: boolean; b
         <path className="mask-line faint" d={line(to)} />
         <path className="mask-line dashed" d={line(middle)} />
         <path className="mask-line grip" d={`M${from[0]} ${from[1]}L${to[0]} ${to[1]}`} />
-        <Knob at={from} onPointerDown={begin((photo) => ({ ...part, shape: { ...shape, from: photo.map(tidy) as Point } }))} />
-        <Knob at={to} onPointerDown={begin((photo) => ({ ...part, shape: { ...shape, to: photo.map(tidy) as Point } }))} />
-        <Knob at={middle} pin onPointerDown={begin(moveBoth)} />
+        <KnobAt {...handle} at={from} label="Start" move={(photo) => ({ ...part, shape: { ...shape, from: photo.map(tidy) as Point } })} />
+        <KnobAt {...handle} at={to} label="End" move={(photo) => ({ ...part, shape: { ...shape, to: photo.map(tidy) as Point } })} />
+        <KnobAt {...handle} at={middle} label="Middle" pin move={moveBoth} />
       </g>
     );
   }
@@ -321,12 +369,12 @@ function PartHandles(props: { part: MaskPart; map: ScreenMap; active: boolean; b
           />
         )}
         <path className="mask-line faint" d={`M${center[0]} ${center[1]}L${knob[0]} ${knob[1]}`} />
-        <Knob at={add(center, first)} onPointerDown={begin(resize(0))} />
-        <Knob at={sub(center, first)} onPointerDown={begin(resize(0))} />
-        <Knob at={add(center, second)} onPointerDown={begin(resize(1))} />
-        <Knob at={sub(center, second)} onPointerDown={begin(resize(1))} />
-        <Knob at={knob} turn onPointerDown={begin(rotate)} />
-        <Knob at={center} pin onPointerDown={begin(moveCenter)} />
+        <KnobAt {...handle} at={add(center, first)} label="Edge" move={resize(0)} />
+        <KnobAt {...handle} at={sub(center, first)} label="Edge" move={resize(0)} />
+        <KnobAt {...handle} at={add(center, second)} label="Edge" move={resize(1)} />
+        <KnobAt {...handle} at={sub(center, second)} label="Edge" move={resize(1)} />
+        <KnobAt {...handle} at={knob} label="Turn" turn={center} move={rotate} />
+        <KnobAt {...handle} at={center} label="Centre" pin move={moveCenter} />
       </g>
     );
   }
@@ -342,10 +390,22 @@ function PartHandles(props: { part: MaskPart; map: ScreenMap; active: boolean; b
   return null;
 }
 
-function Knob(props: { at: Point; pin?: boolean; turn?: boolean; onPointerDown: (event: React.PointerEvent<SVGElement>) => void }) {
-  const { at, pin, turn, onPointerDown } = props;
+/**
+ * A handle on a mask's part: dragged, or moved with the arrow keys once it has
+ * the focus (Shift for bigger steps). A turning knob gives where it turns around.
+ */
+function KnobAt(props: { at: Point; label: string; move: Drag; pin?: boolean; turn?: Point; focusable: boolean; actions: KnobActions }) {
+  const { at, label, move, pin, turn, focusable, actions } = props;
   return (
-    <g className={`mask-knob ${pin ? "pin" : ""} ${turn ? "turn" : ""}`} onPointerDown={onPointerDown}>
+    <g
+      className={`mask-knob ${pin ? "pin" : ""} ${turn ? "turn" : ""}`}
+      role="button"
+      aria-label={`${label}: arrow keys move it`}
+      tabIndex={focusable ? 0 : undefined}
+      onPointerDown={actions.begin(move)}
+      onKeyDown={actions.keys(move, at, turn)}
+      onBlur={actions.done}
+    >
       <circle className="mask-knob-grip" cx={at[0]} cy={at[1]} r={GRIP} />
       <circle className="mask-knob-dot" cx={at[0]} cy={at[1]} r={pin ? 6 : 4.5} />
     </g>

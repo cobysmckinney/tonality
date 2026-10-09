@@ -8,6 +8,7 @@
 import {
   Adjustments,
   formatValue,
+  GEOMETRY,
   LABELS,
   LocalAdjustments,
   LOCAL_KEYS,
@@ -18,6 +19,7 @@ import {
   Shape,
 } from "./adjustments";
 import { Size, turnedSize } from "./crop";
+import { arrowOffset } from "./nudge";
 
 /** An affine map of the plane, as two rows: x' = a*x + b*y + c, y' = d*x + e*y + f. */
 export type Affine = [[number, number, number], [number, number, number]];
@@ -272,6 +274,22 @@ export interface Chosen {
 export const stillHeld = (start: Chosen, now: Chosen & { circling: boolean }) =>
   !now.circling && start.maskId !== null && start.maskId === now.maskId && start.partIndex === now.partIndex;
 
+/**
+ * Where an arrow key moves a mask's knob on screen, as an offset in pixels,
+ * or null for any other key. A turning knob goes round its centre instead:
+ * Right and Down turn it clockwise, Left and Up the other way. `fromCentre`
+ * is where it sits from the centre it turns around.
+ */
+export function nudge(key: string, big: boolean, fromCentre?: Point): Point | null {
+  const offset = arrowOffset(key, big);
+  if (!offset || !fromCentre) return offset;
+  const reach = Math.hypot(fromCentre[0], fromCentre[1]) || 1;
+  // Right and Down one way, Left and Up the other, as far as the arrow would go.
+  const along = offset[0] + offset[1];
+  // A quarter-turn clockwise of the way out from the centre, on a screen whose y runs down.
+  return [(-fromCentre[1] / reach) * along, (fromCentre[0] / reach) * along];
+}
+
 /** How many brush parts there are across all masks. */
 export const brushCount = (masks: Mask[]) =>
   masks.reduce((n, mask) => n + mask.parts.filter((part) => part.shape.kind === "brush").length, 0);
@@ -290,4 +308,20 @@ export function canAdd(masks: Mask[], kind: Shape["kind"]): boolean {
     return foundCount(masks) < MAX_FOUND;
   }
   return true;
+}
+
+/**
+ * Everything the masks' black-and-white thumbnails depend on, as one string:
+ * the masks' parts, how each combines and turns inside out, the framing, and
+ * the exposure when a brightness range reads it. Nothing else (the photo's
+ * colour, a mask's own sliders, its name) can change a thumbnail, so changing
+ * it doesn't redraw them.
+ */
+export function matteKey(a: Adjustments): string {
+  const ranged = a.masks.some((mask) => mask.parts.some((part) => part.shape.kind === "luminance"));
+  return JSON.stringify([
+    a.masks.map((mask) => [mask.id, mask.visible, mask.invert, mask.parts]),
+    GEOMETRY.map((key) => a[key]),
+    ranged ? a.exposure : null,
+  ]);
 }
