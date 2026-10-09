@@ -382,6 +382,8 @@ fn put_back(library: &Library, id: i64, item: &ScanItem, import_id: i64, index: 
         }
         sync_dir(dir);
     }
+    // Its flag and favorite go back beside it too.
+    library.write_sidecars(&[id]);
     Ok(())
 }
 

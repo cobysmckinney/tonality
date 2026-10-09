@@ -4,6 +4,7 @@
 //! ```text
 //! Tonality/
 //!   Originals/2026/2026-10-04/IMG_0001.CR3
+//!   Originals/2026/2026-10-04/IMG_0001.CR3.xmp   (its flag and favorite; see xmp.rs)
 //!   Exports/IMG_0001.jpg                      (unless another folder is chosen)
 //!   .tonality/library.db   .tonality/lock
 //!   .tonality/thumbs/…   .tonality/previews/…   .tonality/mattes/…
@@ -286,6 +287,9 @@ pub struct Library {
     /// Held for as long as the library is open, so a second copy of the app
     /// can't open it too.
     _lock: fs::File,
+    /// Held while sidecars are written, so the last to write a photo's
+    /// sidecar is the one that read its latest marks.
+    sidecars: Mutex<()>,
 }
 
 /// The library is already open in another copy of the app.
@@ -357,11 +361,15 @@ impl Library {
             db.execute_batch(&format!("BEGIN; {ADD_FILM} PRAGMA user_version = 7; COMMIT;"))
                 .context("upgrading library to hold film details")?;
         }
-        let library = Self { root: root.to_path_buf(), db: Mutex::new(db), _lock: lock };
+        let library = Self { root: root.to_path_buf(), db: Mutex::new(db), _lock: lock, sidecars: Mutex::new(()) };
         // Leftovers from an import or review that was interrupted.
         let _ = fs::remove_dir_all(library.incoming_dir());
         let _ = fs::remove_dir_all(library.scan_cache_dir());
         crate::thumbs::forget_old_looks(&library).context("checking thumbnails against this version")?;
+        // The marks are safe in the database either way, so this never keeps the library shut.
+        if let Err(error) = library.write_first_sidecars() {
+            eprintln!("writing sidecars for flags and favorites: {error:#}");
+        }
         Ok(library)
     }
 
@@ -668,6 +676,8 @@ impl Library {
                 found.insert(photo.id);
             }
         }
+        // A sidecar left behind is written again beside the file.
+        self.write_sidecars(&found.iter().copied().collect::<Vec<_>>());
         Ok(found)
     }
 
@@ -765,11 +775,63 @@ impl Library {
     }
 
     pub fn set_favorite(&self, ids: &[i64], favorite: bool) -> Result<()> {
-        self.for_each_id("UPDATE photos SET favorite = ?2 WHERE id = ?1", ids, Some(favorite as i64))
+        self.for_each_id("UPDATE photos SET favorite = ?2 WHERE id = ?1", ids, Some(favorite as i64))?;
+        self.write_sidecars(ids);
+        Ok(())
     }
 
     pub fn set_flag(&self, ids: &[i64], flag: i8) -> Result<()> {
-        self.for_each_id("UPDATE photos SET flag = ?2 WHERE id = ?1", ids, Some(flag.signum() as i64))
+        self.for_each_id("UPDATE photos SET flag = ?2 WHERE id = ?1", ids, Some(flag.signum() as i64))?;
+        self.write_sidecars(ids);
+        Ok(())
+    }
+
+    /// Brings these photos' sidecars up to date with their flags and
+    /// favorites. A sidecar that can't be written is reported and skipped:
+    /// the library still holds the marks, and the next change tries again.
+    pub fn write_sidecars(&self, ids: &[i64]) {
+        let _writing = self.sidecars.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        for &id in ids {
+            let photo = self
+                .db()
+                .query_row("SELECT path, flag, favorite FROM photos WHERE id = ?1", [id], |r| {
+                    Ok((r.get::<_, String>(0)?, crate::xmp::Marks { flag: r.get(1)?, favorite: r.get(2)? }))
+                })
+                .optional();
+            let (path, marks) = match photo {
+                Ok(Some(photo)) => photo,
+                Ok(None) => continue,
+                Err(error) => {
+                    eprintln!("reading photo {id} for its sidecar: {error:#}");
+                    continue;
+                }
+            };
+            let original = self.root.join(path);
+            // A photo whose original is gone gets its sidecar once the file is back.
+            if !original.is_file() {
+                continue;
+            }
+            if let Err(error) = crate::xmp::update_sidecar(&original, marks) {
+                eprintln!("{error:#}");
+            }
+        }
+    }
+
+    /// Writes sidecars for the photos that were marked before the library
+    /// kept sidecars, once.
+    fn write_first_sidecars(&self) -> Result<()> {
+        const KEY: &str = "sidecars";
+        if self.setting(KEY)?.is_some() {
+            return Ok(());
+        }
+        let marked: Vec<i64> = {
+            let db = self.db();
+            let mut stmt = db.prepare("SELECT id FROM photos WHERE favorite != 0 OR flag != 0")?;
+            let ids = stmt.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
+            ids
+        };
+        self.write_sidecars(&marked);
+        self.set_setting(KEY, "1")
     }
 
     // ---- film details ----
@@ -858,6 +920,10 @@ impl Library {
                 )
                 .optional()?;
             let Some((file_name, path, jpeg_path)) = files else { continue };
+            // The sidecar first, so the date folder can go with the photo.
+            if let Err(error) = crate::xmp::remove_sidecar(&self.root.join(&path)) {
+                eprintln!("{error:#}");
+            }
             let removed = std::iter::once(&path).chain(&jpeg_path).try_for_each(|relative| {
                 let file = self.root.join(relative);
                 match fs::remove_file(&file) {

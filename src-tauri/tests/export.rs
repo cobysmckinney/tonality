@@ -402,3 +402,43 @@ fn a_film_photo_exports_with_the_film_cameras_details_and_its_stock() {
         assert_eq!(shown(&scan, exif::Tag::ImageDescription), None);
     }
 }
+
+#[test]
+fn an_export_carries_the_photos_flag_and_favorite_as_xmp() {
+    let f = fixture();
+    f.library.set_favorite(&f.photos[..1], true).unwrap();
+    f.library.set_flag(&f.photos[..1], 1).unwrap();
+    // EXIF text is ASCII only, so a stock like this one reaches the file through XMP alone.
+    let film = FilmDetails {
+        stock: Some("Свема Фото 64".into()),
+        camera: Some("Зенит-E".into()),
+        frame: Some(3),
+        ..Default::default()
+    };
+    let photo = FilmPhoto { id: f.photos[0], taken_at: String::new(), file_name: String::new(), film };
+    f.library.set_film_details(&[photo]).unwrap();
+
+    for settings in [Settings::default(), png(), Settings { format: Format::Tiff, ..Default::default() }] {
+        let format = settings.format;
+        let summary = f.export(&f.photos[..1], None, &settings);
+        let path = &summary.exported[0].path;
+        let bytes = fs::read(path).unwrap();
+        let text = String::from_utf8_lossy(&bytes);
+        for field in [r#"xmp:Rating="5""#, r#"xmpDM:pick="1""#, "Свема Фото 64, frame 3", r#"tiff:Model="Зенит-E""#] {
+            assert!(text.contains(field), "{format:?} has no {field}");
+        }
+        // Still a picture, with its EXIF where readers look for it.
+        assert_eq!(image::open(path).unwrap().width(), 12, "{format:?}");
+        let file = fs::File::open(path).unwrap();
+        let exif = exif::Reader::new().read_from_container(&mut std::io::BufReader::new(file)).unwrap();
+        assert!(exif.get_field(exif::Tag::DateTimeOriginal, exif::In::PRIMARY).is_some(), "{format:?}");
+        if format == Format::Tiff {
+            let packet = exif.get_field(exif::Tag(exif::Context::Tiff, 700), exif::In::PRIMARY).expect("the XMLPacket tag");
+            assert!(matches!(packet.value, exif::Value::Byte(_)));
+        }
+    }
+
+    let plain = f.export(&f.photos[1..], None, &Settings::default());
+    let text = String::from_utf8_lossy(&fs::read(&plain.exported[0].path).unwrap()).into_owned();
+    assert!(text.contains(r#"xmp:Rating="0""#) && !text.contains("xmpDM:pick"));
+}

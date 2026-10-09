@@ -31,6 +31,7 @@ use crate::edit::Adjustments;
 use crate::gpu::{self, DeepImage};
 use crate::history::Branch;
 use crate::library::{FilmDetails, Library, FILM_COLUMNS};
+use crate::xmp::{self, Marks};
 
 pub(crate) const SCHEMA: &str = "
 -- One row per file an export wrote.
@@ -305,6 +306,8 @@ struct Source {
     step_id: Option<i64>,
     recipe: Adjustments,
     capture: Capture,
+    /// The photo's flag and favorite, which the file carries as XMP.
+    marks: Marks,
 }
 
 impl Source {
@@ -315,7 +318,8 @@ impl Source {
                 &format!(
                     "SELECT p.file_name, p.edits, p.taken_at, p.make, p.model, p.lens, p.iso, p.aperture, p.shutter,
                             p.focal_length, (SELECT COUNT(*) FROM edit_branches WHERE photo_id = p.id),
-                            b.id, b.name, s.id, s.recipe, p.branch_id, p.width, p.height, {FILM_COLUMNS}
+                            b.id, b.name, s.id, s.recipe, p.branch_id, p.width, p.height, {FILM_COLUMNS},
+                            p.flag, p.favorite
                      FROM photos p
                      LEFT JOIN edit_branches b ON b.photo_id = p.id AND b.id = COALESCE(?2, p.branch_id)
                      LEFT JOIN edit_steps s ON s.id = b.head_id
@@ -347,6 +351,7 @@ impl Source {
                             description: None,
                         }
                         .on_film(FilmDetails::from_row(r, 18)?),
+                        marks: Marks { flag: r.get(23)?, favorite: r.get(24)? },
                     };
                     Ok((source, r.get::<_, Option<String>>(1)?, r.get::<_, Option<String>>(14)?))
                 },
@@ -541,7 +546,19 @@ fn tiff(image: &DeepImage, mut fields: Vec<Field>) -> Result<Vec<u8>> {
     write_tiff(&fields, Some(&strips), samples.len())
 }
 
-fn encode(image: &DynamicImage, settings: &Settings, capture: &Capture) -> Result<Vec<u8>> {
+/// The XMP an exported file carries: the photo's marks, and the details
+/// EXIF can only hold in ASCII.
+fn xmp_packet(capture: &Capture, marks: Marks) -> String {
+    let details = xmp::Details {
+        description: capture.description.as_deref(),
+        make: capture.make.as_deref(),
+        model: capture.model.as_deref(),
+        lens: capture.lens.as_deref(),
+    };
+    xmp::packet(marks, &details)
+}
+
+fn encode(image: &DynamicImage, settings: &Settings, capture: &Capture, marks: Marks) -> Result<Vec<u8>> {
     use image::codecs::jpeg::JpegEncoder;
     use image::codecs::png::PngEncoder;
     use image::{ExtendedColorType, ImageEncoder};
@@ -551,8 +568,11 @@ fn encode(image: &DynamicImage, settings: &Settings, capture: &Capture) -> Resul
         Ok(encoder.write_image(image.as_raw(), image.width(), image.height(), ExtendedColorType::Rgb8)?)
     }
 
-    let fields = capture_fields(capture);
+    let mut fields = capture_fields(capture);
+    let packet = xmp_packet(capture, marks);
     if settings.format == Format::Tiff {
+        // TIFF keeps XMP in a tag of its own, XMLPacket.
+        fields.push(field(Tag(exif::Context::Tiff, 700), Value::Byte(packet.into_bytes())));
         return match image {
             DynamicImage::ImageRgb16(deep) => tiff(deep, fields),
             other => tiff(&other.to_rgb16(), fields),
@@ -569,10 +589,15 @@ fn encode(image: &DynamicImage, settings: &Settings, capture: &Capture) -> Resul
     let exif = write_tiff(&fields, None, 0)?;
     let mut bytes = Vec::new();
     match settings.format {
-        Format::Jpeg => write(JpegEncoder::new_with_quality(&mut bytes, settings.quality), image, exif)?,
-        _ => write(PngEncoder::new(&mut bytes), image, exif)?,
+        Format::Jpeg => {
+            write(JpegEncoder::new_with_quality(&mut bytes, settings.quality), image, exif)?;
+            xmp::into_jpeg(&bytes, &packet)
+        }
+        _ => {
+            write(PngEncoder::new(&mut bytes), image, exif)?;
+            xmp::into_png(&bytes, &packet)
+        }
     }
-    Ok(bytes)
 }
 
 impl Library {
@@ -675,7 +700,7 @@ fn export_one(
     let step_id = source.step_id.context("the photo has no history")?;
 
     let image = draw(id, &source.recipe, settings.long_edge.unwrap_or(u32::MAX), settings.format.deep())?;
-    let bytes = encode(&image, settings, &source.capture)?;
+    let bytes = encode(&image, settings, &source.capture, source.marks)?;
     let path = write_new(folder, &source.output_name(pattern, number, total, settings.format), &bytes)?;
     let shown = path.to_string_lossy().into_owned();
     library
@@ -771,6 +796,7 @@ mod tests {
             step_id: Some(1),
             recipe: Adjustments::default(),
             capture: capture(),
+            marks: Marks::default(),
         }
     }
 

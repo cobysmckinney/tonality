@@ -12,6 +12,7 @@ use tonality_lib::gpu::LOOK_VERSION;
 use tonality_lib::import::{self, ScanSession};
 use tonality_lib::library::{self, FilmDetails, FilmPhoto, Library, LibraryInUse, View};
 use tonality_lib::thumbs;
+use tonality_lib::xmp;
 
 /// 2026-03-14 around midday UTC; far enough from midnight to be the same day in any timezone that matters here.
 const SHOT_AT: u64 = 1_773_489_600;
@@ -449,6 +450,93 @@ fn favorites_flags_and_albums() {
 
     f.library.delete_album(album).unwrap();
     assert_eq!(f.library.list_photos(View::Library).unwrap().len(), 2, "deleting an album keeps its photos");
+}
+
+/// The sidecar beside a photo's original, if there is one.
+fn sidecar_of(library: &Library, id: i64) -> Option<String> {
+    fs::read_to_string(xmp::sidecar_path(&library.expected_files(id).unwrap().path)).ok()
+}
+
+#[test]
+fn flags_and_favorites_are_written_to_sidecars_beside_the_originals() {
+    let f = fixture();
+    import_all(&f.library, &scan(&f.library, std::slice::from_ref(&f.card)));
+    let mut photos = f.library.list_photos(View::Library).unwrap();
+    photos.sort_by(|a, b| a.file_name.cmp(&b.file_name));
+    // IMG_0001.JPG, the IMG_0002.CR2 pair, screenshot.png.
+    let ids: Vec<i64> = photos.iter().map(|p| p.id).collect();
+    assert!(ids.iter().all(|&id| sidecar_of(&f.library, id).is_none()), "nothing to say, so no sidecars");
+
+    f.library.set_favorite(&ids[..2], true).unwrap();
+    f.library.set_flag(&ids[1..2], 1).unwrap();
+    f.library.set_flag(&ids[2..], -1).unwrap();
+    let favorite = sidecar_of(&f.library, ids[0]).unwrap();
+    assert!(favorite.contains(r#"xmp:Rating="5""#) && !favorite.contains("xmpDM:pick"), "{favorite}");
+    let picked = sidecar_of(&f.library, ids[1]).unwrap();
+    assert!(picked.contains(r#"xmpDM:pick="1""#) && picked.contains(r#"xmp:Rating="5""#), "{picked}");
+    let rejected = sidecar_of(&f.library, ids[2]).unwrap();
+    assert!(rejected.contains(r#"xmp:Rating="-1""#) && rejected.contains(r#"xmpDM:pick="-1""#), "{rejected}");
+
+    // Named after the whole file, so the RAW's sidecar is its own.
+    let raw = f.library.expected_files(ids[1]).unwrap().path;
+    assert_eq!(raw.file_name().unwrap(), "IMG_0002.CR2");
+    assert!(raw.with_file_name("IMG_0002.CR2.xmp").is_file());
+
+    // Changes are kept up, and a photo with nothing left to say loses its sidecar.
+    f.library.set_flag(&ids[1..2], -1).unwrap();
+    assert!(sidecar_of(&f.library, ids[1]).unwrap().contains(r#"xmp:Rating="-1""#));
+    f.library.set_favorite(&ids[..1], false).unwrap();
+    assert_eq!(sidecar_of(&f.library, ids[0]), None);
+
+    // Nothing half-written is left lying about.
+    let day = raw.parent().unwrap();
+    let mut names: Vec<String> =
+        fs::read_dir(day).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+    names.sort();
+    assert_eq!(
+        names,
+        ["IMG_0001.JPG", "IMG_0002.CR2", "IMG_0002.CR2.xmp", "IMG_0002.JPG", "screenshot.png", "screenshot.png.xmp"]
+    );
+
+    // A sidecar another app wrote is never replaced or removed.
+    let theirs = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/" x:xmptk="XMP Core 4.4.0-Exiv2">darktable's history</x:xmpmeta>"#;
+    fs::write(xmp::sidecar_path(&raw), theirs).unwrap();
+    f.library.set_flag(&ids[1..2], 1).unwrap();
+    f.library.set_flag(&ids[1..2], 0).unwrap();
+    f.library.set_favorite(&ids[1..2], false).unwrap();
+    assert_eq!(sidecar_of(&f.library, ids[1]).as_deref(), Some(theirs));
+
+    // Deleting a photo for good takes its sidecar with it.
+    f.library.trash(&ids[2..]).unwrap();
+    assert!(sidecar_of(&f.library, ids[2]).is_some(), "a photo in Recently Deleted keeps its marks");
+    let screenshot = f.library.expected_files(ids[2]).unwrap().path;
+    f.library.purge(&ids[2..]).unwrap();
+    assert!(!xmp::sidecar_path(&screenshot).exists());
+}
+
+#[test]
+fn a_library_marked_before_sidecars_writes_them_when_it_opens() {
+    let f = fixture();
+    import_all(&f.library, &scan(&f.library, std::slice::from_ref(&f.card)));
+    let id = f.library.list_photos(View::Library).unwrap()[0].id;
+    f.library.set_flag(&[id], 1).unwrap();
+    let sidecar = xmp::sidecar_path(&f.library.expected_files(id).unwrap().path);
+    let root = f.library.root().to_path_buf();
+    drop(f.library);
+
+    // As an older version left it: the mark, but no sidecar.
+    fs::remove_file(&sidecar).unwrap();
+    let db = rusqlite::Connection::open(root.join(".tonality/library.db")).unwrap();
+    db.execute("DELETE FROM settings WHERE key = 'sidecars'", []).unwrap();
+    drop(db);
+
+    let library = Library::open(&root).unwrap();
+    assert!(fs::read_to_string(&sidecar).unwrap().contains(r#"xmpDM:pick="1""#));
+    // Only once: a sidecar removed by hand afterwards stays removed.
+    drop(library);
+    fs::remove_file(&sidecar).unwrap();
+    let _library = Library::open(&root).unwrap();
+    assert!(!sidecar.exists());
 }
 
 fn on_film(id: i64, stock: &str, camera: &str, frame: u32) -> FilmPhoto {
