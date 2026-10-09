@@ -1,13 +1,17 @@
 //! Turning a photo file into the editor's working image: linear-light RGB
 //! at full resolution, the right way up.
 //!
-//! A change here that alters how an edited photo looks must bump
-//! `gpu::LOOK_VERSION`, or thumbnails drawn before the change keep the old look.
+//! A change here that alters how a photo comes out must bump
+//! `gpu::LOOK_VERSION`, or thumbnails drawn before the change keep the old
+//! look, and photos developed before it are opened from where they were kept
+//! (`developed`).
 
 use std::path::Path;
 
 use anyhow::{anyhow, Result};
+use half::f16;
 use image::metadata::Orientation;
+use rayon::prelude::*;
 use rawler::decoders::RawDecodeParams;
 use rawler::imgop::develop::{Intermediate, ProcessingStep, RawDevelop};
 
@@ -97,8 +101,16 @@ fn load_raw(path: &Path) -> Result<LinearImage> {
             return Err(Unsupported("comes from a camera with a four-colour sensor, which Tonality can't read yet").into())
         }
     };
-    let (width, height, pixels) = orient(width, height, pixels, orientation);
+    let (width, height, mut pixels) = orient(width, height, pixels, orientation);
+    to_half_precision(&mut pixels);
     Ok(LinearImage { width: width as u32, height: height as u32, pixels, scene_referred: true })
+}
+
+/// Rounds each value to half-float, the precision the editor works in
+/// (`gpu::Session`). A developed RAW kept on disk at that precision
+/// (`developed`) then comes back exactly as a fresh develop would.
+fn to_half_precision(pixels: &mut [[f32; 3]]) {
+    pixels.par_iter_mut().flatten().for_each(|v| *v = f16::from_f32(*v).to_f32());
 }
 
 fn load_rendered(path: &Path) -> Result<LinearImage> {

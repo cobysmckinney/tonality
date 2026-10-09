@@ -21,6 +21,8 @@ use rusqlite::{params, Connection, OptionalExtension, Row};
 use serde::{Deserialize, Serialize};
 use walkdir::WalkDir;
 
+use crate::developed::Developed;
+
 /// How long a photo stays in Recently Deleted before its files are removed.
 pub const TRASH_RETENTION_DAYS: i64 = 30;
 
@@ -283,6 +285,7 @@ pub struct PhotoFiles {
 pub struct Library {
     root: PathBuf,
     db: Mutex<Connection>,
+    developed: Developed,
     /// Held for as long as the library is open, so a second copy of the app
     /// can't open it too.
     _lock: fs::File,
@@ -357,7 +360,8 @@ impl Library {
             db.execute_batch(&format!("BEGIN; {ADD_FILM} PRAGMA user_version = 7; COMMIT;"))
                 .context("upgrading library to hold film details")?;
         }
-        let library = Self { root: root.to_path_buf(), db: Mutex::new(db), _lock: lock };
+        let developed = Developed::new(data.join("developed"), crate::developed::BUDGET);
+        let library = Self { root: root.to_path_buf(), db: Mutex::new(db), developed, _lock: lock };
         // Leftovers from an import or review that was interrupted.
         let _ = fs::remove_dir_all(library.incoming_dir());
         let _ = fs::remove_dir_all(library.scan_cache_dir());
@@ -371,6 +375,11 @@ impl Library {
 
     pub fn root(&self) -> &Path {
         &self.root
+    }
+
+    /// The library's developed RAWs, kept so photos open quickly again.
+    pub fn developed(&self) -> &Developed {
+        &self.developed
     }
 
     pub fn originals_dir(&self) -> PathBuf {

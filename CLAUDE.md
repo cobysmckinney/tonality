@@ -50,7 +50,7 @@ Interface changes are checked in the real app, not only by tests:
 
 ## Layout
 
-- `src-tauri/src`: `library.rs` database · `import.rs` scan and copy · `media.rs` decoding and metadata · `thumbs.rs` generated images · `volumes.rs` card detection · `develop.rs` RAW to linear light (rawler) · `geometry.rs` crop and rotation · `gpu.rs` the wgpu pipeline · `shaders/develop.wgsl` the single develop pass · `edit.rs` the edit recipe · `history.rs` steps and branches · `presets.rs` · `masks.rs` mask packing and brush coverage · `segment.rs` found masks (tract, CPU) · `export.rs` · `commands.rs` the API the interface calls.
+- `src-tauri/src`: `library.rs` database · `import.rs` scan and copy · `media.rs` decoding and metadata · `thumbs.rs` generated images · `volumes.rs` card detection · `develop.rs` RAW to linear light (rawler) · `developed.rs` developed RAWs kept on disk so photos open quickly again · `geometry.rs` crop and rotation · `gpu.rs` the wgpu pipeline · `shaders/develop.wgsl` the single develop pass · `edit.rs` the edit recipe · `history.rs` steps and branches · `presets.rs` · `masks.rs` mask packing and brush coverage · `segment.rs` found masks (tract, CPU) · `export.rs` · `commands.rs` the API the interface calls.
 - `src-tauri/tests`: integration tests per module, on synthetic files, built as one binary: a new file needs a `mod` line in `tests/main.rs` or it never runs. Real-photo tests are `#[ignore]`d and read `TONALITY_SAMPLES`.
 - `src`: React interface. All state is in `store.ts` (zustand); `api.ts` wraps the Tauri commands; the editor is under `components/editor`. Pure logic lives in plain modules (`crop.ts`, `masks.ts`, `presets.ts`) so `bun test` can cover it. `store.ts` imports Tauri and can't be loaded by `bun test`, so move logic you want to test out of it.
 - `src-tauri/models`: the bundled ONNX models (about 145 MB), with their licences and how each was made in `models/README.md`.
@@ -59,7 +59,7 @@ Interface changes are checked in the real app, not only by tests:
 
 - Every edit is a history step. A new kind of change has to undo, redo, branch and paste like the others, and have a readable step name.
 - Thumbnails are drawn by the same shader as the editor, so the grid matches. Anything that changes the look has to change both.
-- Thumbnails and previews of edited photos are kept on disk. A change that makes an edited photo come out differently (the shader, the pipeline in `gpu.rs`, `develop.rs`, how a recipe or mask reaches the shader, a model) must bump `LOOK_VERSION` in `gpu.rs`, so libraries redraw them on their next start.
+- Thumbnails and previews of edited photos are kept on disk. A change that makes an edited photo come out differently (the shader, the pipeline in `gpu.rs`, `develop.rs`, how a recipe or mask reaches the shader, a model) must bump `LOOK_VERSION` in `gpu.rs`, so libraries redraw them on their next start. It also retires the developed RAWs kept on disk (`developed.rs`).
 - Changing a model, or how its answer is refined, means changing its tag in `segment.rs` so cached mattes are found again.
 - Mask parts are stored relative to the original file, so they follow crops, turns and flips. Keep it that way.
 - Keep `docs/guide.md` (the user guide) in step with behaviour: a change users would notice updates it in the same PR. The README is the pitch; only change it for things worth advertising.

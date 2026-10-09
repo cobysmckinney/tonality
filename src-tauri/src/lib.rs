@@ -1,5 +1,6 @@
 mod commands;
 pub mod develop;
+pub mod developed;
 pub mod edit;
 pub mod export;
 pub mod film;

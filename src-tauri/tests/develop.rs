@@ -212,3 +212,110 @@ fn a_dng_that_gives_its_white_as_a_chromaticity_is_white_balanced() {
     let [r, g, b] = develop(false);
     assert!(r > b * 1.5, "{:?}", [r, g, b]);
 }
+
+// ---- developed RAWs kept on disk ----
+
+use tonality_lib::develop::LinearImage;
+use tonality_lib::developed::Developed;
+
+fn same(a: &LinearImage, b: &LinearImage) -> bool {
+    (a.width, a.height, a.scene_referred) == (b.width, b.height, b.scene_referred) && a.pixels == b.pixels
+}
+
+fn developed_now(path: &std::path::Path) -> LinearImage {
+    tonality_lib::develop::load(path, true).unwrap()
+}
+
+/// A folder with a converted DNG in it, and somewhere to keep developed photos.
+fn kept_fixture() -> (tempfile::TempDir, PathBuf, Developed) {
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().join("photo.dng");
+    std::fs::write(&path, converted_dng(true)).unwrap();
+    let developed = Developed::new(dir.path().join("developed"), 1 << 20);
+    (dir, path, developed)
+}
+
+#[test]
+fn a_developed_raw_is_kept_and_comes_back_exactly_as_developed() {
+    let (_dir, path, developed) = kept_fixture();
+    assert!(developed.kept(&path).is_none());
+    let first = developed.load(&path, true).unwrap();
+    developed.finish_writing();
+    let kept = developed.kept(&path).expect("kept after the first open");
+    let fresh = developed_now(&path);
+    assert!(same(&first, &fresh) && same(&kept, &fresh));
+    assert!(same(&developed.load(&path, true).unwrap(), &fresh));
+}
+
+#[test]
+fn a_replaced_original_is_developed_again() {
+    let (_dir, path, developed) = kept_fixture();
+    let before = developed.load(&path, true).unwrap();
+    developed.finish_writing();
+    std::fs::write(&path, converted_dng(false)).unwrap();
+    assert!(developed.kept(&path).is_none());
+    let after = developed.load(&path, true).unwrap();
+    assert!(!same(&before, &after));
+    assert!(same(&after, &developed_now(&path)));
+}
+
+#[cfg(unix)]
+#[test]
+fn a_file_copied_over_the_original_with_its_size_and_date_is_still_new() {
+    let (_dir, path, developed) = kept_fixture();
+    developed.load(&path, true).unwrap();
+    developed.finish_writing();
+    let modified = std::fs::metadata(&path).unwrap().modified().unwrap();
+    std::fs::write(&path, converted_dng(true)).unwrap();
+    std::fs::File::options().write(true).open(&path).unwrap().set_modified(modified).unwrap();
+    assert!(developed.kept(&path).is_none());
+}
+
+#[test]
+fn a_damaged_copy_is_developed_again() {
+    let (dir, path, developed) = kept_fixture();
+    developed.load(&path, true).unwrap();
+    developed.finish_writing();
+    let entry = std::fs::read_dir(dir.path().join("developed")).unwrap().flatten().next().unwrap().path();
+    let bytes = std::fs::read(&entry).unwrap();
+    std::fs::write(&entry, &bytes[..bytes.len() - 1]).unwrap();
+    assert!(developed.kept(&path).is_none());
+    assert!(same(&developed.load(&path, true).unwrap(), &developed_now(&path)));
+}
+
+#[test]
+fn the_photos_used_longest_ago_are_forgotten_first() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let photos: Vec<PathBuf> = ["a", "b", "c"].iter().map(|name| dir.path().join(format!("{name}.dng"))).collect();
+    for path in &photos {
+        std::fs::write(path, converted_dng(true)).unwrap();
+    }
+    // Room for two: 32 x 32 pixels of three half-floats each, and a header.
+    let entry = 32 * 32 * 6 + 16;
+    let developed = Developed::new(dir.path().join("developed"), entry * 2 + entry / 2);
+    let open = |path: &PathBuf| {
+        developed.load(path, true).unwrap();
+        developed.finish_writing();
+        // Far enough apart for any file system to tell which came first.
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    };
+    open(&photos[0]);
+    open(&photos[1]);
+    // Opening the first again makes the second the one used longest ago.
+    open(&photos[0]);
+    open(&photos[2]);
+    assert!(developed.kept(&photos[0]).is_some());
+    assert!(developed.kept(&photos[1]).is_none());
+    assert!(developed.kept(&photos[2]).is_some());
+}
+
+#[test]
+fn photos_that_arent_raw_are_not_kept() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().join("photo.png");
+    image::RgbImage::from_pixel(8, 8, image::Rgb([200, 100, 50])).save(&path).unwrap();
+    let developed = Developed::new(dir.path().join("developed"), 1 << 20);
+    developed.load(&path, false).unwrap();
+    developed.finish_writing();
+    assert!(!dir.path().join("developed").exists());
+}

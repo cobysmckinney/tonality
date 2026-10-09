@@ -792,6 +792,72 @@ fn develop_timing() {
     }
 }
 
+/// Times opening each real photo for editing, developed and then again from
+/// the developed copy kept on disk, and checks both draw the same picture:
+/// `TONALITY_SAMPLES=… cargo test open_timing -- --ignored --nocapture`
+#[test]
+#[ignore = "needs TONALITY_SAMPLES and a GPU"]
+fn open_timing() {
+    use tonality_lib::developed::{Developed, BUDGET};
+    use tonality_lib::media::{kind_of, Kind};
+    let samples = PathBuf::from(std::env::var_os("TONALITY_SAMPLES").expect("set TONALITY_SAMPLES"));
+    let gpu = tonality_lib::gpu::Gpu::new().unwrap();
+    let dir = TempDir::new().unwrap();
+    let developed = Developed::new(dir.path().join("developed"), BUDGET);
+    let recipe = Adjustments { exposure: 0.3, ..Default::default() };
+    for entry in walkdir::WalkDir::new(samples).into_iter().flatten().filter(|e| e.file_type().is_file()) {
+        if kind_of(entry.path()) != Some(Kind::Raw) {
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let open = |label: &str| {
+            let started = std::time::Instant::now();
+            let image = developed.load(entry.path(), true).unwrap();
+            let loaded = started.elapsed();
+            let session = gpu.open(image).unwrap();
+            let picture = gpu.render_image(&session, &recipe, 2048).unwrap();
+            println!("{name:<16} {label:<24} load {:>5} ms, then open and draw {:>5} ms", loaded.as_millis(), (started.elapsed() - loaded).as_millis());
+            picture
+        };
+        let started = std::time::Instant::now();
+        let image = tonality_lib::develop::load(entry.path(), true).unwrap();
+        let loaded = started.elapsed();
+        let (width, height) = (image.width, image.height);
+        let parts = std::time::Instant::now();
+        tonality_lib::segment::guide(&image);
+        let guide = parts.elapsed();
+        tonality_lib::film::Sample::of(&image);
+        let sample = parts.elapsed() - guide;
+        let parts = std::time::Instant::now();
+        let session = gpu.open(image).unwrap();
+        let uploaded = parts.elapsed();
+        gpu.render_image(&session, &recipe, 2048).unwrap();
+        println!(
+            "{name:<16} {:<24} load {:>5} ms, open {} ms (guide {} ms, sample {} ms), first draw {} ms; {width}x{height}",
+            "without keeping",
+            loaded.as_millis(),
+            uploaded.as_millis(),
+            guide.as_millis(),
+            sample.as_millis(),
+            (parts.elapsed() - uploaded).as_millis()
+        );
+        drop(session);
+        let developed_now = open("developed");
+        let started = std::time::Instant::now();
+        developed.finish_writing();
+        println!("{name:<16} {:<24} {} ms more, beside the open", "kept on disk", started.elapsed().as_millis());
+        let kept = open("again");
+        // As if from a disk that hasn't read it lately: drop it from memory first.
+        for item in fs::read_dir(dir.path().join("developed")).unwrap().flatten() {
+            let _ = std::process::Command::new("dd")
+                .args([format!("if={}", item.path().display()), "iflag=nocache".into(), "count=0".into()])
+                .output();
+        }
+        let cold = open("again, not in memory");
+        assert!(developed_now == kept && kept == cold, "{name} looks different opened again");
+    }
+}
+
 /// Renders real photos through the GPU pipeline and saves the results, next
 /// to the camera's own JPEG, for a look:
 /// `TONALITY_SAMPLES=… TONALITY_OUT=… cargo test gpu_render -- --ignored --nocapture`
