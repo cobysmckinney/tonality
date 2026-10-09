@@ -63,7 +63,7 @@ Masks change one part of the photo. Each mask is an area, built from parts, with
 - **Select object**: draw a rough loop around something on the photo and its outline is found. The first loop on a photo takes a few seconds while the model looks the photo over (it starts as soon as you choose to draw); after that each loop takes a moment. **Draw again** replaces the loop; Esc cancels one being drawn. A loop drawn, or edits pasted, while another part is being found waits its turn. A loop pasted onto a much smaller photo may be too small to find anything in; that part is left empty, the editor says so, and you can draw it again.
 - **The list**: each mask has a black-and-white thumbnail of what it covers. The eye hides a mask's effect without removing it; **…** (or a right-click) renames, inverts or deletes it. Clicking the chosen mask again, **New mask**, or Esc lets go of it, back to the tiles.
 - **Parts**: the chosen mask opens to list its parts. **Add**, **Subtract** and **Intersect** put another one on: it adds to the area, takes from it, or keeps only what both cover ("the sky, but only its bright part"). The mark after a part changes how it combines, and the button at the end of the row inverts the whole mask. The chosen part's settings (a brush's size, a radial's feather, a range's ends) come first under the list.
-- **On the photo**: a gradient's ends and a radial's edges, centre and turning knob are dragged into place. With a brush part chosen, dragging paints; Alt erases, `[` and `]` change the size. `O` (or **Overlay**) tints the chosen mask red.
+- **On the photo**: a gradient's ends and a radial's edges, centre and turning knob are dragged into place, or reached with Tab and moved with the arrow keys (a pixel at a time, ten with Shift; the turning knob goes round, Right and Down clockwise). With a brush part chosen, dragging paints; Alt erases, `[` and `]` change the size. `O` (or **Overlay**) tints the chosen mask red.
 - **They stay on the photo**: parts are kept on the file itself, so they follow crops, turns and flips. Presets never include masks; pasting edits does.
 - **Limits**: 8 masks, 32 parts, 8 brush parts and 8 found parts (subject, sky, objects) a photo.
 
@@ -117,6 +117,7 @@ Exports are sRGB and carry the capture date, camera, lens and exposure.
 | Editor | `Z`, double-click | Fit / 100% |
 | Editor | `J` | Show clipped areas |
 | Editor | `O` | Mask overlay |
+| Editor | Arrows, Shift+arrows, on a mask's knob | Move it a pixel, or ten |
 | Editor | `[` / `]` | Brush size |
 | Editor | Alt while painting | Erase with the brush |
 | Editor | Enter, in the crop tool | Finish cropping |

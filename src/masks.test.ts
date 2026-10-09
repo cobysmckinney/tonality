@@ -11,6 +11,7 @@ import {
   MAX_FOUND,
   newMask,
   newShape,
+  nudge,
   onOriginal,
   screenMap,
   stillHeld,
@@ -141,6 +142,26 @@ describe("new masks", () => {
     const subjects = [newMask([], "subject", photo, defaultAdjustments()), newMask([], "background", photo, defaultAdjustments())];
     expect(foundCount(subjects)).toBe(1);
     expect(canAdd(subjects, "subject")).toBe(true);
+  });
+});
+
+describe("an arrow key on a mask's knob", () => {
+  test("moves it a pixel, or ten with Shift", () => {
+    expect(nudge("ArrowLeft", false)).toEqual([-1, 0]);
+    expect(nudge("ArrowDown", true)).toEqual([0, 10]);
+  });
+
+  test("leaves other keys alone", () => {
+    expect(nudge("Enter", false)).toBeNull();
+    expect(nudge("a", false, [10, 0])).toBeNull();
+  });
+
+  test("turns a turning knob round its centre, Right and Down clockwise", () => {
+    // On screen y runs down, so clockwise from the right is downwards.
+    near(nudge("ArrowRight", false, [30, 0])!, [0, 1]);
+    near(nudge("ArrowDown", false, [30, 0])!, [0, 1]);
+    near(nudge("ArrowLeft", true, [30, 0])!, [0, -10]);
+    near(nudge("ArrowUp", false, [0, -30])!, [-1, 0]);
   });
 });
 

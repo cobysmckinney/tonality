@@ -19,6 +19,7 @@ import {
   Shape,
 } from "./adjustments";
 import { Size, turnedSize } from "./crop";
+import { arrowOffset } from "./nudge";
 
 /** An affine map of the plane, as two rows: x' = a*x + b*y + c, y' = d*x + e*y + f. */
 export type Affine = [[number, number, number], [number, number, number]];
@@ -272,6 +273,22 @@ export interface Chosen {
  */
 export const stillHeld = (start: Chosen, now: Chosen & { circling: boolean }) =>
   !now.circling && start.maskId !== null && start.maskId === now.maskId && start.partIndex === now.partIndex;
+
+/**
+ * Where an arrow key moves a mask's knob on screen, as an offset in pixels,
+ * or null for any other key. A turning knob goes round its centre instead:
+ * Right and Down turn it clockwise, Left and Up the other way. `fromCentre`
+ * is where it sits from the centre it turns around.
+ */
+export function nudge(key: string, big: boolean, fromCentre?: Point): Point | null {
+  const offset = arrowOffset(key, big);
+  if (!offset || !fromCentre) return offset;
+  const reach = Math.hypot(fromCentre[0], fromCentre[1]) || 1;
+  // Right and Down one way, Left and Up the other, as far as the arrow would go.
+  const along = offset[0] + offset[1];
+  // A quarter-turn clockwise of the way out from the centre, on a screen whose y runs down.
+  return [(-fromCentre[1] / reach) * along, (fromCentre[0] / reach) * along];
+}
 
 /** How many brush parts there are across all masks. */
 export const brushCount = (masks: Mask[]) =>
