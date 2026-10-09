@@ -196,7 +196,8 @@ export function kelvinScale(camera: Camera): KelvinScale {
   highest = Math.round(Math.max(highest, shot.kelvin));
 
   // Only the far corners (the warmest light, with the most tint) go past what the shader takes.
-  const limit = (v: number) => Math.min(MOST, Math.max(-MOST, v));
+  // Rounded, so going back to as shot lands on exactly 0.
+  const limit = (v: number) => Math.round(Math.min(MOST, Math.max(-MOST, v)) * 1e4) / 1e4 || 0;
   const toRelative = ({ kelvin, tint }: Light): Relative => {
     const at = Math.min(highest, Math.max(lowest, kelvin));
     const [here, per] = [along(at), perTint(at)];
