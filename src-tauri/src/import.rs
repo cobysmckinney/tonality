@@ -261,7 +261,26 @@ pub fn run(
     progress: &(dyn Fn(usize, usize) + Sync),
 ) -> Result<ImportSummary> {
     let import_id = library.create_import(&session.source)?;
-    fs::create_dir_all(library.incoming_dir())?;
+    let summary = run_into(library, session, indices, import_id, &library.incoming_dir(), cancel, progress);
+    let _ = fs::remove_dir_all(library.incoming_dir());
+    library.discard_import_if_empty(import_id)?;
+    summary
+}
+
+/// Copies the chosen scan items into the library as part of the import
+/// `import_id`, holding each copy in `incoming` until it is checked.
+/// Tethered capture adds to one import frame by frame this way, with its
+/// own holding folder so a card import finishing alongside can't clear it.
+pub fn run_into(
+    library: &Library,
+    session: &ScanSession,
+    indices: &[usize],
+    import_id: i64,
+    incoming: &Path,
+    cancel: &AtomicBool,
+    progress: &(dyn Fn(usize, usize) + Sync),
+) -> Result<ImportSummary> {
+    fs::create_dir_all(incoming)?;
     let total = indices.len();
     let done = AtomicUsize::new(0);
     let placement = Mutex::new(());
@@ -275,7 +294,7 @@ pub fn run(
                 return;
             }
             let Some(item) = session.items.get(index) else { return };
-            let outcome = import_one(library, session.id, index, item, import_id, &placement);
+            let outcome = import_one(library, session.id, index, item, import_id, incoming, &placement);
             let mut summary = summary.lock().unwrap();
             match outcome {
                 Ok(Outcome::Imported) => summary.imported += 1,
@@ -289,8 +308,6 @@ pub fn run(
         });
     });
 
-    let _ = fs::remove_dir_all(library.incoming_dir());
-    library.discard_import_if_empty(import_id)?;
     let mut summary = summary.into_inner().unwrap();
     summary.cancelled = cancel.load(Ordering::Relaxed);
     Ok(summary)
@@ -361,7 +378,7 @@ fn free_names(dir: &Path, primary: &Path, jpeg: Option<&Path>) -> (PathBuf, Opti
 /// Copies a photo already in the library back in from `item`, to where the
 /// library expects it, if its original (or its paired JPEG) has gone from the
 /// library folder. One that was only moved within it is followed instead.
-fn put_back(library: &Library, id: i64, item: &ScanItem, import_id: i64, index: usize) -> Result<()> {
+fn put_back(library: &Library, id: i64, item: &ScanItem, import_id: i64, index: usize, incoming: &Path) -> Result<()> {
     library.missing_originals(&[id])?;
     let files = library.expected_files(id)?;
     let copies = [(Some(&item.path), Some(files.path), ""), (item.jpeg.as_ref(), files.jpeg_path, "-pair")];
@@ -371,7 +388,7 @@ fn put_back(library: &Library, id: i64, item: &ScanItem, import_id: i64, index: 
             continue;
         }
         let ext = to.extension().unwrap_or_default().to_string_lossy();
-        let holding = library.incoming_dir().join(format!("{import_id}-{index}{tag}.{ext}"));
+        let holding = incoming.join(format!("{import_id}-{index}{tag}.{ext}"));
         let dir = to.parent().context("the library has no folder for this photo")?;
         let copied = copy_file(from, &holding)
             .and_then(|()| fs::create_dir_all(dir).context("making its folder"))
@@ -391,16 +408,17 @@ fn import_one(
     index: usize,
     item: &ScanItem,
     import_id: i64,
+    incoming: &Path,
     placement: &Mutex<()>,
 ) -> Result<Outcome> {
     match item.status {
         Status::Deleted(id) => {
-            put_back(library, id, item, import_id, index)?;
+            put_back(library, id, item, import_id, index, incoming)?;
             library.restore(&[id])?;
             return Ok(Outcome::Restored);
         }
         Status::Missing(id) => {
-            put_back(library, id, item, import_id, index)?;
+            put_back(library, id, item, import_id, index, incoming)?;
             return Ok(Outcome::Restored);
         }
         Status::Duplicate => bail!("already in the library"),
@@ -410,7 +428,6 @@ fn import_one(
     // Copy first, into a holding folder: the capture date decides the final
     // folder, and reading it from the local copy avoids a second pass over
     // a slow card.
-    let incoming = library.incoming_dir();
     let holding_name = |tag: &str, like: &Path| {
         let ext = like.extension().unwrap_or_default().to_string_lossy();
         incoming.join(format!("{import_id}-{index}{tag}.{ext}"))

@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
-import { Copy, Keyboard, Minus, Square, X } from "lucide-react";
+import { Aperture, Copy, Keyboard, Minus, Square, X } from "lucide-react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { count } from "../format";
+import { firesShutter } from "../keys";
 import { useStore } from "../store";
 
 /**
@@ -45,6 +46,51 @@ function Activity() {
 }
 
 /**
+ * The camera capturing, while one is: take a photo from here or with F12,
+ * choose whether new frames follow the last, and stop. In the title bar
+ * so it stays in reach in the grid and the editor alike.
+ */
+function CaptureBar() {
+  const capture = useStore((s) => s.capture);
+  const { takePhoto, setCaptureFollow, stopCapture } = useStore.getState();
+
+  useEffect(() => {
+    if (!capture) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (!firesShutter(event.key, useStore.getState())) return;
+      event.preventDefault();
+      if (!event.repeat) void useStore.getState().takePhoto();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [capture]);
+
+  if (!capture) return null;
+  return (
+    <div className="capture-bar" role="group" aria-label="Capture">
+      <span className="capture-camera" title={`Each photo taken with ${capture.camera.name} comes into the library and opens`}>
+        <Aperture size={14} />
+        <span className="capture-name">{capture.camera.name}</span>
+      </span>
+      <button
+        className={`button quiet ${capture.follow ? "engaged" : ""}`}
+        aria-pressed={capture.follow}
+        title="New frames take the film settings, crop and film details of the one before, with the frame number counted on"
+        onClick={() => void setCaptureFollow(!capture.follow)}
+      >
+        Follow the last frame
+      </button>
+      <button className="button primary" title="Take a photo (F12)" onClick={() => void takePhoto()}>
+        Take photo
+      </button>
+      <button className="button quiet" title="Stop capturing" onClick={() => void stopCapture()}>
+        Stop
+      </button>
+    </div>
+  );
+}
+
+/**
  * The window's own title bar: drag it to move the window, double-click to
  * maximize. Replaces the system decorations so the panels run edge to edge.
  */
@@ -69,6 +115,7 @@ export function TitleBar() {
         <circle cx="868" cy="178" r="92" />
       </svg>
       <Activity />
+      <CaptureBar />
       <div className="window-controls">
         <button
           className="shortcuts-button"

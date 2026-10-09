@@ -5,6 +5,7 @@ How Tonality works, area by area. New here? The [README](../README.md) has the s
 - [The library](#the-library)
 - [The editor](#the-editor)
 - [Film scans](#film-scans)
+- [Capturing with a camera](#capturing-with-a-camera)
 - [Presets](#presets)
 - [Masks](#masks)
 - [History and branches](#history-and-branches)
@@ -25,7 +26,7 @@ Tonality keeps one managed library, like Apple Photos. Importing copies photos i
 
 - **One window.** Opening Tonality while it's already running brings up the open window rather than starting a second copy.
 - **Library, Favorites, Imports, Recently Deleted, Albums** in the sidebar. Deleted photos are kept for 30 days. If a file can't be deleted at the end of that (it's open in another program, say), its photo stays in Recently Deleted until it can be.
-- **Import** from files, folders, drag and drop, or a camera card (any mounted volume with a `DCIM` folder). You review what was found before anything is copied, grouped by the day it was taken: a day's heading selects or clears the whole day, so one shoot can be imported and the rest of the card left. Photos already in the library are marked and skipped. Each copy is read back and checked against the original before the photo is added, so a failing card shows up as an error, not a damaged photo.
+- **Import** from files, folders, drag and drop, or a camera card (any mounted volume with a `DCIM` folder). You review what was found before anything is copied, grouped by the day it was taken: a day's heading selects or clears the whole day, so one shoot can be imported and the rest of the card left. Photos already in the library are marked and skipped. Each copy is read back and checked against the original before the photo is added, so a failing card shows up as an error, not a damaged photo. A camera on USB can also send each photo straight in as it is taken: see [Capturing with a camera](#capturing-with-a-camera).
 - **Moving or deleting files in `Originals` yourself**: a file moved to another folder inside `Originals`, keeping its name, is found there and the photo follows it (a RAW's JPEG too, if it went alongside). A photo whose original is gone keeps its thumbnail but gets a crossed-out file mark in the grid, and can't be edited or exported until the file is back. Opening it in the editor says what's wrong in place of the photo, and the same goes for a file that's damaged and can't be read. Importing the photo again from its card or folder copies the file back to where it was; this works for photos in Recently Deleted too, which come back to the library at the same time.
 - **RAW + JPEG pairs** shot together are one photo.
 - **A damaged original**, or a file that isn't a photo Tonality can read, can't be edited or exported, and trying says so. If the photo is still on the camera card, deleting it permanently and importing it again may help.
@@ -55,6 +56,17 @@ A negative photographed on a light (a camera scan) or scanned opens as a negativ
 - **Mirrored scans** (photographed from the wrong side of the film): **Flip** in Crop.
 - **Slides** are already positives and need nothing: leave Film at *None*.
 - Presets never change the film settings.
+
+## Capturing with a camera
+
+With a camera connected by USB, each photo it takes comes straight into the library and opens in the editor, ready to check focus and framing before the next. It's made for scanning film with a camera, a roll at a time. It works on Linux for now, through libgphoto2, which most distributions have as a package; Tonality says so if it isn't installed.
+
+- **Start**: a connected camera that is switched on shows under **Capture** in the sidebar, and in the **Import** menu. Choose it. The title bar then shows the camera, **Follow the last frame**, **Take photo** and **Stop**.
+- **Take photos** with the camera's own shutter button, **Take photo**, or `F12`. Each one is copied in like an import: checked, filed by the day it was taken, a RAW and its JPEG kept as one photo. The whole session is one entry in Imports, named after the camera. The files on the camera are left as they are.
+- **Follow the last frame** (on to begin with): each new frame takes the film settings, crop, straightening, turns and flips of the one before, as a step in its history ("Settings of the last frame"), and its film details with the frame number counted on by one. Set up the first frame of a roll (film type, crop, film details and frame number) and the rest come in already turned into positives and labelled. The first frame follows the photo that was open in the editor when capture started, so a roll can be picked up where it was left. Only a frame of film passes anything on: one with no film settings or details passes nothing, not even its crop.
+- **Focus**: a camera on autofocus that can't find focus won't take the photo. For film, focus by hand and set the lens to manual.
+- **If the camera isn't found**, switch it on and check the cable. If another program is using it (a file manager showing the camera counts), close that first. A camera that shows up as a drive is a camera card: import from it instead.
+- **Stop**, unplugging the camera or switching it off ends capture. Photos already taken are kept.
 
 ## Presets
 
@@ -139,3 +151,4 @@ Exports are sRGB and carry the capture date, camera, lens and exposure. A photo 
 | Editor | Alt while painting | Erase with the brush |
 | Editor | Enter, in the crop tool | Finish cropping |
 | Editor | double-click a slider | Reset it |
+| Capturing | `F12` | Take a photo with the camera |

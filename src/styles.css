@@ -173,6 +173,34 @@ button {
   margin-right: 7px;
 }
 
+/* A camera capturing: kept by the window's buttons, leaving the middle to what the app is busy with. */
+.capture-bar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin: 0 12px 0 auto;
+  font-size: 12px;
+}
+.capture-bar .button {
+  height: 26px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+.capture-camera {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-right: 6px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+/* Narrow windows keep the buttons and drop the camera's name. */
+@media (max-width: 1100px) {
+  .capture-name {
+    display: none;
+  }
+}
+
 .window-controls {
   display: flex;
   gap: 2px;
