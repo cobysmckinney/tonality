@@ -33,6 +33,7 @@ bun run tauri dev                     # the app, against ~/Pictures/Tonality unl
 bun test                              # interface unit tests (src/*.test.ts)
 bunx tsc --noEmit                     # type check (bun run build also runs it)
 cd src-tauri && cargo test            # backend + GPU pipeline tests (GPU tests skip without an adapter)
+cd src-tauri && cargo test --test integration masks::   # one test file, while iterating
 cd src-tauri && cargo clippy --all-targets
 ```
 
@@ -50,7 +51,7 @@ Interface changes are checked in the real app, not only by tests:
 ## Layout
 
 - `src-tauri/src`: `library.rs` database · `import.rs` scan and copy · `media.rs` decoding and metadata · `thumbs.rs` generated images · `volumes.rs` card detection · `develop.rs` RAW to linear light (rawler) · `geometry.rs` crop and rotation · `gpu.rs` the wgpu pipeline · `shaders/develop.wgsl` the single develop pass · `edit.rs` the edit recipe · `history.rs` steps and branches · `presets.rs` · `masks.rs` mask packing and brush coverage · `segment.rs` found masks (tract, CPU) · `export.rs` · `commands.rs` the API the interface calls.
-- `src-tauri/tests`: integration tests per module, on synthetic files. Real-photo tests are `#[ignore]`d and read `TONALITY_SAMPLES`.
+- `src-tauri/tests`: integration tests per module, on synthetic files, built as one binary: a new file needs a `mod` line in `tests/main.rs` or it never runs. Real-photo tests are `#[ignore]`d and read `TONALITY_SAMPLES`.
 - `src`: React interface. All state is in `store.ts` (zustand); `api.ts` wraps the Tauri commands; the editor is under `components/editor`. Pure logic lives in plain modules (`crop.ts`, `masks.ts`, `presets.ts`) so `bun test` can cover it. `store.ts` imports Tauri and can't be loaded by `bun test`, so move logic you want to test out of it.
 - `src-tauri/models`: the bundled ONNX models (about 145 MB), with their licences and how each was made in `models/README.md`.
 
