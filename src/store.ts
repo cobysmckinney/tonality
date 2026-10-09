@@ -13,6 +13,7 @@ import {
   Point,
   sameAdjustments,
   Shape,
+  Spot,
 } from "./adjustments";
 import {
   api,
@@ -36,7 +37,8 @@ import {
 import { listenAll, settleEach } from "./events";
 import { FilmPhoto, FilmSuggestions } from "./filmDetails";
 import { plural } from "./format";
-import { canAdd, circleShape, foundShapes, isFound, MaskStart, MAX_MASKS, newMask, newShape, SHAPE_NAMES, startKind } from "./masks";
+import { canAdd, circleShape, foundShapes, isFound, MaskStart, MAX_MASKS, newMask, newShape, SHAPE_NAMES, startKind, tidy } from "./masks";
+import { HEAL_SIZE, HEAL_STEPS, healRadius, MAX_SPOTS, sizeForRadius, Speck, specksAsSpots } from "./heal";
 import { blend, holds, Preset, settingsFrom } from "./presets";
 import { forget } from "./selection";
 import { canStartExport, canStartFilm, canStartImport } from "./sheets";
@@ -79,7 +81,7 @@ export type ExportState =
   /** Always shown, so there is no doubt about what was written. */
   | { phase: "done"; summary: ExportSummary };
 
-export type SidePanel = "adjust" | "crop" | "masks" | "presets" | "history" | "info";
+export type SidePanel = "adjust" | "crop" | "masks" | "heal" | "presets" | "history" | "info";
 
 /** How the brush paints. Kept from photo to photo. */
 export interface BrushSettings {
@@ -157,6 +159,12 @@ export interface EditorState {
   circling: { mode: MaskMode | null; replace?: number; points?: Point[] } | null;
   /** Waiting for a click on the clear film, to set a negative's film base. */
   pickingBase: boolean;
+  /** The spot chosen in the Heal tool, by its place in the recipe's spots. */
+  spotIndex: number | null;
+  /** Specks found that look like dust, marked on the photo until removed or let be; null when none were looked for. */
+  dust: Speck[] | null;
+  /** Looking for dust, or for a new spot's patch. */
+  healing: "dust" | "spot" | null;
   histogram: Uint32Array | null;
   highlightsClipped: boolean;
   shadowsClipped: boolean;
@@ -180,6 +188,9 @@ const idleEditor: EditorState = {
   finding: null,
   circling: null,
   pickingBase: false,
+  spotIndex: null,
+  dust: null,
+  healing: null,
   histogram: null,
   highlightsClipped: false,
   shadowsClipped: false,
@@ -235,6 +246,8 @@ interface State {
   cropShape: string;
   cropAspect: number | null;
   brush: BrushSettings;
+  /** The size of new spots in the Heal tool, 1..100 (see `healRadius`). Kept from photo to photo. */
+  healSize: number;
   volumes: Volume[];
   importState: ImportState | null;
   exportState: ExportState | null;
@@ -289,6 +302,24 @@ interface State {
   removeMaskPart: (index: number) => void;
   selectMask: (id: number | null, partIndex?: number | null) => void;
   toggleMaskOverlay: () => void;
+
+  /** Sets the size of new spots, or with a spot chosen, resizes it, live. */
+  setHealSize: (size: number) => void;
+  /** Makes the size larger or smaller by `by` (from [ and ]); a chosen spot's resizing is a step once the presses stop. */
+  nudgeHealSize: (by: number) => void;
+  /** Heals over these points on the file (one for a spot, more for a line) with a patch found nearby; a step. */
+  heal: (points: Point[]) => Promise<void>;
+  /** Changes a spot, live; with a label the change is also a step in the history. */
+  updateSpot: (index: number, spot: Spot, label?: string) => void;
+  deleteSpot: (index: number) => void;
+  deleteAllSpots: () => void;
+  selectSpot: (index: number | null) => void;
+  /** Looks for specks of dust in the open photo and marks them. */
+  findDust: () => Promise<void>;
+  /** Heals these specks found as dust (by their place in the list), or all of them: one step. */
+  removeSpecks: (indices: number[] | "all") => void;
+  /** Takes the mark off a speck that isn't dust; with no index, off all of them. */
+  dismissSpeck: (index?: number) => void;
 
   loadEditor: (id: number) => Promise<void>;
   leaveEditor: () => Promise<void>;
@@ -527,6 +558,8 @@ export const useStore = create<State>((set, get) => {
   };
 
   const setEditor = (change: Partial<EditorState>) => set((s) => ({ editor: { ...s.editor, ...change } }));
+  /** Records a spot's resizing once the size has been still for a moment. */
+  let resizeTimer: ReturnType<typeof setTimeout> | undefined;
 
   /**
    * Runs `then` straight away, or when it needs found parts (the subject,
@@ -573,12 +606,14 @@ export const useStore = create<State>((set, get) => {
     if (checkOut) {
       // The preset applied last stays adjustable only on the steps it was
       // adjustable on, at the amount it had there.
-      const { applied } = get().editor;
+      const { applied, spotIndex } = get().editor;
       const amount = applied?.steps.get(history.headId);
       setEditor({
         history,
         adjustments: history.adjustments,
         committed: history.adjustments,
+        // The chosen spot may not be there any more.
+        spotIndex: spotIndex !== null && spotIndex < history.adjustments.spots.length ? spotIndex : null,
         applied:
           applied && amount !== undefined
             ? { ...applied, amount, values: blend(applied.base, applied.preset.settings, amount / 100) }
@@ -645,6 +680,7 @@ export const useStore = create<State>((set, get) => {
     cropShape: "Free",
     cropAspect: null,
     brush: { size: 30, feather: 50, strength: 100, erase: false },
+    healSize: HEAL_SIZE,
     volumes: [],
     importState: null,
     exportState: null,
@@ -857,6 +893,112 @@ export const useStore = create<State>((set, get) => {
 
     selectMask: (maskId, partIndex = 0) => setEditor({ maskId, partIndex: maskId === null ? null : partIndex }),
     toggleMaskOverlay: () => setEditor({ showMask: !get().editor.showMask }),
+
+    setHealSize(size) {
+      const { spotIndex, adjustments } = get().editor;
+      const spot = spotIndex !== null ? adjustments.spots[spotIndex] : undefined;
+      if (!spot || spotIndex === null) return set({ healSize: size });
+      get().updateSpot(spotIndex, { ...spot, radius: tidy(healRadius(size)) });
+    },
+
+    nudgeHealSize(by) {
+      const { spotIndex, adjustments } = get().editor;
+      const spot = spotIndex !== null ? adjustments.spots[spotIndex] : undefined;
+      const size = spot ? sizeForRadius(spot.radius) : get().healSize;
+      get().setHealSize(Math.min(100, Math.max(1, size + by)));
+      if (!spot) return;
+      // A run of presses becomes one step once they stop for a moment.
+      clearTimeout(resizeTimer);
+      resizeTimer = setTimeout(() => get().commitAdjust(HEAL_STEPS.resized), 600);
+    },
+
+    async heal(points) {
+      const { photoId, ready, adjustments } = get().editor;
+      if (photoId === null || !ready || points.length === 0) return;
+      if (adjustments.spots.length >= MAX_SPOTS) {
+        return get().toast({ text: `A photo can have ${MAX_SPOTS} spots. Delete some to heal more.` });
+      }
+      const radius = tidy(healRadius(get().healSize));
+      setEditor({ healing: "spot" });
+      try {
+        const source = await api.healSource(photoId, adjustments, points, radius);
+        const now = get().editor;
+        if (now.photoId !== photoId || !now.ready) return;
+        const spot: Spot = { points: points.map((p) => p.map(tidy) as Point), radius, source };
+        const spots = [...now.adjustments.spots, spot];
+        get().adjust({ spots });
+        setEditor({ spotIndex: spots.length - 1 });
+        get().commitAdjust(HEAL_STEPS.added(spot));
+      } catch (error) {
+        get().toast({ text: String(error), tone: "error" });
+      } finally {
+        if (get().editor.photoId === photoId) setEditor({ healing: null });
+      }
+    },
+
+    updateSpot(index, spot, label) {
+      const { adjustments, ready } = get().editor;
+      if (!ready || !adjustments.spots[index]) return;
+      get().adjust({ spots: adjustments.spots.map((s, i) => (i === index ? spot : s)) });
+      if (label) get().commitAdjust(label);
+    },
+
+    deleteSpot(index) {
+      const { adjustments, spotIndex } = get().editor;
+      if (!adjustments.spots[index]) return;
+      get().adjust({ spots: adjustments.spots.filter((_, i) => i !== index) });
+      setEditor({ spotIndex: spotIndex === null || spotIndex === index ? null : spotIndex > index ? spotIndex - 1 : spotIndex });
+      get().commitAdjust(HEAL_STEPS.deleted);
+    },
+
+    deleteAllSpots() {
+      if (get().editor.adjustments.spots.length === 0) return;
+      get().adjust({ spots: [] });
+      setEditor({ spotIndex: null });
+      get().commitAdjust(HEAL_STEPS.cleared);
+    },
+
+    selectSpot: (spotIndex) => setEditor({ spotIndex }),
+
+    async findDust() {
+      const { photoId, ready, adjustments } = get().editor;
+      if (photoId === null || !ready) return;
+      get().commitAdjust();
+      setEditor({ healing: "dust", spotIndex: null });
+      try {
+        const dust = await during("Looking for dust", () => api.findDust(photoId, adjustments));
+        if (get().editor.photoId !== photoId) return;
+        setEditor({ dust });
+        if (dust.length === 0) get().toast({ text: "No dust found" });
+      } catch (error) {
+        get().toast({ text: `Couldn’t look for dust: ${error}`, tone: "error" });
+      } finally {
+        if (get().editor.photoId === photoId) setEditor({ healing: null });
+      }
+    },
+
+    removeSpecks(indices) {
+      const { dust, adjustments, ready } = get().editor;
+      if (!dust || !ready) return;
+      const chosen = new Set(indices === "all" ? dust.map((_, i) => i) : indices);
+      const room = MAX_SPOTS - adjustments.spots.length;
+      const taken = dust.filter((_, i) => chosen.has(i)).slice(0, Math.max(0, room));
+      if (taken.length === 0) {
+        if (room <= 0) get().toast({ text: `A photo can have ${MAX_SPOTS} spots. Delete some to heal more.` });
+        return;
+      }
+      const left = dust.filter((speck) => !taken.includes(speck));
+      get().adjust({ spots: [...adjustments.spots, ...specksAsSpots(taken)] });
+      setEditor({ dust: left.length ? left : null, spotIndex: null });
+      get().commitAdjust(HEAL_STEPS.specks(taken.length));
+    },
+
+    dismissSpeck(index) {
+      const { dust } = get().editor;
+      if (!dust) return;
+      const left = index === undefined ? [] : dust.filter((_, i) => i !== index);
+      setEditor({ dust: left.length ? left : null });
+    },
 
     loadEditor(id) {
       settle();

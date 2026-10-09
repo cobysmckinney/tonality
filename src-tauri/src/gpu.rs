@@ -13,9 +13,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use crate::develop::LinearImage;
-use crate::edit::{curve_table, Adjustments, Stroke, MAX_EXPOSURE};
+use crate::edit::{curve_table, Adjustments, Spot, Stroke, MAX_EXPOSURE};
 use crate::film::{self, Look, Sample};
 use crate::geometry;
+use crate::heal;
 use crate::masks::{self, Coverage, COVERAGE_EDGE, MAX_BRUSHES, MAX_FOUND, MAX_MASKS, MAX_PARTS};
 use crate::segment::{self, Found};
 
@@ -120,7 +121,11 @@ pub struct Gpu {
     gaussian: wgpu::RenderPipeline,
     /// Turns a scanned negative into the positive the develop shader works on.
     film: wgpu::RenderPipeline,
+    /// Heals a spot of dust, a hair or a scratch in the working image.
+    heal: wgpu::RenderPipeline,
     sampler: wgpu::Sampler,
+    /// The step between the starts of uniform data bound from one buffer.
+    uniform_alignment: u64,
     max_texture_size: u32,
 }
 
@@ -223,10 +228,14 @@ struct Target {
 #[derive(Default)]
 struct FilmState {
     /// The photo as opened, kept here while the working image holds a
-    /// negative's positive instead.
+    /// negative's positive or healed spots instead.
     scan: Option<wgpu::Texture>,
     /// The film look the working image has; None for the photo as opened.
     applied: Option<Look>,
+    /// The spots healed in the working image.
+    healed: Vec<Spot>,
+    /// A copy of the working image that spots are healed from, kept while there are any.
+    healing: Option<wgpu::Texture>,
     /// The last look worked out, and the film and framing settings it was
     /// worked out from, so each frame doesn't measure the film again.
     measured: Option<(Adjustments, Option<Look>)>,
@@ -359,7 +368,7 @@ impl Gpu {
 
         let develop_shader = device.create_shader_module(wgpu::include_wgsl!("shaders/develop.wgsl"));
         let prepare_shader = device.create_shader_module(wgpu::include_wgsl!("shaders/prepare.wgsl"));
-        let pipeline = |label, shader: &wgpu::ShaderModule, fragment, format| {
+        let blended = |label, shader: &wgpu::ShaderModule, fragment, format, blend| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some(label),
                 layout: None,
@@ -373,7 +382,7 @@ impl Gpu {
                     module: shader,
                     entry_point: Some(fragment),
                     compilation_options: Default::default(),
-                    targets: &[Some(wgpu::ColorTargetState { format, blend: None, write_mask: wgpu::ColorWrites::ALL })],
+                    targets: &[Some(wgpu::ColorTargetState { format, blend, write_mask: wgpu::ColorWrites::ALL })],
                 }),
                 primitive: Default::default(),
                 depth_stencil: None,
@@ -381,6 +390,20 @@ impl Gpu {
                 multiview_mask: None,
                 cache: None,
             })
+        };
+        let pipeline = |label, shader, fragment, format| blended(label, shader, fragment, format, None);
+        // A healed spot is laid over the working image by how much it covers, its alpha.
+        let over = wgpu::BlendState {
+            color: wgpu::BlendComponent {
+                src_factor: wgpu::BlendFactor::SrcAlpha,
+                dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+                operation: wgpu::BlendOperation::Add,
+            },
+            alpha: wgpu::BlendComponent {
+                src_factor: wgpu::BlendFactor::Zero,
+                dst_factor: wgpu::BlendFactor::One,
+                operation: wgpu::BlendOperation::Add,
+            },
         };
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("linear"),
@@ -396,8 +419,10 @@ impl Gpu {
             copy: pipeline("copy", &prepare_shader, "copy", WORKING_FORMAT),
             gaussian: pipeline("gaussian", &prepare_shader, "gaussian", WORKING_FORMAT),
             film: pipeline("film", &prepare_shader, "film_positive", WORKING_FORMAT),
+            heal: blended("heal", &prepare_shader, "heal", WORKING_FORMAT, Some(over)),
             sampler,
             max_texture_size: limits.max_texture_dimension_2d,
+            uniform_alignment: limits.min_uniform_buffer_offset_alignment as u64,
             device,
             queue,
         })
@@ -754,6 +779,32 @@ impl Gpu {
     fn read_working(&self, session: &Session, width: u32, height: u32) -> Result<Vec<[f32; 3]>> {
         let texture = self.texture("working copy", width, height, 1, WORKING_FORMAT);
         let view = texture.create_view(&Default::default());
+        let mut encoder = self.device.create_command_encoder(&Default::default());
+        self.draw(&mut encoder, &self.copy, &self.copy_bindings(&session.views.source), &view);
+        self.read_back(encoder, texture.as_image_copy(), width, height)
+    }
+
+    /// Part of one mip level of the working image: `width` x `height` of
+    /// its pixels from (`x`, `y`), in linear light.
+    fn read_level(&self, session: &Session, level: u32, [x, y, width, height]: [u32; 4]) -> Result<Vec<[f32; 3]>> {
+        let part = wgpu::TexelCopyTextureInfo {
+            texture: &session.source,
+            mip_level: level,
+            origin: wgpu::Origin3d { x, y, z: 0 },
+            aspect: wgpu::TextureAspect::All,
+        };
+        self.read_back(self.device.create_command_encoder(&Default::default()), part, width, height)
+    }
+
+    /// Finishes `encoder` with a copy of `width` x `height` working-format
+    /// pixels from `from`, and reads them back.
+    fn read_back(
+        &self,
+        mut encoder: wgpu::CommandEncoder,
+        from: wgpu::TexelCopyTextureInfo,
+        width: u32,
+        height: u32,
+    ) -> Result<Vec<[f32; 3]>> {
         let row = width * 8;
         let padded = padded_row(row);
         let readback = self.device.create_buffer(&wgpu::BufferDescriptor {
@@ -762,10 +813,8 @@ impl Gpu {
             usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
             mapped_at_creation: false,
         });
-        let mut encoder = self.device.create_command_encoder(&Default::default());
-        self.draw(&mut encoder, &self.copy, &self.copy_bindings(&session.views.source), &view);
         encoder.copy_texture_to_buffer(
-            texture.as_image_copy(),
+            from,
             wgpu::TexelCopyBufferInfo {
                 buffer: &readback,
                 layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(padded), rows_per_image: Some(height) },
@@ -788,11 +837,11 @@ impl Gpu {
         Ok(pixels)
     }
 
-    /// Makes the working image hold what `adjustments` ask of the film: a
-    /// negative's positive, or the photo as opened. Only redraws it (and its
-    /// mipmaps and blurs) when that changes. Returns the look applied.
+    /// Makes the working image hold what `adjustments` ask of the film (a
+    /// negative's positive, or the photo as opened) with their spots healed.
+    /// Only redraws it (and its mipmaps and blurs) when that changes.
+    /// Returns the look applied.
     fn apply_film(&self, session: &Session, state: &mut FilmState, adjustments: &Adjustments) -> Result<Option<Look>> {
-        use wgpu::util::DeviceExt;
         // The look depends only on the film settings and the framing (the
         // balance is measured inside the crop).
         let mut wanted = Adjustments { film: adjustments.film, ..Default::default() };
@@ -805,46 +854,46 @@ impl Gpu {
                 look
             }
         };
-        if look == state.applied {
+        if look == state.applied && adjustments.spots == state.healed {
             return Ok(look);
         }
 
+        let spots = heal::pack(&adjustments.spots, session.width, session.height);
         let size = wgpu::Extent3d { width: session.width, height: session.height, depth_or_array_layers: 1 };
         let mut encoder = self.device.create_command_encoder(&Default::default());
-        match look {
-            Some(look) => {
-                if state.scan.is_none() {
-                    let scan = self.texture("scan", session.width, session.height, 1, WORKING_FORMAT);
-                    encoder.copy_texture_to_texture(session.source.as_image_copy(), scan.as_image_copy(), size);
-                    state.scan = Some(scan);
-                }
-                let scan = state.scan.as_ref().expect("just kept").create_view(&Default::default());
-                let uniform = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("film"),
-                    contents: bytemuck::cast_slice(&look.uniform()),
-                    usage: wgpu::BufferUsages::UNIFORM,
-                });
-                let bindings = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some("film"),
-                    layout: &self.film.get_bind_group_layout(0),
-                    entries: &[
-                        wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&scan) },
-                        wgpu::BindGroupEntry { binding: 3, resource: uniform.as_entire_binding() },
-                    ],
-                });
-                let full_size = session.source.create_view(&wgpu::TextureViewDescriptor {
-                    base_mip_level: 0,
-                    mip_level_count: Some(1),
-                    ..Default::default()
-                });
-                self.draw(&mut encoder, &self.film, &bindings, &full_size);
+        if look.is_some() || !spots.is_empty() {
+            let kept = state.scan.is_some();
+            if !kept {
+                let scan = self.texture("scan", session.width, session.height, 1, WORKING_FORMAT);
+                encoder.copy_texture_to_texture(session.source.as_image_copy(), scan.as_image_copy(), size);
+                state.scan = Some(scan);
             }
-            None => {
-                // Back to the photo as opened; the copy kept of it isn't needed any more.
-                if let Some(scan) = state.scan.take() {
-                    encoder.copy_texture_to_texture(scan.as_image_copy(), session.source.as_image_copy(), size);
-                }
+            let scan = state.scan.as_ref().expect("just kept");
+            if kept && look == state.applied {
+                // Only the spots changed: the working image needs drawing
+                // afresh only where they were and where they are now.
+                let was = heal::pack(&state.healed, session.width, session.height);
+                let areas: Vec<[u32; 4]> = was.iter().chain(&spots).map(|spot| spot.area).collect();
+                self.draw_positive(&mut encoder, session, scan, look, Some(&areas));
+            } else {
+                self.draw_positive(&mut encoder, session, scan, look, None);
             }
+        } else if let Some(scan) = state.scan.take() {
+            // Back to the photo as opened; the copy kept of it isn't needed any more.
+            encoder.copy_texture_to_texture(scan.as_image_copy(), session.source.as_image_copy(), size);
+        }
+        if spots.is_empty() {
+            state.healing = None;
+        } else {
+            let healing =
+                state.healing.get_or_insert_with(|| self.texture("healing", session.width, session.height, 1, WORKING_FORMAT));
+            // Twice over: first each spot sees the ones before it healed, then
+            // every spot sees all the others healed, so specks close together
+            // don't show through each other's fix.
+            self.draw_spots(&mut encoder, session, healing, &spots, true);
+            let areas: Vec<[u32; 4]> = spots.iter().map(|spot| spot.area).collect();
+            self.draw_positive(&mut encoder, session, state.scan.as_ref().expect("kept while healing"), look, Some(&areas));
+            self.draw_spots(&mut encoder, session, healing, &spots, false);
         }
         self.draw_derived(&mut encoder, &session.source, &session.blurs);
         self.queue.submit([encoder.finish()]);
@@ -856,7 +905,194 @@ impl Gpu {
             *session.picture.lock().unwrap() = if look.is_none() { Some(session.original_picture.clone()) } else { None };
         }
         state.applied = look;
+        state.healed = adjustments.spots.clone();
         Ok(look)
+    }
+
+    /// Draws the working image's full-size level from the photo as opened
+    /// (`scan`): its positive with the film `look`, or the photo itself.
+    /// With `only`, just inside those areas (left, top, width, height).
+    fn draw_positive(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        session: &Session,
+        scan: &wgpu::Texture,
+        look: Option<Look>,
+        only: Option<&[[u32; 4]]>,
+    ) {
+        use wgpu::util::DeviceExt;
+        let whole = [[0, 0, session.width, session.height]];
+        let areas = only.unwrap_or(&whole);
+        let Some(look) = look else {
+            for &area in areas {
+                copy_area(encoder, scan, &session.source, area);
+            }
+            return;
+        };
+        let scan = scan.create_view(&Default::default());
+        let uniform = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("film"),
+            contents: bytemuck::cast_slice(&look.uniform()),
+            usage: wgpu::BufferUsages::UNIFORM,
+        });
+        let bindings = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("film"),
+            layout: &self.film.get_bind_group_layout(0),
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&scan) },
+                wgpu::BindGroupEntry { binding: 3, resource: uniform.as_entire_binding() },
+            ],
+        });
+        let full_size = session.source.create_view(&wgpu::TextureViewDescriptor {
+            base_mip_level: 0,
+            mip_level_count: Some(1),
+            ..Default::default()
+        });
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("film"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &full_size,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
+            })],
+            ..Default::default()
+        });
+        pass.set_pipeline(&self.film);
+        pass.set_bind_group(0, &bindings, &[]);
+        for &[x, y, width, height] in areas {
+            pass.set_scissor_rect(x, y, width, height);
+            pass.draw(0..3, 0..1);
+        }
+    }
+
+    /// Heals `spots` over the working image's full-size level, each over its
+    /// own area only, reading the photo from `healing` (a full-size texture).
+    /// The `first` time over, `healing` starts as the working image wherever
+    /// the spots read it, and is kept in step, so each spot sees the ones
+    /// before it healed; the next time it is left as that made it, every
+    /// spot healed.
+    fn draw_spots(&self, encoder: &mut wgpu::CommandEncoder, session: &Session, healing: &wgpu::Texture, spots: &[heal::Placed], first: bool) {
+        use wgpu::util::DeviceExt;
+        let target = session.source.create_view(&wgpu::TextureViewDescriptor {
+            base_mip_level: 0,
+            mip_level_count: Some(1),
+            ..Default::default()
+        });
+        if first {
+            for &area in spots.iter().flat_map(|spot| &spot.reads) {
+                copy_area(encoder, &session.source, healing, area);
+            }
+        }
+        let read = healing.create_view(&Default::default());
+        let size = size_of::<heal::Packed>() as u64;
+        let slot = size.next_multiple_of(self.uniform_alignment);
+        let mut bytes = vec![0u8; (slot * spots.len() as u64) as usize];
+        for (spot, chunk) in spots.iter().zip(bytes.chunks_mut(slot as usize)) {
+            chunk[..size as usize].copy_from_slice(bytemuck::bytes_of(&spot.packed));
+        }
+        let buffer = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("spots"),
+            contents: &bytes,
+            usage: wgpu::BufferUsages::UNIFORM,
+        });
+        let layout = self.heal.get_bind_group_layout(0);
+        let bindings: Vec<wgpu::BindGroup> = (0..spots.len() as u64)
+            .map(|i| {
+                self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("spot"),
+                    layout: &layout,
+                    entries: &[
+                        wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&read) },
+                        wgpu::BindGroupEntry {
+                            binding: 4,
+                            resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                                buffer: &buffer,
+                                offset: i * slot,
+                                size: wgpu::BufferSize::new(size),
+                            }),
+                        },
+                    ],
+                })
+            })
+            .collect();
+        // The first time over each spot is copied across before the next is drawn; after that, all in one go.
+        let runs: Vec<&[heal::Placed]> = if first { spots.chunks(1).collect() } else { vec![spots] };
+        let mut bindings = bindings.iter();
+        for run in runs {
+            {
+                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("heal"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &target,
+                        depth_slice: None,
+                        resolve_target: None,
+                        ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
+                    })],
+                    ..Default::default()
+                });
+                pass.set_pipeline(&self.heal);
+                for (spot, bindings) in run.iter().zip(&mut bindings) {
+                    let [x, y, width, height] = spot.area;
+                    pass.set_scissor_rect(x, y, width, height);
+                    pass.set_bind_group(0, bindings, &[]);
+                    pass.draw(0..3, 0..1);
+                }
+            }
+            if first {
+                copy_area(encoder, &session.source, healing, run[0].area);
+            }
+        }
+    }
+
+    /// The working image `adjustments` make, read back whole at no more
+    /// than `long_edge` pixels along its longer side: what dust is looked for in.
+    pub fn working_area(&self, session: &Session, adjustments: &Adjustments, long_edge: u32) -> Result<heal::Area> {
+        let mut film = session.film.lock().unwrap();
+        self.apply_film(session, &mut film, adjustments)?;
+        let (width, height) = fit_within(session.width, session.height, long_edge.min(session.width.max(session.height)));
+        let pixels = self.read_working(session, width, height)?;
+        let scale = [session.width as f32 / width as f32, session.height as f32 / height as f32];
+        Ok(heal::Area { width, height, pixels, origin: [0.0, 0.0], scale })
+    }
+
+    /// The working image `adjustments` make around a new spot over `points`
+    /// (on the photo file, 0..1) of `radius` (a share of the longer side),
+    /// as far out as a patch for it is looked for, read back at a size that
+    /// shows the spot a few pixels across.
+    pub fn area_around(&self, session: &Session, adjustments: &Adjustments, points: &[[f32; 2]], radius: f32) -> Result<heal::Area> {
+        let (width, height) = (session.width, session.height);
+        let r = (radius * width.max(height) as f32).max(0.5);
+        let reach = r + heal::search_reach(r);
+        let mut bounds = [width as f32, height as f32, 0.0f32, 0.0f32];
+        for [x, y] in points {
+            let (x, y) = (x * width as f32, y * height as f32);
+            bounds = [bounds[0].min(x - reach), bounds[1].min(y - reach), bounds[2].max(x + reach), bounds[3].max(y + reach)];
+        }
+        let [left, top] = [bounds[0].max(0.0), bounds[1].max(0.0)];
+        let [right, bottom] = [bounds[2].min(width as f32), bounds[3].min(height as f32)];
+        if !(right > left && bottom > top) {
+            return Err(anyhow!("That spot isn't on the photo."));
+        }
+        // Fine enough that the spot is three pixels or more across, coarse
+        // enough that a long line doesn't mean reading the whole photo.
+        let last = session.source.mip_level_count() - 1;
+        let mut level = ((r / 3.0).max(1.0).log2().floor() as u32).min(last);
+        while level < last && ((right - left) / (1u32 << level) as f32) * ((bottom - top) / (1u32 << level) as f32) > 4e6 {
+            level += 1;
+        }
+        let (level_width, level_height) = ((width >> level).max(1), (height >> level).max(1));
+        let scale = [width as f32 / level_width as f32, height as f32 / level_height as f32];
+        let x = ((left / scale[0]).floor() as u32).min(level_width - 1);
+        let y = ((top / scale[1]).floor() as u32).min(level_height - 1);
+        let across = ((right / scale[0]).ceil() as u32).clamp(x + 1, level_width) - x;
+        let down = ((bottom / scale[1]).ceil() as u32).clamp(y + 1, level_height) - y;
+
+        let mut film = session.film.lock().unwrap();
+        self.apply_film(session, &mut film, adjustments)?;
+        let pixels = self.read_level(session, level, [x, y, across, down])?;
+        drop(film);
+        Ok(heal::Area { width: across, height: down, pixels, origin: [x as f32 * scale[0], y as f32 * scale[1]], scale })
     }
 
     /// Puts the mattes of `found` into the layers the shader reads them from,
@@ -1127,6 +1363,21 @@ impl Gpu {
         }
         Ok((width, height))
     }
+}
+
+/// Copies one area (left, top, width, height) of the full-size level of
+/// `from` to the same place in `to`.
+fn copy_area(encoder: &mut wgpu::CommandEncoder, from: &wgpu::Texture, to: &wgpu::Texture, [x, y, width, height]: [u32; 4]) {
+    if width == 0 || height == 0 {
+        return;
+    }
+    let at = |texture| wgpu::TexelCopyTextureInfo {
+        texture,
+        mip_level: 0,
+        origin: wgpu::Origin3d { x, y, z: 0 },
+        aspect: wgpu::TextureAspect::All,
+    };
+    encoder.copy_texture_to_texture(at(from), at(to), wgpu::Extent3d { width, height, depth_or_array_layers: 1 });
 }
 
 /// The bytes a row of `row` bytes takes in a readback buffer, whose rows

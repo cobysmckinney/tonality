@@ -17,9 +17,9 @@ import {
  * Part of a recipe: values for the settings a preset covers. Applying the
  * preset changes those and leaves the rest of the photo's edits alone. The
  * crop and the other framing settings are never part of one, and nor are
- * masks or the film settings, which belong to the scan.
+ * masks, the film settings or healed spots, which belong to the scan.
  */
-export type PresetSettings = Partial<Omit<Adjustments, (typeof GEOMETRY)[number] | "masks" | "film">>;
+export type PresetSettings = Partial<Omit<Adjustments, (typeof GEOMETRY)[number] | "masks" | "film" | "spots">>;
 
 /** A named look. Mirrors `Preset` in the backend's presets.rs. */
 export interface Preset {

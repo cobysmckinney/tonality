@@ -7,6 +7,7 @@ How Tonality works, area by area. New here? The [README](../README.md) has the s
 - [Film scans](#film-scans)
 - [Presets](#presets)
 - [Masks](#masks)
+- [Heal](#heal)
 - [History and branches](#history-and-branches)
 - [Exporting](#exporting)
 - [Keyboard shortcuts](#keyboard-shortcuts)
@@ -41,7 +42,7 @@ Opening a photo (double-click or Enter) loads it at full resolution onto the gra
 - **Crop** (`C`): the photo is shown whole with an upright crop frame over it. Shapes (free, original, 1:1, 5:4, 4:3, 3:2, 16:9) keep the crop the way up it already is, and a square crop takes the photo's way up. A shape holds while you drag the frame (undo back to a crop of another shape and it is free again). A straighten slider turns the photo under the frame and keeps the frame on the photo, and there are quarter-turns and flips. A vignette frames the crop, and moves with the frame as you drag it. From the keyboard, Tab reaches the frame and then its corners, and the arrow keys move them a pixel at a time (ten with Shift); Enter finishes. Pasting edits onto another photo leaves that photo's own crop alone.
 - **Starting look**: RAW files open with a built-in tone curve fitted to match camera JPEGs.
 - **Histogram** with clipping markers; `J` shows clipped areas on the photo.
-- **Tools** sit in a rail of icons along the right edge; `A` adjust, `C` crop, `M` masks, `Shift+P` presets, `H` history, `I` info; `Ctrl+Z` / `Ctrl+Shift+Z` undo and redo, hold `\` for the original, `Z` or double-click for 100%, scroll to zoom, `Ctrl+C` / `Ctrl+V` copy and paste edits (in the grid too, onto a whole selection), double-click a slider to reset it.
+- **Tools** sit in a rail of icons along the right edge; `A` adjust, `C` crop, `M` masks, `Shift+H` heal, `Shift+P` presets, `H` history, `I` info; `Ctrl+Z` / `Ctrl+Shift+Z` undo and redo, hold `\` for the original, `Z` or double-click for 100%, scroll to zoom, `Ctrl+C` / `Ctrl+V` copy and paste edits (in the grid too, onto a whole selection), double-click a slider to reset it.
 
 ## Film scans
 
@@ -52,6 +53,7 @@ A negative photographed on a light (a camera scan) or scanned opens as a negativ
 - **After that the photo works like any other.** Exposure, temperature and tint, curves, masks, the histogram and clipping warnings all work on the positive, and the subject and sky are found in it.
 - **Film base**: the clear film between and around the frames. Tonality guesses it from the clearest film in the scan, and the swatch shows what it is using. If the colours look off, choose **Pick** and click the clear film at the edge of a frame; **Auto** goes back to the guess.
 - **A whole roll**: balanced on its own, a frame that should have a colour (a sunset, say) comes out grey, and frames of the same scene can drift apart. Select the roll's frames in the grid, right-click and choose **Balance as one roll**: the base and colours are measured across all of them together and every frame gets the same balance, as a step in its history ("Balanced with the roll"). One of them needs its film chosen first; a base picked by hand on one frame goes to the whole roll. **Balance on its own** in Adjust puts a frame back to its own balance. Pasting edits carries the film settings too, which is another way to give a roll the same settings.
+- **Dust and scratches** come out as white specks and lines once a negative is turned: [Heal](#heal) covers them, and **Find dust** marks the specks for you.
 - **Mirrored scans** (photographed from the wrong side of the film): **Flip** in Crop.
 - **Slides** are already positives and need nothing: leave Film at *None*.
 - Presets never change the film settings.
@@ -83,6 +85,18 @@ Masks change one part of the photo. Each mask is an area, built from parts, with
 - **Limits**: 8 masks, 32 parts, 8 brush parts and 8 found parts (subject, sky, objects) a photo.
 
 Subject, sky and object finding all run on your computer, from small models bundled with the app. Nothing is uploaded. Each photo's answer is kept in the library, so it is only worked out once.
+
+## Heal
+
+Heal (`Shift+H`) covers dust, hairs and scratches: on a film scan, where a negative's dust comes out as white specks, or on a digital photo with dust on the sensor.
+
+- **A speck**: click it. A spot covers it, taking its texture from a patch nearby whose surroundings look alike, and its brightness and colour from around the spot, so it blends in. The chosen spot's patch shows as a dashed outline; drag it somewhere better if the fix shows. Drag a spot to move it.
+- **A hair or scratch**: drag over it. The line is covered the same way, from a patch beside it.
+- **Size**: the slider (or `[` and `]`) sets the size of the next spot, or of the chosen one. `Delete` deletes the chosen spot, and **Delete all** every one of them.
+- **Find dust** marks the specks that stand out from what is around them: light ones on a negative, dark ones on anything else. **Remove all** heals every marked speck in one step; click a mark to heal just that speck, or Alt-click one that isn't dust to leave it. Crop first: only specks inside the crop are marked. It looks for small, roundish specks; fine detail, edges and lines are passed over as best it can, and a crowd of bright points (leaves, gravel, stars) is left alone.
+- **They stay on the photo**: spots are kept on the file itself, so they follow crops, turns and flips. Each one added, moved, resized or deleted is a step in the history ("Healed a spot", "Removed 23 specks"). Pasting edits carries them; presets never do.
+- Healing comes before everything else, straight after a negative is turned into a positive, so the other tools, the histogram, thumbnails and exports all see the healed photo.
+- **Limits**: 500 spots a photo, and each Find dust marks at most 200 specks.
 
 ## History and branches
 
@@ -126,7 +140,7 @@ Exports are sRGB and carry the capture date, camera, lens and exposure. A photo 
 | Grid, editor | `Ctrl+E` | Export |
 | Editor | `Esc` | Back to the grid |
 | Editor | Left / Right | Previous / next photo. On a slider they nudge it, and on a row of tabs (the tool rail, the curve's channels, the mixer's colours) they move along it |
-| Editor | `A` / `C` / `M` / `Shift+P` / `H` / `I` | Adjust / crop / masks / presets / history / info |
+| Editor | `A` / `C` / `M` / `Shift+H` / `Shift+P` / `H` / `I` | Adjust / crop / masks / heal / presets / history / info |
 | Editor | `Ctrl+Z` / `Ctrl+Shift+Z` or `Ctrl+Y` | Undo / redo |
 | Editor | hold `\`, or hold Space or Enter on the Show original button | Show the original |
 | Editor | `Z`, double-click | Fit / 100% |
@@ -135,7 +149,9 @@ Exports are sRGB and carry the capture date, camera, lens and exposure. A photo 
 | Editor | Arrows, on a curve point | Move it; `+` adds a point after it, `Delete` removes it |
 | Editor | `O` | Mask overlay |
 | Editor | Arrows, Shift+arrows, on a mask's knob | Move it a pixel, or ten |
-| Editor | `[` / `]` | Brush size |
+| Editor | `[` / `]` | Brush size; in Heal, the size of the next spot or the chosen one |
 | Editor | Alt while painting | Erase with the brush |
+| Editor | `Delete`, in Heal | Delete the chosen spot |
+| Editor | Alt-click a speck marked as dust | Leave it |
 | Editor | Enter, in the crop tool | Finish cropping |
 | Editor | double-click a slider | Reset it |

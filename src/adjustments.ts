@@ -75,6 +75,19 @@ export interface Mask {
   adjustments: LocalAdjustments;
 }
 
+/**
+ * A fix for a speck of dust, a hair or a scratch: the area it covers and
+ * the patch its texture comes from, on the photo file. Mirrors `Spot` in edit.rs.
+ */
+export interface Spot {
+  /** One point for a spot, more for a line brushed over a hair or scratch. */
+  points: Point[];
+  /** How far the area reaches from the points, as a share of the photo's longer side. */
+  radius: number;
+  /** Where the patch is: the place the first point takes its texture from. */
+  source: Point;
+}
+
 /** What kind of film a scan is of. "none" is a digital photo, or a slide, which is already a positive. */
 export type FilmKind = "none" | "colour" | "blackAndWhite";
 
@@ -134,6 +147,8 @@ export interface Adjustments {
   masks: Mask[];
   /** For scans of film negatives. */
   film: Film;
+  /** Dust, hairs and scratches covered over, in the order they were made. */
+  spots: Spot[];
 }
 
 /** The adjustments that reshape the picture rather than recolour it. */
@@ -210,6 +225,7 @@ export function defaultAdjustments(): Adjustments {
     flipVertical: false,
     masks: [],
     film: { kind: "none", base: null, range: null },
+    spots: [],
   };
 }
 
@@ -312,6 +328,7 @@ export function describeChange(before: Adjustments, after: Adjustments): string 
     const key = changed[0];
     // The masks panel names its own steps; this is only a fallback.
     if (key === "masks") return "Masks";
+    if (key === "spots") return "Heal";
     if (key === "film") return describeFilm(before.film, after.film);
     if (key === "curves") {
       if (same(after.curves, DEFAULTS.curves)) return "Reset curve";

@@ -9,11 +9,12 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State, Window};
 use tauri_plugin_dialog::{DialogExt, FileDialogBuilder, FilePath};
 
-use crate::edit::{Adjustments, Shape};
+use crate::edit::{Adjustments, Shape, Spot};
 use crate::export;
 use crate::film;
 use crate::grants::Grants;
 use crate::gpu::{self, Region, Session};
+use crate::heal;
 use crate::history::History;
 use crate::import::{self, ImportSummary, ScanSession, ScanView};
 use crate::library::{FilmPhoto, FilmSuggestions, Library, Overview, PhotoInfo, PhotoItem, View};
@@ -463,6 +464,54 @@ pub fn pick_film_base(state: State<AppState>, id: i64, x: f32, y: f32) -> Comman
     let editing = state.editing();
     let (_, session) = editing.as_ref().filter(|(open, _)| *open == id).ok_or("This photo is no longer open in the editor.")?;
     Ok(FilmBase::of(session.sample().base_at(x, y)))
+}
+
+/// Where a new spot over `points` (on the open photo's file, 0..1) of
+/// `radius` (a share of its longer side) should take its texture from: a
+/// patch nearby whose surroundings match, clear of the spots `adjustments`
+/// already have.
+#[tauri::command(async)]
+pub fn heal_source(
+    state: State<AppState>,
+    id: i64,
+    adjustments: Adjustments,
+    points: Vec<[f32; 2]>,
+    radius: f32,
+) -> CommandResult<[f32; 2]> {
+    if points.is_empty() || radius.is_nan() || radius <= 0.0 {
+        return Err("A spot needs somewhere to be.".into());
+    }
+    let (area, size) = {
+        let editing = state.editing();
+        let (_, session) = editing.as_ref().filter(|(open, _)| *open == id).ok_or("This photo is no longer open in the editor.")?;
+        let gpu = gpu::shared().map_err(message)?;
+        (gpu.area_around(session, &adjustments, &points, radius).map_err(message)?, (session.width, session.height))
+    };
+    let spot = Spot { points, radius, source: [0.0; 2] };
+    Ok(heal::find_source(&area, &spot, size, &adjustments.spots))
+}
+
+/// Looks for specks of dust in the open photo as `adjustments` make it,
+/// inside the crop and not yet covered by a spot, each with a patch to cover it.
+#[tauri::command]
+pub async fn find_dust(app: AppHandle, id: i64, adjustments: Adjustments) -> CommandResult<Vec<heal::Speck>> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        // Read under the editor, looked through without it, so frames keep coming meanwhile.
+        let (area, (width, height)) = {
+            let editing = state.editing();
+            let (_, session) =
+                editing.as_ref().filter(|(open, _)| *open == id).ok_or("This photo is no longer open in the editor.")?;
+            let gpu = gpu::shared().map_err(message)?;
+            (gpu.working_area(session, &adjustments, heal::DUST_EDGE).map_err(message)?, (session.width, session.height))
+        };
+        // On a negative's positive dust is light; on anything else, dark.
+        let bright = adjustments.film.is_negative();
+        let inside = heal::inside_crop(width, height, &adjustments);
+        Ok(heal::find_dust(&area, (width, height), bright, &adjustments.spots, inside))
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// Balances the frames of a roll together: measures the film base and
