@@ -2,9 +2,9 @@
 //! of a mask apply only there. Skips itself on a machine without a GPU.
 
 use tonality_lib::develop::LinearImage;
-use tonality_lib::edit::{Adjustments, LocalAdjustments, Mask, MaskPart, Mode, Shape, Stroke};
+use tonality_lib::edit::{Adjustments, Crop, LocalAdjustments, Mask, MaskPart, Mode, Shape, Stroke};
 use tonality_lib::gpu::{self, Gpu, Guides, Region, Session};
-use tonality_lib::segment::Found;
+use tonality_lib::segment::{Found, Framing};
 
 fn gpu() -> Option<&'static Gpu> {
     gpu::shared().inspect_err(|error| eprintln!("skipping: {error:#}")).ok()
@@ -213,6 +213,39 @@ fn the_subject_stays_on_the_photo_when_it_is_turned() {
     let turned = draw(gpu, &session, &turned);
     assert!(turned(0.5, 0.2) > plain + 30);
     assert_eq!(turned(0.5, 0.8), plain);
+}
+
+#[test]
+fn a_cropped_photo_draws_the_subject_found_in_its_crop() {
+    let Some(gpu) = gpu() else { return };
+    let crop = Crop { x: 0.75, y: 0.5, width: 0.5, height: 1.0 };
+    let recipe = Adjustments { crop, ..with(vec![brighter(vec![add(Shape::Subject)])]) };
+    let half = |top: bool| image::GrayImage::from_fn(60, 40, move |_, y| image::Luma([if (y < 20) == top { 255 } else { 0 }]));
+
+    // A thumbnail or an export draws each recipe with what was found in its own crop.
+    let session = photo(gpu, false);
+    let plain = draw(gpu, &session, &Adjustments { crop, ..Default::default() })(0.5, 0.5);
+    let framing = session.framing_of(&recipe);
+    assert_ne!(framing, Framing::Whole);
+    session.set_matte(&Found::Subject, half(false));
+    session.set_matte_named(session.key_in(&Found::Subject, &framing), half(true));
+    let lit = draw(gpu, &session, &recipe);
+    assert!(lit(0.5, 0.2) > plain + 30, "the subject found in the crop");
+    assert_eq!(lit(0.5, 0.8), plain, "not the one found in the whole photo");
+    assert_eq!(session.framing(), framing);
+
+    // The editor's photo keeps what it found in the crop before until told
+    // otherwise, so dragging a crop doesn't run the model at every step.
+    let held = photo(gpu, false);
+    held.hold_framing.store(true, std::sync::atomic::Ordering::Relaxed);
+    held.set_matte(&Found::Subject, half(false));
+    held.set_matte_named(held.key_in(&Found::Subject, &framing), half(true));
+    let shown = draw(gpu, &held, &recipe);
+    assert!(shown(0.5, 0.8) > plain + 30 && shown(0.5, 0.2) == plain, "drawn with the whole photo's subject");
+    assert_eq!(held.framing(), Framing::Whole);
+    held.set_framing(framing);
+    let shown = draw(gpu, &held, &recipe);
+    assert!(shown(0.5, 0.2) > plain + 30 && shown(0.5, 0.8) == plain, "then with the crop's");
 }
 
 #[test]

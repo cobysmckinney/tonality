@@ -362,6 +362,8 @@ pub async fn open_editor(app: AppHandle, id: i64) -> CommandResult<EditorPhoto> 
             for (part, _) in gpu::shared().map_err(message)?.prepare(&session, &adjustments).map_err(message)? {
                 missing.push(part.name().to_string());
             }
+            // From here the models are shown a new crop only when the editor asks (`find_parts`).
+            session.hold_framing.store(true, Ordering::Relaxed);
             *editing = Some((id, session));
         }
         let (_, session) = editing.as_ref().expect("just opened");
@@ -391,33 +393,40 @@ pub async fn prepare_circles(app: AppHandle, id: i64) -> CommandResult<()> {
 /// Finds what these mask parts pick out of the open photo (its subject, its
 /// sky, a circled object), so masks can use them. A second or two each the
 /// first time; after that each is kept. Parts drawn by hand are passed over.
+/// The subject and sky are found in the crop of `adjustments`, which the
+/// photo's found parts are drawn from then on; until they are found, frames
+/// go on using those found in the crop before.
 #[tauri::command]
-pub async fn find_parts(app: AppHandle, id: i64, shapes: Vec<Shape>) -> CommandResult<()> {
+pub async fn find_parts(app: AppHandle, id: i64, shapes: Vec<Shape>, adjustments: Adjustments) -> CommandResult<()> {
     tauri::async_runtime::spawn_blocking(move || {
         let state = app.state::<AppState>();
         let closed = || "This photo is no longer open in the editor.".to_string();
         // The models run without holding the editor, so frames keep coming meanwhile.
-        let (picture, wanted) = {
+        let (picture, framing, wanted) = {
             let editing = state.editing();
             let (_, session) = editing.as_ref().filter(|(open, _)| *open == id).ok_or_else(closed)?;
+            let framing = session.framing_of(&adjustments);
+            // Two masks of the subject need it found once.
+            let mut asked = std::collections::HashSet::new();
             let wanted: Vec<_> = shapes
                 .iter()
                 .filter_map(Found::of)
-                .filter(|found| !session.has_matte(found))
                 .map(|found| {
-                    let path = session.matte_path(&found);
                     // Named now: a negative's film settings may change while the model runs.
-                    (session.key(&found), found, path)
+                    let key = session.key_in(&found, &framing);
+                    (session.matte_path_named(&key), key, found)
                 })
+                .filter(|(_, key, _)| !session.has_matte_named(key) && asked.insert(key.clone()))
                 .collect();
             if wanted.is_empty() {
+                session.set_framing(framing);
                 return Ok(());
             }
-            (gpu::shared().and_then(|gpu| gpu.picture(session)).map_err(message)?, wanted)
+            (gpu::shared().and_then(|gpu| gpu.picture(session)).map_err(message)?, framing, wanted)
         };
         let mattes = wanted
             .into_iter()
-            .map(|(key, found, path)| Ok((found.find_cached(&picture, path.as_deref())?, key)))
+            .map(|(path, key, found)| Ok((found.find_cached(&picture, &framing, path.as_deref())?, key)))
             .collect::<anyhow::Result<Vec<_>>>()
             .map_err(message)?;
         let editing = state.editing();
@@ -425,6 +434,7 @@ pub async fn find_parts(app: AppHandle, id: i64, shapes: Vec<Shape>) -> CommandR
         for (matte, key) in mattes {
             session.set_matte_named(key, matte);
         }
+        session.set_framing(framing);
         Ok(())
     })
     .await
@@ -613,8 +623,11 @@ pub fn preset_previews(
 }
 
 /// Redraws each photo's thumbnail and preview to match its current recipe.
-/// Returns the photos' new versions, in order.
-fn redraw(state: &AppState, ids: &[i64]) -> anyhow::Result<Vec<i64>> {
+/// Returns the photos' new versions, in order. The photo open in the editor
+/// is drawn with the subject and sky it has found so far, which may be from
+/// an earlier crop; with `settle` (the editor is moving on) they are first
+/// found in its crop, however long that takes.
+fn redraw(state: &AppState, ids: &[i64], settle: bool) -> anyhow::Result<Vec<i64>> {
     let mut versions = Vec::with_capacity(ids.len());
     for &id in ids {
         let adjustments = Adjustments::from_json(state.library.edits(id)?.as_deref());
@@ -624,7 +637,12 @@ fn redraw(state: &AppState, ids: &[i64]) -> anyhow::Result<Vec<i64>> {
         } else {
             // Draw under the lock, encode after it: a redraw must not stall the sliders.
             let on_screen = match state.editing().as_ref() {
-                Some((open, session)) if *open == id => Some(thumbs::EditedImages::draw(session, &adjustments)?),
+                Some((open, session)) if *open == id => {
+                    if settle {
+                        gpu::shared()?.prepare(session, &adjustments)?;
+                    }
+                    Some(thumbs::EditedImages::draw(session, &adjustments)?)
+                }
                 _ => None,
             };
             let images = match on_screen {
@@ -640,10 +658,11 @@ fn redraw(state: &AppState, ids: &[i64]) -> anyhow::Result<Vec<i64>> {
 }
 
 /// Brings thumbnails up to date after edits. The editor calls this once the
-/// sliders have been still for a moment, not on every change.
+/// sliders have been still for a moment, not on every change, and with
+/// `settle` before it moves on (`redraw`).
 #[tauri::command]
-pub async fn refresh_rendered(app: AppHandle, ids: Vec<i64>) -> CommandResult<Vec<i64>> {
-    tauri::async_runtime::spawn_blocking(move || redraw(&app.state::<AppState>(), &ids).map_err(message))
+pub async fn refresh_rendered(app: AppHandle, ids: Vec<i64>, settle: bool) -> CommandResult<Vec<i64>> {
+    tauri::async_runtime::spawn_blocking(move || redraw(&app.state::<AppState>(), &ids, settle).map_err(message))
         .await
         .map_err(|e| e.to_string())?
 }
@@ -684,7 +703,7 @@ fn edit_each(
         let own = Adjustments::from_json(state.library.edits(id).map_err(message)?.as_deref());
         state.library.history_commit(id, &change(&own), label).map_err(message)?;
         // The edit is in; a thumbnail that can't be drawn shouldn't stop the rest.
-        match redraw(&state, &[id]) {
+        match redraw(&state, &[id], false) {
             Ok(version) => versions.extend(version),
             Err(error) => {
                 failed.push(message(error));

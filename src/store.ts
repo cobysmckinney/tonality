@@ -36,7 +36,20 @@ import {
 import { listenAll, settleEach } from "./events";
 import { FilmPhoto, FilmSuggestions } from "./filmDetails";
 import { plural } from "./format";
-import { canAdd, circleShape, foundShapes, isFound, MaskStart, MAX_MASKS, newMask, newShape, SHAPE_NAMES, startKind } from "./masks";
+import {
+  canAdd,
+  circleShape,
+  foundShapes,
+  framingKey,
+  isFound,
+  MaskStart,
+  MAX_MASKS,
+  newMask,
+  newShape,
+  partsToReframe,
+  SHAPE_NAMES,
+  startKind,
+} from "./masks";
 import { blend, holds, Preset, settingsFrom } from "./presets";
 import { forget } from "./selection";
 import { canStartExport, canStartFilm, canStartImport } from "./sheets";
@@ -148,6 +161,8 @@ export interface EditorState {
   showMask: boolean;
   /** What the backend is looking for in the photo, for a mask to use ("the subject"), while it does. */
   finding: string | null;
+  /** Counts the times found parts came back, which can change the picture without changing the recipe. */
+  found: number;
   /**
    * Drawing a circle on the photo, for its object to be found: to start a
    * new mask (`mode` null), to add to the mask being worked on, or to
@@ -178,6 +193,7 @@ const idleEditor: EditorState = {
   partIndex: null,
   showMask: true,
   finding: null,
+  found: 0,
   circling: null,
   pickingBase: false,
   histogram: null,
@@ -292,6 +308,12 @@ interface State {
 
   loadEditor: (id: number) => Promise<void>;
   leaveEditor: () => Promise<void>;
+  /**
+   * Finds the subject and sky again in the photo's crop, once the crop is
+   * settled (not while the crop tool is open): they are found in the crop
+   * alone, so the film holder around a scan isn't taken for either.
+   */
+  reframe: () => void;
   /** Changes adjustments live, e.g. while a slider is dragged. */
   adjust: (change: Partial<Adjustments>) => void;
   /**
@@ -508,13 +530,14 @@ export const useStore = create<State>((set, get) => {
   // that waits for a pause in the editing.
   let redrawTimer: ReturnType<typeof setTimeout> | undefined;
   let needsRedraw: number | null = null;
-  const redrawNow = async () => {
+  /** With `settled`, the editor is moving on: the backend first finds the subject and sky in the crop as it now is. */
+  const redrawNow = async (settled = false) => {
     clearTimeout(redrawTimer);
     const id = needsRedraw;
     if (id === null) return;
     needsRedraw = null;
     try {
-      const [version] = await api.refreshRendered([id]);
+      const [version] = await api.refreshRendered([id], settled);
       patch([id], (p) => ({ ...p, version }));
     } catch (error) {
       get().toast({ text: `Couldn’t update the thumbnail: ${error}`, tone: "error" });
@@ -523,7 +546,17 @@ export const useStore = create<State>((set, get) => {
   const redrawSoon = (id: number) => {
     needsRedraw = id;
     clearTimeout(redrawTimer);
-    redrawTimer = setTimeout(() => void inTurn(redrawNow), 700);
+    redrawTimer = setTimeout(() => void inTurn(() => redrawNow()), 700);
+  };
+
+  // The framing (`framingKey`) the open photo's subject and sky were last
+  // found in, and the one they are being found in, so a new crop has them
+  // found again once (`reframe`).
+  let framedAs: string | null = null;
+  let reframing: string | null = null;
+  const toReframe = (): Shape[] => {
+    const { ready, adjustments } = get().editor;
+    return ready ? partsToReframe(adjustments, framedAs) : [];
   };
 
   const setEditor = (change: Partial<EditorState>) => set((s) => ({ editor: { ...s.editor, ...change } }));
@@ -550,8 +583,13 @@ export const useStore = create<State>((set, get) => {
         // Opening another photo meanwhile drops what was asked of this one.
         if (!here()) return;
         setEditor({ finding: what });
-        await during(`Finding ${what}`, () => api.findParts(photoId, shapes));
-        if (here()) then();
+        // Found in the crop as it is now; the photo's subject and sky are drawn from that crop afterwards.
+        const { adjustments } = get().editor;
+        await during(`Finding ${what}`, () => api.findParts(photoId, shapes, adjustments));
+        if (!here()) return;
+        framedAs = framingKey(adjustments);
+        setEditor({ found: get().editor.found + 1 });
+        then();
       } catch (error) {
         get().toast({ text: `Couldn’t find ${what}: ${error}`, tone: "error" });
       } finally {
@@ -609,7 +647,9 @@ export const useStore = create<State>((set, get) => {
   /** Before the editor moves on: record what is pending and bring the thumbnail up to date. */
   const settle = () => {
     get().commitAdjust();
-    if (needsRedraw !== null) void inTurn(redrawNow);
+    // A crop the subject and sky haven't been found in yet: the thumbnail is drawn once they are.
+    if (toReframe().length > 0) needsRedraw = get().editor.photoId;
+    if (needsRedraw !== null) void inTurn(() => redrawNow(true));
   };
 
   const patch = (ids: number[], change: (photo: Photo) => Photo) => {
@@ -868,6 +908,9 @@ export const useStore = create<State>((set, get) => {
         try {
           const photo = await api.openEditor(id);
           if (get().openId !== id) return;
+          // Opening found the subject and sky in the photo's crop.
+          framedAs = framingKey(photo.history.adjustments);
+          reframing = null;
           setEditor({
             ready: true,
             size: { width: photo.width, height: photo.height },
@@ -883,6 +926,17 @@ export const useStore = create<State>((set, get) => {
           if (get().openId === id) setEditor({ failed: String(error) });
         }
       });
+    },
+
+    reframe() {
+      const { photoId, adjustments } = get().editor;
+      const shapes = toReframe();
+      const framing = framingKey(adjustments);
+      if (photoId === null || shapes.length === 0 || framing === reframing) return;
+      reframing = framing;
+      // The thumbnail is drawn again once they are found; leaving first finds them before drawing it (`settle`).
+      needsRedraw = photoId;
+      void foundFirst(shapes, () => redrawSoon(photoId));
     },
 
     leaveEditor() {

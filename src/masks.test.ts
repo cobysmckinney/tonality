@@ -8,6 +8,7 @@ import {
   circleShape,
   foundCount,
   frameToSource,
+  framingKey,
   fromOriginal,
   matteKey,
   MAX_BRUSHES,
@@ -19,6 +20,7 @@ import {
   nudge,
   onOriginal,
   partCount,
+  partsToReframe,
   screenMap,
   stillHeld,
 } from "./masks";
@@ -263,5 +265,28 @@ describe("the masks' thumbnails", () => {
   test("follow the exposure only when a brightness range reads it", () => {
     const ranged = edited({ masks: [newMask([], "luminance", photo, defaultAdjustments())] });
     expect(matteKey({ ...ranged, exposure: 1 })).not.toBe(matteKey(ranged));
+  });
+});
+
+describe("the subject and sky in a new crop", () => {
+  const masks = (...shapes: Shape[]): Mask[] =>
+    shapes.map((shape, i) => ({ ...newMask([], "linear", photo, defaultAdjustments()), id: i + 1, parts: [{ mode: "add", shape }] }));
+  const circled: Shape = { kind: "object", points: [[0.1, 0.1], [0.5, 0.1], [0.3, 0.5]] };
+  const masked = edited({ masks: masks({ kind: "subject" }, { kind: "subject" }, { kind: "sky" }, circled) });
+  const cropped = { ...masked, crop: { x: 0.4, y: 0.5, width: 0.5, height: 0.8 } };
+
+  test("are found again only once the framing changes", () => {
+    const framedAs = framingKey(masked);
+    expect(partsToReframe(masked, framedAs)).toEqual([]);
+    // Sliders and masks are not the framing.
+    expect(framingKey({ ...masked, exposure: 1, masks: [] })).toBe(framedAs);
+    for (const change of [{ crop: cropped.crop }, { straighten: 2 }, { rotation: 1 }, { flipHorizontal: true }]) {
+      expect(partsToReframe({ ...masked, ...change }, framedAs).length).toBeGreaterThan(0);
+    }
+  });
+
+  test("are each asked for once, and a circled object not at all", () => {
+    expect(partsToReframe(cropped, framingKey(masked))).toEqual([{ kind: "subject" }, { kind: "sky" }]);
+    expect(partsToReframe(edited({ masks: masks(circled), straighten: 3 }), framingKey(masked))).toEqual([]);
   });
 });
