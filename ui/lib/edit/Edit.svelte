@@ -5,10 +5,12 @@
   import { library } from "$lib/library/library.svelte";
   import { session } from "./session.svelte";
   import type { EditState } from "$lib/bindings/EditState";
+  import type { Histogram } from "./renderer";
 
   let historyOpen = $state(true);
   let before = $state(false);
   let beforeEdit = $state<EditState | null>(null);
+  let histogram = $state.raw<Histogram | null>(null);
   $effect(() => {
     session.defaultEdit().then((d) => (beforeEdit = d));
   });
@@ -52,7 +54,14 @@
 
   <section class="canvas-area">
     {#if session.image && session.pixels && session.edit && beforeEdit}
-      <Canvas image={session.image} pixels={session.pixels} edit={session.edit} {before} {beforeEdit} />
+      <Canvas
+        image={session.image}
+        pixels={session.pixels}
+        edit={session.edit}
+        {before}
+        {beforeEdit}
+        onhistogram={(h) => (histogram = h)}
+      />
       <div class="caption">
         <span>{session.image.name}</span>
         <span class="dim">{session.image.make} {session.image.model}</span>
@@ -78,7 +87,12 @@
 
   <aside class="adjust">
     {#if session.image && session.edit}
-      <Adjustments bind:edit={session.edit} image={session.image} oncommit={(key) => session.commit(key)} />
+      <Adjustments
+        bind:edit={session.edit}
+        image={session.image}
+        {histogram}
+        oncommit={(key) => session.commit(key)}
+      />
     {/if}
   </aside>
 </div>

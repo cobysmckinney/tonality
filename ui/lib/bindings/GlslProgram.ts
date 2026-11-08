@@ -15,4 +15,8 @@ viewBlock: string,
 /**
  * Combined sampler uniform name for `image` + `image_sampler`.
  */
-imageSampler: string, };
+imageSampler: string, 
+/**
+ * Combined sampler uniform name for `curve` + `curve_sampler`.
+ */
+curveSampler: string, };

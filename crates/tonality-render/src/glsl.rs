@@ -18,6 +18,8 @@ pub struct GlslProgram {
     pub view_block: String,
     /// Combined sampler uniform name for `image` + `image_sampler`.
     pub image_sampler: String,
+    /// Combined sampler uniform name for `curve` + `curve_sampler`.
+    pub curve_sampler: String,
 }
 
 pub fn preview_glsl() -> Result<GlslProgram, String> {
@@ -57,9 +59,19 @@ pub fn preview_glsl() -> Result<GlslProgram, String> {
 
     let params_block = frefl.uniforms.get(&params_h).cloned().ok_or("params not used in fragment")?;
     let view_block = vrefl.uniforms.get(&view_h).cloned().ok_or("view not used in vertex")?;
-    let image_sampler = frefl.texture_mapping.keys().next().cloned().ok_or("no sampler in fragment")?;
+    let sampler_for = |texture: &str| -> Result<String, String> {
+        let h = find_global(texture)?;
+        frefl
+            .texture_mapping
+            .iter()
+            .find(|(_, m)| m.texture == h)
+            .map(|(name, _)| name.clone())
+            .ok_or_else(|| format!("no sampler for `{texture}` in fragment"))
+    };
+    let image_sampler = sampler_for("image")?;
+    let curve_sampler = sampler_for("curve")?;
 
-    Ok(GlslProgram { vertex, fragment, params_block, view_block, image_sampler })
+    Ok(GlslProgram { vertex, fragment, params_block, view_block, image_sampler, curve_sampler })
 }
 
 #[cfg(test)]
@@ -71,6 +83,8 @@ mod tests {
         let p = preview_glsl().expect("transpile");
         assert!(p.vertex.starts_with("#version 300 es"));
         assert!(p.fragment.contains(&p.image_sampler));
+        assert!(p.fragment.contains(&p.curve_sampler));
+        assert_ne!(p.image_sampler, p.curve_sampler);
         assert!(p.fragment.contains(&p.params_block));
         assert!(p.vertex.contains(&p.view_block));
         println!("{}\n----\n{}\n{p:?}", p.vertex, p.fragment.lines().take(40).collect::<Vec<_>>().join("\n"));

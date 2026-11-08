@@ -13,6 +13,9 @@ use ts_rs::TS;
 pub struct EditState {
     pub light: Light,
     pub white_balance: WhiteBalance,
+    pub curve: ToneCurve,
+    pub color: Color,
+    pub effects: Effects,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, TS)]
@@ -39,6 +42,102 @@ pub struct WhiteBalance {
     pub tint: Option<f32>,
 }
 
+/// Tone curves in display space (0..1 in, 0..1 out). Each is a list of `[x, y]` control points
+/// sorted by x; an empty list is the identity. Channel curves apply after the master `rgb` curve.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, TS)]
+#[serde(default, rename_all = "camelCase")]
+#[ts(export)]
+pub struct ToneCurve {
+    pub rgb: Vec<[f32; 2]>,
+    pub red: Vec<[f32; 2]>,
+    pub green: Vec<[f32; 2]>,
+    pub blue: Vec<[f32; 2]>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, TS)]
+#[serde(default, rename_all = "camelCase")]
+#[ts(export)]
+pub struct Color {
+    /// -100..=100. Boosts muted colours more than saturated ones.
+    pub vibrance: f32,
+    /// -100..=100. -100 is monochrome.
+    pub saturation: f32,
+    pub mixer: ColorMixer,
+}
+
+/// Per-hue adjustments ("HSL"), eight bands around the hue circle.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, TS)]
+#[serde(default, rename_all = "camelCase")]
+#[ts(export)]
+pub struct ColorMixer {
+    pub red: HueBand,
+    pub orange: HueBand,
+    pub yellow: HueBand,
+    pub green: HueBand,
+    pub aqua: HueBand,
+    pub blue: HueBand,
+    pub purple: HueBand,
+    pub magenta: HueBand,
+}
+
+impl ColorMixer {
+    pub fn bands(&self) -> [&HueBand; 8] {
+        [&self.red, &self.orange, &self.yellow, &self.green, &self.aqua, &self.blue, &self.purple, &self.magenta]
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, TS)]
+#[serde(default, rename_all = "camelCase")]
+#[ts(export)]
+pub struct HueBand {
+    /// -100..=100, shifts towards the neighbouring hues.
+    pub hue: f32,
+    pub saturation: f32,
+    pub luminance: f32,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, TS)]
+#[serde(default, rename_all = "camelCase")]
+#[ts(export)]
+pub struct Effects {
+    pub vignette: Vignette,
+    pub grain: Grain,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(default, rename_all = "camelCase")]
+#[ts(export)]
+pub struct Vignette {
+    /// -100 (dark edges) ..= 100 (light edges).
+    pub amount: f32,
+    /// 0..=100: how far from the centre the falloff starts.
+    pub midpoint: f32,
+    /// 0..=100: softness of the falloff.
+    pub feather: f32,
+}
+
+impl Default for Vignette {
+    fn default() -> Self {
+        Self { amount: 0.0, midpoint: 50.0, feather: 50.0 }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(default, rename_all = "camelCase")]
+#[ts(export)]
+pub struct Grain {
+    /// 0..=100
+    pub amount: f32,
+    /// 0..=100, relative to the image so it looks the same at any output size.
+    pub size: f32,
+}
+
+impl Default for Grain {
+    fn default() -> Self {
+        Self { amount: 0.0, size: 25.0 }
+    }
+}
+
 impl EditState {
     /// Canonical JSON used for hashing and storage. serde_json emits struct fields in
     /// declaration order, so this is deterministic for a given schema version.
@@ -63,12 +162,25 @@ enum Fmt {
     Kelvin,
     /// Signed integer; `None` reads "As Shot".
     SignedOpt,
+    /// Unsigned integer.
+    Plain,
 }
 
 struct Field {
     label: &'static str,
     get: fn(&EditState) -> Option<f32>,
     fmt: Fmt,
+}
+
+/// Three fields (hue, saturation, luminance) for one colour-mixer band.
+macro_rules! band {
+    ($name:literal, $f:ident) => {
+        [
+            Field { label: concat!($name, " Hue"), get: |s| Some(s.color.mixer.$f.hue), fmt: Fmt::Signed(0) },
+            Field { label: concat!($name, " Saturation"), get: |s| Some(s.color.mixer.$f.saturation), fmt: Fmt::Signed(0) },
+            Field { label: concat!($name, " Luminance"), get: |s| Some(s.color.mixer.$f.luminance), fmt: Fmt::Signed(0) },
+        ]
+    };
 }
 
 const FIELDS: &[Field] = &[
@@ -80,6 +192,33 @@ const FIELDS: &[Field] = &[
     Field { label: "Shadows", get: |s| Some(s.light.shadows), fmt: Fmt::Signed(0) },
     Field { label: "Whites", get: |s| Some(s.light.whites), fmt: Fmt::Signed(0) },
     Field { label: "Blacks", get: |s| Some(s.light.blacks), fmt: Fmt::Signed(0) },
+    Field { label: "Vibrance", get: |s| Some(s.color.vibrance), fmt: Fmt::Signed(0) },
+    Field { label: "Saturation", get: |s| Some(s.color.saturation), fmt: Fmt::Signed(0) },
+    Field { label: "Vignette", get: |s| Some(s.effects.vignette.amount), fmt: Fmt::Signed(0) },
+    Field { label: "Vignette Midpoint", get: |s| Some(s.effects.vignette.midpoint), fmt: Fmt::Plain },
+    Field { label: "Vignette Feather", get: |s| Some(s.effects.vignette.feather), fmt: Fmt::Plain },
+    Field { label: "Grain", get: |s| Some(s.effects.grain.amount), fmt: Fmt::Plain },
+    Field { label: "Grain Size", get: |s| Some(s.effects.grain.size), fmt: Fmt::Plain },
+];
+
+const BANDS: &[[Field; 3]] = &[
+    band!("Red", red),
+    band!("Orange", orange),
+    band!("Yellow", yellow),
+    band!("Green", green),
+    band!("Aqua", aqua),
+    band!("Blue", blue),
+    band!("Purple", purple),
+    band!("Magenta", magenta),
+];
+
+/// Curves aren't scalar; they're summarised by name only.
+type CurveGetter = fn(&EditState) -> &Vec<[f32; 2]>;
+const CURVES: &[(&str, CurveGetter)] = &[
+    ("Tone Curve", |s| &s.curve.rgb),
+    ("Red Curve", |s| &s.curve.red),
+    ("Green Curve", |s| &s.curve.green),
+    ("Blue Curve", |s| &s.curve.blue),
 ];
 
 fn format_value(fmt: &Fmt, v: Option<f32>) -> String {
@@ -98,24 +237,33 @@ fn format_value(fmt: &Fmt, v: Option<f32>) -> String {
         }
         (Fmt::Kelvin, Some(v)) => format!("{}K", v.round() as i64),
         (Fmt::SignedOpt, Some(v)) => format_value(&Fmt::Signed(0), Some(v)),
+        (Fmt::Plain, v) => format!("{}", v.unwrap_or(0.0).round() as i64),
         (_, None) => "As Shot".into(),
     }
+}
+
+/// `FIELDS`, with each colour-mixer band expanded to its three fields.
+fn all_fields() -> impl Iterator<Item = &'static Field> {
+    FIELDS.iter().chain(BANDS.iter().flatten())
 }
 
 /// Human description of what changed from `prev` to `next`, e.g. `"Exposure +0.30"`,
 /// `"White Balance As Shot"`, `"Shadows, Blacks"` or `"5 adjustments"`.
 pub fn describe_change(prev: &EditState, next: &EditState) -> String {
-    let changed: Vec<&Field> =
-        FIELDS.iter().filter(|f| (f.get)(prev) != (f.get)(next)).collect();
+    let changed: Vec<&Field> = all_fields().filter(|f| (f.get)(prev) != (f.get)(next)).collect();
+    let curves: Vec<&str> = CURVES.iter().filter(|(_, c)| c(prev) != c(next)).map(|(l, _)| *l).collect();
     let wb_as_shot = next.white_balance == WhiteBalance::default();
-    match changed.as_slice() {
-        [] => "No change".into(),
-        [f] => format!("{} {}", f.label, format_value(&f.fmt, (f.get)(next))),
-        [a, b] if a.label == "Temperature" && b.label == "Tint" && wb_as_shot => {
+    match (changed.as_slice(), curves.as_slice()) {
+        ([], []) => "No change".into(),
+        ([], [c]) => (*c).into(),
+        ([f], []) => format!("{} {}", f.label, format_value(&f.fmt, (f.get)(next))),
+        ([a, b], []) if a.label == "Temperature" && b.label == "Tint" && wb_as_shot => {
             "White Balance As Shot".into()
         }
-        fs if fs.len() <= 3 => fs.iter().map(|f| f.label).collect::<Vec<_>>().join(", "),
-        fs => format!("{} adjustments", fs.len()),
+        (fs, cs) if fs.len() + cs.len() <= 3 => {
+            fs.iter().map(|f| f.label).chain(cs.iter().copied()).collect::<Vec<_>>().join(", ")
+        }
+        (fs, cs) => format!("{} adjustments", fs.len() + cs.len()),
     }
 }
 
@@ -142,6 +290,17 @@ mod tests {
         assert_eq!(describe_change(&a, &c), "Temperature, Tint, Shadows");
         c.light.blacks = -10.0;
         assert_eq!(describe_change(&a, &c), "4 adjustments");
+
+        let mut d = a.clone();
+        d.color.mixer.blue.saturation = -30.0;
+        assert_eq!(describe_change(&a, &d), "Blue Saturation -30");
+        d.curve.rgb = vec![[0.0, 0.0], [0.5, 0.6], [1.0, 1.0]];
+        assert_eq!(describe_change(&a, &d), "Blue Saturation, Tone Curve");
+        let mut e = a.clone();
+        e.curve.red = vec![[0.0, 0.1], [1.0, 1.0]];
+        assert_eq!(describe_change(&a, &e), "Red Curve");
+        e.effects.vignette.midpoint = 30.0;
+        assert_eq!(describe_change(&EditState { curve: e.curve.clone(), ..a.clone() }, &e), "Vignette Midpoint 30");
     }
 
     #[test]

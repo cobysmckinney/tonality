@@ -11,6 +11,15 @@ struct Params {
     cam2: vec4<f32>,
     light0: vec4<f32>,  // x: exposure gain, y: contrast, z: highlights, w: shadows  (-1..1)
     light1: vec4<f32>,  // x: whites, y: blacks (-1..1)
+    color0: vec4<f32>,  // x: saturation, y: vibrance (-1..1)
+    mix_hue0: vec4<f32>, // colour mixer, bands red..green / aqua..magenta (-1..1)
+    mix_hue1: vec4<f32>,
+    mix_sat0: vec4<f32>,
+    mix_sat1: vec4<f32>,
+    mix_lum0: vec4<f32>,
+    mix_lum1: vec4<f32>,
+    vignette: vec4<f32>, // x: amount (-1..1), y: midpoint (0..1), z: feather (0..1)
+    grain: vec4<f32>,    // x: amount (0..1), y: size (0..1)
 };
 
 struct View {
@@ -21,6 +30,9 @@ struct View {
 @group(0) @binding(1) var<uniform> view: View;
 @group(0) @binding(2) var image: texture_2d<f32>;
 @group(0) @binding(3) var image_sampler: sampler;
+// Tone curve lookup table: 1024×1, rgb = per-channel curve applied after the master curve.
+@group(0) @binding(4) var curve: texture_2d<f32>;
+@group(0) @binding(5) var curve_sampler: sampler;
 
 struct VsOut {
     @builtin(position) pos: vec4<f32>,
@@ -67,6 +79,149 @@ fn tone(rgb: vec3<f32>) -> vec3<f32> {
     return rgb * (y2 / y);
 }
 
+// ---- Colour (in OkLCh) -----------------------------------------------------------------------
+// Rec.2020 linear ↔ OkLab, with the XYZ step folded into the LMS matrices.
+fn rows(r0: vec3<f32>, r1: vec3<f32>, r2: vec3<f32>, v: vec3<f32>) -> vec3<f32> {
+    return vec3<f32>(dot(r0, v), dot(r1, v), dot(r2, v));
+}
+
+fn cbrt(v: vec3<f32>) -> vec3<f32> {
+    return sign(v) * pow(abs(v), vec3<f32>(1.0 / 3.0));
+}
+
+fn to_oklab(rgb: vec3<f32>) -> vec3<f32> {
+    let lms = rows(
+        vec3<f32>(0.6166884, 0.36015908, 0.0230433),
+        vec3<f32>(0.26514018, 0.63585651, 0.09903022),
+        vec3<f32>(0.10015064, 0.20400434, 0.6963247),
+        rgb,
+    );
+    return rows(
+        vec3<f32>(0.2104542553, 0.7936177850, -0.0040720468),
+        vec3<f32>(1.9779984951, -2.4285922050, 0.4505937099),
+        vec3<f32>(0.0259040371, 0.7827717662, -0.8086757660),
+        cbrt(lms),
+    );
+}
+
+fn from_oklab(lab: vec3<f32>) -> vec3<f32> {
+    let l = rows(
+        vec3<f32>(1.0, 0.39633779, 0.21580376),
+        vec3<f32>(1.0, -0.10556134, -0.06385417),
+        vec3<f32>(1.0, -0.08948418, -1.29148554),
+        lab,
+    );
+    return rows(
+        vec3<f32>(2.14014057, -1.24635599, 0.10643167),
+        vec3<f32>(-0.88483244, 2.16317261, -0.27836152),
+        vec3<f32>(-0.04857905, -0.4544909, 1.50235623),
+        l * l * l,
+    );
+}
+
+// Colour mixer band centres (OkLCh hue, degrees): red, orange, yellow, green, aqua, blue,
+// purple, magenta. A pixel's adjustment blends smoothly between the two bands around its hue,
+// so the bands always sum to exactly one (no gaps, no double-counting).
+fn band_value(lo: vec4<f32>, hi: vec4<f32>, h: f32) -> f32 {
+    var centres = array<f32, 8>(29.0, 55.0, 105.0, 142.0, 195.0, 264.0, 294.0, 328.0);
+    var vals = array<f32, 8>(lo.x, lo.y, lo.z, lo.w, hi.x, hi.y, hi.z, hi.w);
+    var out = 0.0;
+    for (var i = 0u; i < 8u; i = i + 1u) {
+        let j = (i + 1u) % 8u;
+        let span = (centres[j] - centres[i] + 360.0) % 360.0;
+        let d = (h - centres[i] + 360.0) % 360.0;
+        if (d < span) {
+            out = mix(vals[i], vals[j], smoothstep(0.0, 1.0, d / span));
+        }
+    }
+    return out;
+}
+
+fn color(rgb: vec3<f32>) -> vec3<f32> {
+    let lab = to_oklab(max(rgb, vec3<f32>(0.0)));
+    var l = lab.x;
+    var c = length(lab.yz);
+    var h = degrees(atan2(lab.z, lab.y));
+    h = (h + 360.0) % 360.0;
+
+    // Colour mixer: fades out towards neutral, where hue is meaningless.
+    let colourful = smoothstep(0.0, 0.05, c);
+    let dh = band_value(params.mix_hue0, params.mix_hue1, h);
+    let ds = band_value(params.mix_sat0, params.mix_sat1, h);
+    let dl = band_value(params.mix_lum0, params.mix_lum1, h);
+    h = h + 30.0 * dh * colourful;
+    c = c * max(0.0, 1.0 + ds * colourful);
+    l = l * exp2(0.5 * dl * colourful);
+
+    // Vibrance favours muted colours; saturation is uniform.
+    let vib = params.color0.y;
+    c = c * max(0.0, 1.0 + vib * (1.0 - smoothstep(0.0, 0.2, c)));
+    c = c * max(0.0, 1.0 + params.color0.x);
+
+    let hr = radians(h);
+    return max(from_oklab(vec3<f32>(l, c * cos(hr), c * sin(hr))), vec3<f32>(0.0));
+}
+
+// ---- Effects ---------------------------------------------------------------------------------
+fn vignette(rgb: vec3<f32>, uv: vec2<f32>) -> vec3<f32> {
+    let amount = params.vignette.x;
+    if (amount == 0.0) {
+        return rgb;
+    }
+    // Follows the frame's shape: 0 at the centre, 1 in the corners.
+    let r = length((uv - 0.5) * 2.0) / 1.41421356;
+    let mid = mix(0.15, 1.0, params.vignette.y);
+    let feather = mix(0.05, 1.2, params.vignette.z);
+    let v = smoothstep(mid - feather * 0.5, mid + feather * 0.5, r);
+    return rgb * exp2(1.5 * amount * v); // up to ±1.5 EV at the edges
+}
+
+fn pcg(v: u32) -> u32 {
+    let s = v * 747796405u + 2891336453u;
+    let w = ((s >> ((s >> 28u) + 4u)) ^ s) * 277803737u;
+    return (w >> 22u) ^ w;
+}
+
+fn lattice(p: vec2<i32>) -> f32 {
+    return f32(pcg(u32(p.x) + pcg(u32(p.y)))) / 4294967295.0 * 2.0 - 1.0;
+}
+
+fn value_noise(p: vec2<f32>) -> f32 {
+    let i = vec2<i32>(floor(p));
+    let f = fract(p);
+    let u = f * f * (3.0 - 2.0 * f);
+    let a = lattice(i);
+    let b = lattice(i + vec2<i32>(1, 0));
+    let c = lattice(i + vec2<i32>(0, 1));
+    let d = lattice(i + vec2<i32>(1, 1));
+    return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
+}
+
+// Film-like grain in display space, sized relative to the image (identical at any resolution).
+fn grain(c: vec3<f32>, uv: vec2<f32>) -> vec3<f32> {
+    let amount = params.grain.x;
+    if (amount == 0.0) {
+        return c;
+    }
+    let dims = vec2<f32>(textureDimensions(image));
+    let cells = mix(1600.0, 250.0, params.grain.y); // grains per image height
+    let q = uv * vec2<f32>(dims.x / dims.y, 1.0) * cells;
+    let n = 0.7 * value_noise(q) + 0.3 * value_noise(q * 2.13 + 17.0);
+    let y = dot(c, vec3<f32>(0.2126, 0.7152, 0.0722));
+    let midtones = 0.35 + 2.6 * y * (1.0 - y);
+    return c + vec3<f32>(0.16 * amount * n * midtones);
+}
+
+fn apply_curve(c: vec3<f32>) -> vec3<f32> {
+    let n = 1024.0;
+    let t = (clamp(c, vec3<f32>(0.0), vec3<f32>(1.0)) * (n - 1.0) + 0.5) / n;
+    return vec3<f32>(
+        textureSampleLevel(curve, curve_sampler, vec2<f32>(t.x, 0.5), 0.0).r,
+        textureSampleLevel(curve, curve_sampler, vec2<f32>(t.y, 0.5), 0.0).g,
+        textureSampleLevel(curve, curve_sampler, vec2<f32>(t.z, 0.5), 0.0).b,
+    );
+}
+
 // ---- Display transform: AgX (Rec.2020 variant) -----------------------------------------------
 fn agx_contrast(x: vec3<f32>) -> vec3<f32> {
     let x2 = x * x;
@@ -110,17 +265,22 @@ fn srgb_encode(c: vec3<f32>) -> vec3<f32> {
     return select(hi, lo, c <= vec3<f32>(0.0031308));
 }
 
-fn develop(cam_in: vec3<f32>) -> vec3<f32> {
+fn develop(cam_in: vec3<f32>, uv: vec2<f32>) -> vec3<f32> {
     // White balance in camera space, then clip so blown highlights stay neutral.
     let cam = clamp(cam_in * params.wb.xyz, vec3<f32>(0.0), vec3<f32>(params.wb.w));
     var rgb = vec3<f32>(dot(params.cam0.xyz, cam), dot(params.cam1.xyz, cam), dot(params.cam2.xyz, cam));
     rgb = max(rgb, vec3<f32>(0.0)) * params.light0.x;
+    rgb = vignette(rgb, uv);
     rgb = tone(rgb);
-    return srgb_encode(agx(rgb));
+    rgb = color(rgb);
+    var c = srgb_encode(agx(rgb));
+    c = apply_curve(c);
+    c = grain(c, uv);
+    return clamp(c, vec3<f32>(0.0), vec3<f32>(1.0));
 }
 
 @fragment
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
-    let cam = textureSample(image, image_sampler, in.uv).rgb;
-    return vec4<f32>(develop(cam), 1.0);
+    let cam = textureSampleLevel(image, image_sampler, in.uv, 0.0).rgb;
+    return vec4<f32>(develop(cam, in.uv), 1.0);
 }

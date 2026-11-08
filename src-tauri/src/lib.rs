@@ -83,7 +83,13 @@ fn preview_pixels(id: ImageId, images: State<'_, Images>) -> CmdResult<Response>
     Ok(Response::new(p.pixel_bytes()))
 }
 
-/// Uniform block for `develop.wgsl` (24 floats).
+/// Tone-curve lookup table for `develop.wgsl`: RGBA16F little-endian, `LUT_SIZE` × 1.
+#[tauri::command]
+fn develop_curve(edit: EditState) -> Response {
+    Response::new(tonality_render::curve_lut_rgba16f(&edit))
+}
+
+/// Uniform block for `develop.wgsl`.
 #[tauri::command]
 fn develop_params(id: ImageId, edit: EditState, images: State<'_, Images>) -> CmdResult<Vec<f32>> {
     let p = images.get(id).ok_or("image not open")?;
@@ -116,6 +122,7 @@ pub fn run() {
             open_image,
             preview_pixels,
             develop_params,
+            develop_curve,
             history::history_open,
             history::history_commit,
             history::history_undo,

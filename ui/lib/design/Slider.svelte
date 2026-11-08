@@ -17,6 +17,8 @@
     unit?: string;
     /** Draw the fill from the default value (bipolar) instead of from `min`. */
     bipolar?: boolean;
+    /** CSS background for the rail (e.g. a colour gradient). Replaces the fill. */
+    track?: string;
     oninput?: (v: number) => void;
     oncommit?: (v: number) => void;
     /** Custom reset (double-click). Defaults to setting `defaultValue` and committing. */
@@ -33,6 +35,7 @@
     decimals = 0,
     unit = "",
     bipolar = true,
+    track: trackBg,
     oninput,
     oncommit,
     onreset,
@@ -127,12 +130,14 @@
     ondblclick={reset}
     onkeydown={onKey}
   >
-    <div class="rail"></div>
-    <div
-      class="fill"
-      style:left="{Math.min(fillFrom, fillTo)}%"
-      style:width="{Math.abs(fillTo - fillFrom)}%"
-    ></div>
+    <div class="rail" class:tinted={!!trackBg} style:background={trackBg}></div>
+    {#if !trackBg}
+      <div
+        class="fill"
+        style:left="{Math.min(fillFrom, fillTo)}%"
+        style:width="{Math.abs(fillTo - fillFrom)}%"
+      ></div>
+    {/if}
     <div class="thumb" style:left="{fillTo}%"></div>
   </div>
 </div>
@@ -176,6 +181,11 @@
     left: 0;
     right: 0;
     background: var(--bg-3);
+  }
+  .rail.tinted {
+    top: 6px;
+    height: 4px;
+    border-radius: 2px;
   }
   .fill {
     background: var(--text-1);

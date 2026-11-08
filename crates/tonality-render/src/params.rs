@@ -9,10 +9,16 @@ pub struct DevelopParams {
     pub cam: [[f32; 4]; 3],
     pub light0: [f32; 4],
     pub light1: [f32; 4],
+    pub color0: [f32; 4],
+    pub mix_hue: [[f32; 4]; 2],
+    pub mix_sat: [[f32; 4]; 2],
+    pub mix_lum: [[f32; 4]; 2],
+    pub vignette: [f32; 4],
+    pub grain: [f32; 4],
 }
 
 impl DevelopParams {
-    pub const FLOATS: usize = 24;
+    pub const FLOATS: usize = 60;
 
     pub fn new(edit: &EditState, color: &CameraColor) -> Self {
         let (shot_t, shot_tint) = color.as_shot_temperature_tint();
@@ -25,6 +31,10 @@ impl DevelopParams {
         let m = color.cam_to_working();
         let l = &edit.light;
         let n = |v: f32| (v / 100.0).clamp(-1.0, 1.0);
+        let u = |v: f32| (v / 100.0).clamp(0.0, 1.0);
+        let c = &edit.color;
+        let bands = c.mixer.bands();
+        let (v, g) = (&edit.effects.vignette, &edit.effects.grain);
         Self {
             wb: [wb[0], wb[1], wb[2], 1.0],
             cam: [
@@ -34,6 +44,12 @@ impl DevelopParams {
             ],
             light0: [l.exposure.clamp(-10.0, 10.0).exp2(), n(l.contrast), n(l.highlights), n(l.shadows)],
             light1: [n(l.whites), n(l.blacks), 0.0, 0.0],
+            color0: [n(c.saturation), n(c.vibrance), 0.0, 0.0],
+            mix_hue: split(bands.map(|b| n(b.hue))),
+            mix_sat: split(bands.map(|b| n(b.saturation))),
+            mix_lum: split(bands.map(|b| n(b.luminance))),
+            vignette: [n(v.amount), u(v.midpoint), u(v.feather), 0.0],
+            grain: [u(g.amount), u(g.size), 0.0, 0.0],
         }
     }
 
@@ -45,8 +61,31 @@ impl DevelopParams {
         }
         v.extend_from_slice(&self.light0);
         v.extend_from_slice(&self.light1);
+        v.extend_from_slice(&self.color0);
+        for block in [&self.mix_hue, &self.mix_sat, &self.mix_lum] {
+            v.extend_from_slice(&block[0]);
+            v.extend_from_slice(&block[1]);
+        }
+        v.extend_from_slice(&self.vignette);
+        v.extend_from_slice(&self.grain);
         v
     }
+}
+
+fn split(v: [f32; 8]) -> [[f32; 4]; 2] {
+    [[v[0], v[1], v[2], v[3]], [v[4], v[5], v[6], v[7]]]
+}
+
+/// The tone-curve lookup table as RGBA half floats (`LUT_SIZE` × 1), for a texture upload.
+pub fn curve_lut_rgba16f(edit: &EditState) -> Vec<u8> {
+    let lut = tonality_core::curve::curve_lut(&edit.curve);
+    let mut out = Vec::with_capacity(lut.len() * 8);
+    for [r, g, b] in lut {
+        for v in [r, g, b, 1.0] {
+            out.extend_from_slice(&half::f16::from_f32(v).to_bits().to_le_bytes());
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -61,7 +100,7 @@ mod tests {
     }
 
     #[test]
-    fn layout_is_24_floats() {
+    fn layout_matches_floats() {
         assert_eq!(DevelopParams::new(&EditState::default(), &color()).to_vec().len(), DevelopParams::FLOATS);
         assert_eq!(std::mem::size_of::<DevelopParams>(), DevelopParams::FLOATS * 4);
     }

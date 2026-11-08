@@ -4514,6 +4514,7 @@ dependencies = [
 name = "tonality-render"
 version = "0.1.0"
 dependencies = [
+ "half",
  "naga",
  "serde",
  "tonality-core",

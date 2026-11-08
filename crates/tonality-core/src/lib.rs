@@ -1,5 +1,6 @@
 pub mod catalog;
 pub mod color;
+pub mod curve;
 pub mod edit;
 pub mod history;
 pub mod library;

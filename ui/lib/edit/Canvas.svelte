@@ -3,7 +3,7 @@
   import { api } from "$lib/api";
   import type { EditState } from "$lib/bindings/EditState";
   import type { ImageInfo } from "$lib/bindings/ImageInfo";
-  import { PreviewRenderer } from "./renderer";
+  import { PreviewRenderer, type Histogram } from "./renderer";
 
   interface Props {
     image: ImageInfo;
@@ -12,8 +12,9 @@
     /** Show the unedited image (before/after). */
     before?: boolean;
     beforeEdit: EditState;
+    onhistogram?: (h: Histogram) => void;
   }
-  let { image, pixels, edit, before = false, beforeEdit }: Props = $props();
+  let { image, pixels, edit, before = false, beforeEdit, onhistogram }: Props = $props();
 
   let canvas: HTMLCanvasElement;
   let renderer = $state<PreviewRenderer | null>(null);
@@ -34,6 +35,7 @@
             api.devSaveSnapshot(c.toDataURL("image/png"));
           };
         }
+        r.onHistogram = (h) => onhistogram?.(h);
         renderer = r;
       })
       .catch((e) => (error = String(e)));
@@ -52,6 +54,8 @@
   // Latest-wins parameter pipeline: at most one request in flight, always ending on the newest state.
   let inflight = false;
   let pending: EditState | null = null;
+  // The curve LUT only needs refetching when the curve itself changes.
+  let curveKey = JSON.stringify({ rgb: [], red: [], green: [], blue: [] });
   async function pump(r: PreviewRenderer, id: number) {
     if (inflight) return;
     inflight = true;
@@ -59,7 +63,16 @@
       while (pending) {
         const next = pending;
         pending = null;
-        r.setParams(await api.developParams(id, next));
+        const key = JSON.stringify(next.curve);
+        const [params, curve] = await Promise.all([
+          api.developParams(id, next),
+          key !== curveKey ? api.developCurve(next) : null,
+        ]);
+        if (curve) {
+          r.setCurve(curve);
+          curveKey = key;
+        }
+        r.setParams(params);
       }
     } catch (e) {
       error = String(e);

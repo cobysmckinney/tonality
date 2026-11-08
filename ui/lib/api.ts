@@ -22,6 +22,8 @@ export const api = {
     new Uint16Array(await invoke<ArrayBuffer>("preview_pixels", { id })),
   developParams: async (id: number, edit: EditState) =>
     new Float32Array(await invoke<number[]>("develop_params", { id, edit })),
+  /** Tone-curve LUT as RGBA half floats (1024 × 1). */
+  developCurve: async (edit: EditState) => new Uint16Array(await invoke<ArrayBuffer>("develop_curve", { edit })),
 
   history: {
     open: (imageId: number) => invoke<Checkout>("history_open", { imageId }),
