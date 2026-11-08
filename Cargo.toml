@@ -1,0 +1,26 @@
+[workspace]
+resolver = "2"
+members = ["crates/*", "src-tauri"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+anyhow = "1"
+ts-rs = "12"
+blake3 = "1"
+rusqlite = { version = "0.37", features = ["bundled"] }
+rayon = "1"
+half = { version = "2", features = ["bytemuck"] }
+bytemuck = "1"
+tonality-core = { path = "crates/tonality-core" }
+tonality-raw = { path = "crates/tonality-raw" }
+tonality-render = { path = "crates/tonality-render" }
+
+[profile.dev.package."*"]
+opt-level = 3

@@ -1,0 +1,88 @@
+/* tonality design tokens — neutral greys so the UI never tints perception of the photo. */
+:root {
+  --bg-0: #121212;      /* app background / canvas surround */
+  --bg-1: #1a1a1a;      /* panels */
+  --bg-2: #222222;      /* raised controls */
+  --bg-3: #2c2c2c;      /* hover */
+  --line: #2e2e2e;
+  --line-strong: #3a3a3a;
+  --text-0: #ececec;
+  --text-1: #a8a8a8;
+  --text-2: #6e6e6e;
+  --accent: #d9d9d9;    /* deliberately colorless; colour lives in the photo */
+  --focus: #7aa2ff;
+  --danger: #ff6b6b;
+  --branch-0: #7aa2ff;
+  --branch-1: #f2b45a;
+  --branch-2: #5fd0a8;
+  --branch-3: #e07ad6;
+  --branch-4: #f07a7a;
+  --branch-5: #b8d36b;
+
+  --radius-s: 4px;
+  --radius-m: 6px;
+  --radius-l: 10px;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+
+  --font-ui: "Inter", "SF Pro Text", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-num: "JetBrains Mono", ui-monospace, "SF Mono", monospace;
+  --fs-xs: 11px;
+  --fs-s: 12px;
+  --fs-m: 13px;
+  --fs-l: 15px;
+
+  --topbar-h: 44px;
+  --panel-w: 300px;
+  --ease: cubic-bezier(0.2, 0, 0, 1);
+
+  color-scheme: dark;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+  background: var(--bg-0);
+  color: var(--text-0);
+  font: 400 var(--fs-m) / 1.4 var(--font-ui);
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+}
+
+:focus-visible {
+  outline: 1px solid var(--focus);
+  outline-offset: 1px;
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--bg-3);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}

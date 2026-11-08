@@ -1,0 +1,11 @@
+[package]
+name = "tonality-render"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+naga = { version = "30", features = ["wgsl-in", "glsl-out"] }
+serde.workspace = true
+tonality-core.workspace = true
+ts-rs.workspace = true

@@ -1,0 +1,16 @@
+[package]
+name = "tonality-raw"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+half.workspace = true
+image = { version = "0.25.10", default-features = false }
+rawler = "0.8.0"
+rayon.workspace = true
+thiserror.workspace = true
+tonality-core.workspace = true
+
+[dev-dependencies]
+image = { version = "0.25", default-features = false, features = ["png"] }
