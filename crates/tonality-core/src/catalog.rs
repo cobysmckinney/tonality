@@ -6,7 +6,7 @@
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::Connection;
 
 pub type ImageId = i64;
 
@@ -33,13 +33,33 @@ pub struct Catalog {
 }
 
 const MIGRATIONS: &[&str] = &[
-    // v1: images + history graph.
+    // v1
     r#"
+    -- One row per import session (a card, a folder, a few dragged-in files).
+    CREATE TABLE imports (
+        id          INTEGER PRIMARY KEY,
+        name        TEXT NOT NULL,        -- e.g. the source folder's name
+        source      TEXT NOT NULL,        -- where it came from (informational only)
+        imported_at INTEGER NOT NULL
+    );
+    -- Photos owned by the library. `file` is relative to the library root; the original
+    -- location is kept only as a note and never read again.
     CREATE TABLE images (
         id          INTEGER PRIMARY KEY,
-        path        TEXT NOT NULL UNIQUE,
-        created_at  INTEGER NOT NULL
+        hash        TEXT NOT NULL UNIQUE, -- blake3 of the original file (deduplication)
+        file        TEXT NOT NULL UNIQUE,
+        name        TEXT NOT NULL,        -- original file name
+        file_size   INTEGER NOT NULL,
+        import_id   INTEGER REFERENCES imports(id) ON DELETE SET NULL,
+        source_path TEXT,
+        imported_at INTEGER NOT NULL,
+        captured_at TEXT,                 -- ISO 8601 local time, for sorting
+        meta        TEXT,                 -- JSON ImageMeta
+        rating      INTEGER NOT NULL DEFAULT 0,
+        flag        INTEGER NOT NULL DEFAULT 0
     );
+    CREATE INDEX images_import ON images(import_id);
+    CREATE INDEX images_captured ON images(captured_at);
     CREATE TABLE edit_states (
         hash        TEXT PRIMARY KEY,
         json        TEXT NOT NULL
@@ -121,20 +141,16 @@ impl Catalog {
         (self.clock)()
     }
 
-    /// The catalog id for an image file, registering it on first sight.
-    pub fn image_for_path(&self, path: &str) -> Result<ImageId> {
-        let existing = self
-            .conn
-            .query_row("SELECT id FROM images WHERE path = ?1", [path], |r| r.get(0))
-            .optional()?;
-        if let Some(id) = existing {
-            return Ok(id);
-        }
-        self.conn.execute(
-            "INSERT INTO images (path, created_at) VALUES (?1, ?2)",
-            params![path, self.now()],
-        )?;
-        Ok(self.conn.last_insert_rowid())
+    /// Test helper: register a bare image.
+    #[cfg(test)]
+    pub(crate) fn test_image(&self, name: &str) -> ImageId {
+        self.conn
+            .execute(
+                "INSERT INTO images (hash, file, name, file_size, imported_at) VALUES (?1, ?1, ?1, 0, 0)",
+                [name],
+            )
+            .unwrap();
+        self.conn.last_insert_rowid()
     }
 }
 
@@ -147,10 +163,10 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("tonality-test-{}", std::process::id()));
         let path = dir.join("catalog.sqlite");
         let _ = std::fs::remove_file(&path);
-        let id = Catalog::open(&path).unwrap().image_for_path("/a.ARW").unwrap();
+        let id = Catalog::open(&path).unwrap().test_image("a");
         let cat = Catalog::open(&path).unwrap();
-        assert_eq!(cat.image_for_path("/a.ARW").unwrap(), id);
-        assert_ne!(cat.image_for_path("/b.ARW").unwrap(), id);
+        let n: i64 = cat.conn.query_row("SELECT COUNT(*) FROM images WHERE id = ?1", [id], |r| r.get(0)).unwrap();
+        assert_eq!(n, 1);
         let _ = std::fs::remove_dir_all(dir);
     }
 }

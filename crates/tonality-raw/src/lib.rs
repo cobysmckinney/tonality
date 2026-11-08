@@ -4,11 +4,27 @@
 //! balance**. White balance and the camera→working-space matrix are applied on the GPU so
 //! the temperature/tint sliders are free to move (see `tonality_core::color`).
 
+mod meta;
 mod preview;
+mod thumbnail;
 
 use std::path::Path;
 
+pub use meta::read_meta;
 pub use preview::{decode_preview, Preview};
+pub use thumbnail::thumbnail;
+
+/// File extensions treated as RAW images (lower case).
+pub const RAW_EXTENSIONS: &[&str] = &[
+    "arw", "cr2", "cr3", "crw", "nef", "nrw", "raf", "orf", "rw2", "pef", "srw", "dng", "3fr", "iiq",
+    "erf", "mef", "mos", "mrw", "kdc", "dcr", "x3f",
+];
+
+pub fn is_raw_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| RAW_EXTENSIONS.iter().any(|r| r.eq_ignore_ascii_case(e)))
+}
 
 
 #[derive(Debug, thiserror::Error)]

@@ -6,7 +6,7 @@ license.workspace = true
 
 [dependencies]
 half.workspace = true
-image = { version = "0.25.10", default-features = false }
+image = { version = "0.25.10", default-features = false, features = ["jpeg"] }
 rawler = "0.8.0"
 rayon.workspace = true
 thiserror.workspace = true

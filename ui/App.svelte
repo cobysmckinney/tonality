@@ -3,20 +3,29 @@
   import TopBar from "$lib/TopBar.svelte";
   import Library from "$lib/library/Library.svelte";
   import Edit from "$lib/edit/Edit.svelte";
-  import { session } from "$lib/edit/session.svelte";
   import { api } from "$lib/api";
+  import { library } from "$lib/library/library.svelte";
 
+  // Dev hooks: TONALITY_OPEN imports and opens a file; TONALITY_IMPORT imports a folder.
   api.startupPath().then((p) => {
     if (p) {
       app.mode = "edit";
-      session.open(p);
+      library.importPaths([p], { open: true });
     }
+  });
+
+  api.startupImport().then((p) => {
+    if (p) library.importPaths([p]);
   });
 
   function onKey(e: KeyboardEvent) {
     if (e.target instanceof HTMLInputElement || e.ctrlKey || e.metaKey || e.altKey) return;
     if (e.key === "g") app.mode = "library";
-    else if (e.key === "e") app.mode = "edit";
+    else if (e.key === "e") {
+      // From the Library, E opens the focused photo.
+      if (app.mode === "library" && library.focus !== null) library.open();
+      else app.mode = "edit";
+    }
   }
 </script>
 

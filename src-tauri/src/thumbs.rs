@@ -1,0 +1,82 @@
+//! `thumb://localhost/<image id>` — library thumbnails, generated on first request and cached
+//! on disk. The webview loads them like any image, so off-screen cells cost nothing.
+
+use std::io::Cursor;
+use std::path::Path;
+use std::sync::OnceLock;
+
+use tauri::http::{header, Request, Response, StatusCode};
+use tauri::{Manager, Runtime, UriSchemeContext, UriSchemeResponder};
+
+use crate::history::CatalogState;
+use crate::store::Store;
+
+pub const SCHEME: &str = "thumb";
+const EDGE: u32 = 640;
+
+/// Thumbnail work is IO + JPEG decode heavy; a small dedicated pool keeps the UI responsive
+/// and bounds memory when the grid asks for hundreds at once.
+fn pool() -> &'static rayon::ThreadPool {
+    static POOL: OnceLock<rayon::ThreadPool> = OnceLock::new();
+    POOL.get_or_init(|| {
+        let n = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4).clamp(2, 6);
+        rayon::ThreadPoolBuilder::new().num_threads(n).thread_name(|i| format!("thumb-{i}")).build().unwrap()
+    })
+}
+
+fn respond(responder: UriSchemeResponder, status: StatusCode, body: Vec<u8>) {
+    let resp = Response::builder()
+        .status(status)
+        .header(header::CONTENT_TYPE, if status.is_success() { "image/jpeg" } else { "text/plain" })
+        .header(header::CACHE_CONTROL, "max-age=31536000, immutable")
+        .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+        .body(body)
+        .unwrap();
+    responder.respond(resp);
+}
+
+fn generate(src: &Path, dest: &Path) -> Result<Vec<u8>, String> {
+    let img = tonality_raw::thumbnail(src, EDGE).map_err(|e| e.to_string())?;
+    let mut buf = Vec::new();
+    image::codecs::jpeg::JpegEncoder::new_with_quality(Cursor::new(&mut buf), 85)
+        .encode_image(&img)
+        .map_err(|e| e.to_string())?;
+    if let Some(dir) = dest.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    // Write-then-rename so a concurrent reader never sees a partial file.
+    let tmp = dest.with_extension("tmp");
+    if std::fs::write(&tmp, &buf).is_ok() {
+        let _ = std::fs::rename(&tmp, dest);
+    }
+    Ok(buf)
+}
+
+pub fn handle<R: Runtime>(ctx: UriSchemeContext<'_, R>, request: Request<Vec<u8>>, responder: UriSchemeResponder) {
+    let app = ctx.app_handle().clone();
+    let id: Option<i64> = request.uri().path().trim_matches('/').parse().ok();
+    let Some(id) = id else {
+        return respond(responder, StatusCode::BAD_REQUEST, b"bad thumbnail id".to_vec());
+    };
+    let file = app.state::<CatalogState>().with(|c| c.image_file(id));
+    let (rel, hash, _) = match file {
+        Ok(f) => f,
+        Err(e) => return respond(responder, StatusCode::NOT_FOUND, e.into_bytes()),
+    };
+    let store = app.state::<Store>();
+    let path = store.abs(&rel);
+    // Originals never change (they are content-addressed), so the hash is a stable cache key.
+    let cache = store.thumb_path(&hash, EDGE);
+    pool().spawn(move || {
+        if let Ok(bytes) = std::fs::read(&cache) {
+            return respond(responder, StatusCode::OK, bytes);
+        }
+        match generate(&path, &cache) {
+            Ok(bytes) => respond(responder, StatusCode::OK, bytes),
+            Err(e) => {
+                eprintln!("[thumb] {}: {e}", path.display());
+                respond(responder, StatusCode::UNPROCESSABLE_ENTITY, e.into_bytes())
+            }
+        }
+    });
+}

@@ -48,13 +48,7 @@ pub fn decode_preview(path: &Path, max_edge: usize) -> Result<Preview> {
     raw.apply_scaling().map_err(err)?;
 
     // Not every decoder fills `RawImage::orientation` (e.g. Sony ARW), so prefer EXIF.
-    let orientation = decoder
-        .raw_metadata(&src, &params)
-        .ok()
-        .and_then(|m| m.exif.orientation)
-        .map(Orientation::from_u16)
-        .filter(|o| *o != Orientation::Unknown)
-        .unwrap_or(raw.orientation);
+    let orientation = exif_orientation(decoder.as_ref(), &src).unwrap_or(raw.orientation);
 
     let color = camera_color(&raw);
     let metadata = Metadata { make: raw.clean_make.clone(), model: raw.clean_model.clone() };
@@ -84,6 +78,15 @@ pub fn decode_preview(path: &Path, max_edge: usize) -> Result<Preview> {
         .collect();
 
     Ok(Preview { width: img.width(), height: img.height(), pixels, color, metadata })
+}
+
+pub(crate) fn exif_orientation(decoder: &dyn rawler::decoders::Decoder, src: &RawSource) -> Option<Orientation> {
+    decoder
+        .raw_metadata(src, &RawDecodeParams::default())
+        .ok()
+        .and_then(|m| m.exif.orientation)
+        .map(Orientation::from_u16)
+        .filter(|o| *o != Orientation::Unknown)
 }
 
 fn float_data(raw: &RawImage) -> &[f32] {
@@ -149,7 +152,10 @@ fn linear_rgb(raw: &RawImage) -> RgbF32 {
     RgbF32::from_raw(cw as u32, ch as u32, out).expect("buffer size matches")
 }
 
-fn orient(img: RgbF32, o: Orientation) -> RgbF32 {
+pub(crate) fn orient<P: image::Pixel + 'static>(
+    img: ImageBuffer<P, Vec<P::Subpixel>>,
+    o: Orientation,
+) -> ImageBuffer<P, Vec<P::Subpixel>> {
     match o {
         Orientation::Normal | Orientation::Unknown => img,
         Orientation::HorizontalFlip => imageops::flip_horizontal(&img),

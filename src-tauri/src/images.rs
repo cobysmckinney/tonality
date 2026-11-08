@@ -1,10 +1,10 @@
-//! In-memory cache of decoded previews. Replaced by catalog-backed ids in Phase 3.
+//! In-memory cache of decoded previews for images open in Edit.
 
-use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use serde::Serialize;
+use tonality_core::ImageId;
 use tonality_raw::{Preview, RawDecoder, Rawler};
 use ts_rs::TS;
 
@@ -12,8 +12,8 @@ use ts_rs::TS;
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
 pub struct ImageInfo {
-    pub id: String,
-    pub path: String,
+    #[ts(type = "number")]
+    pub id: ImageId,
     pub name: String,
     pub width: u32,
     pub height: u32,
@@ -24,24 +24,33 @@ pub struct ImageInfo {
     pub as_shot_tint: f32,
 }
 
+/// Keeps the last few previews so flipping between photos is instant.
+const KEEP: usize = 4;
+
+type Recent = Vec<(ImageId, Arc<Preview>)>;
+
 #[derive(Clone, Default)]
-pub struct Images(Arc<Mutex<HashMap<String, Arc<Preview>>>>);
+pub struct Images(Arc<Mutex<Recent>>);
 
 impl Images {
-    pub fn open(&self, path: &str, max_edge: usize) -> Result<ImageInfo, String> {
-        let preview = match self.get(path) {
+    pub fn open(&self, id: ImageId, path: &Path, name: String, max_edge: usize) -> Result<ImageInfo, String> {
+        let preview = match self.get(id) {
             Some(p) => p,
             None => {
-                let p = Arc::new(Rawler.decode_preview(Path::new(path), max_edge).map_err(|e| e.to_string())?);
-                self.0.lock().unwrap().insert(path.to_string(), p.clone());
+                let p = Arc::new(Rawler.decode_preview(path, max_edge).map_err(|e| e.to_string())?);
+                let mut cache = self.0.lock().unwrap();
+                cache.retain(|(i, _)| *i != id);
+                cache.push((id, p.clone()));
+                if cache.len() > KEEP {
+                    cache.remove(0);
+                }
                 p
             }
         };
         let (t, tint) = preview.color.as_shot_temperature_tint();
         Ok(ImageInfo {
-            id: path.to_string(),
-            path: path.to_string(),
-            name: Path::new(path).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(),
+            id,
+            name,
             width: preview.width,
             height: preview.height,
             make: preview.metadata.make.clone(),
@@ -51,7 +60,8 @@ impl Images {
         })
     }
 
-    pub fn get(&self, id: &str) -> Option<Arc<Preview>> {
-        self.0.lock().unwrap().get(id).cloned()
+    pub fn get(&self, id: ImageId) -> Option<Arc<Preview>> {
+        self.0.lock().unwrap().iter().find(|(i, _)| *i == id).map(|(_, p)| p.clone())
     }
 }
+

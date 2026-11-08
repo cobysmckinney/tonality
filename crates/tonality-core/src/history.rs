@@ -462,7 +462,7 @@ mod tests {
         let t = Arc::new(AtomicI64::new(1_000_000));
         let tc = t.clone();
         let cat = Catalog::open_in_memory().unwrap().with_clock(Box::new(move || tc.load(Ordering::SeqCst)));
-        let img = cat.image_for_path("/x.ARW").unwrap();
+        let img = cat.test_image("x");
         (cat, t, img)
     }
 

@@ -2,6 +2,7 @@
   import Adjustments from "./Adjustments.svelte";
   import Canvas from "./Canvas.svelte";
   import HistoryPanel from "$lib/history/HistoryPanel.svelte";
+  import { library } from "$lib/library/library.svelte";
   import { session } from "./session.svelte";
   import type { EditState } from "$lib/bindings/EditState";
 
@@ -18,7 +19,7 @@
     const mod = e.ctrlKey || e.metaKey;
     if (mod && e.key.toLowerCase() === "o") {
       e.preventDefault();
-      session.pickAndOpen();
+      library.importFiles({ open: true });
     } else if (mod && e.key.toLowerCase() === "z") {
       e.preventDefault();
       if (e.shiftKey) session.redo();
@@ -58,8 +59,8 @@
       </div>
     {:else if !session.loading}
       <div class="empty">
-        <button class="primary" onclick={() => session.pickAndOpen()}>Open RAW…</button>
-        <p class="hint">or press Ctrl+O</p>
+        <button class="primary" onclick={() => library.importFiles({ open: true })}>Import Photos…</button>
+        <p class="hint">Ctrl+O, or drop RAW files here. They’re copied into your library.</p>
       </div>
     {/if}
 

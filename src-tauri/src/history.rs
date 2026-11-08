@@ -14,19 +14,16 @@ impl CatalogState {
         Self(Mutex::new(catalog))
     }
 
-    fn with<T>(&self, f: impl FnOnce(&mut Catalog) -> tonality_core::catalog::Result<T>) -> CmdResult<T> {
+    pub(crate) fn with<T>(&self, f: impl FnOnce(&mut Catalog) -> tonality_core::catalog::Result<T>) -> CmdResult<T> {
         let mut cat = self.0.lock().map_err(|_| "catalog lock poisoned")?;
         f(&mut cat).map_err(|e| e.to_string())
     }
 }
 
-/// Register (if needed) the image at `path` and return its history.
+/// An image's history, created with an "Original" commit on first open.
 #[tauri::command]
-pub fn history_open(path: String, catalog: State<'_, CatalogState>) -> CmdResult<Checkout> {
-    catalog.with(|c| {
-        let id = c.image_for_path(&path)?;
-        c.history_open(id)
-    })
+pub fn history_open(image_id: ImageId, catalog: State<'_, CatalogState>) -> CmdResult<Checkout> {
+    catalog.with(|c| c.history_open(image_id))
 }
 
 #[tauri::command]

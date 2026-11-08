@@ -52,7 +52,7 @@
   // Latest-wins parameter pipeline: at most one request in flight, always ending on the newest state.
   let inflight = false;
   let pending: EditState | null = null;
-  async function pump(r: PreviewRenderer, id: string) {
+  async function pump(r: PreviewRenderer, id: number) {
     if (inflight) return;
     inflight = true;
     try {
