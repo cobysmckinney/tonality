@@ -7,8 +7,11 @@
   interface Props {
     edit: EditState;
     image: ImageInfo;
-    /** Called once per completed gesture with a human summary of the change. */
-    oncommit?: (summary: string) => void;
+    /**
+     * Called once per completed gesture. `key` names the control so the history can merge
+     * rapid repeats (arrow-key nudges); `null` for one-off actions.
+     */
+    oncommit?: (key: string | null) => void;
   }
   let { edit = $bindable(), image, oncommit }: Props = $props();
 
@@ -22,13 +25,12 @@
     { key: "blacks", label: "Blacks", min: -100, max: 100, step: 1, decimals: 0 },
   ];
 
-  const signed = (v: number, d = 0) => `${v > 0 ? "+" : ""}${v.toFixed(d)}`;
   const wb = $derived(edit.whiteBalance);
   const isAsShot = $derived(wb.temperature === null && wb.tint === null);
 
   function resetWb() {
     edit.whiteBalance = { temperature: null, tint: null };
-    oncommit?.("White balance: As Shot");
+    oncommit?.(null);
   }
 </script>
 
@@ -48,10 +50,10 @@
       unit="K"
       bipolar={false}
       oninput={(v) => (edit.whiteBalance.temperature = v)}
-      oncommit={(v) => oncommit?.(`Temperature ${Math.round(v)}K`)}
+      oncommit={() => oncommit?.("temperature")}
       onreset={() => {
         edit.whiteBalance.temperature = null;
-        oncommit?.("Temperature: As Shot");
+        oncommit?.(null);
       }}
     />
     <Slider
@@ -61,10 +63,10 @@
       max={150}
       defaultValue={image.asShotTint}
       oninput={(v) => (edit.whiteBalance.tint = v)}
-      oncommit={(v) => oncommit?.(`Tint ${signed(v)}`)}
+      oncommit={() => oncommit?.("tint")}
       onreset={() => {
         edit.whiteBalance.tint = null;
-        oncommit?.("Tint: As Shot");
+        oncommit?.(null);
       }}
     />
   </Section>
@@ -79,7 +81,7 @@
         step={c.step}
         decimals={c.decimals}
         oninput={(v) => (edit.light[c.key] = v)}
-        oncommit={(v) => oncommit?.(`${c.label} ${signed(v, c.decimals)}`)}
+        oncommit={() => oncommit?.(c.key)}
       />
     {/each}
   </Section>

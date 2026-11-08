@@ -1,12 +1,13 @@
+mod history;
 mod images;
 
 use images::{ImageInfo, Images};
 use tauri::ipc::Response;
-use tauri::State;
-use tonality_core::EditState;
+use tauri::{Manager, State};
+use tonality_core::{Catalog, EditState};
 use tonality_render::{DevelopParams, GlslProgram};
 
-type CmdResult<T> = Result<T, String>;
+pub(crate) type CmdResult<T> = Result<T, String>;
 
 /// Long edge of the interactive preview texture.
 const PREVIEW_EDGE: usize = 2560;
@@ -71,6 +72,15 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(Images::default())
+        .setup(|app| {
+            let path = match std::env::var_os("TONALITY_CATALOG") {
+                Some(p) => p.into(),
+                None => app.path().app_data_dir()?.join("catalog.sqlite"),
+            };
+            let catalog = Catalog::open(&path)?;
+            app.manage(history::CatalogState::new(catalog));
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             default_edit_state,
             startup_path,
@@ -80,6 +90,15 @@ pub fn run() {
             open_image,
             preview_pixels,
             develop_params,
+            history::history_open,
+            history::history_commit,
+            history::history_undo,
+            history::history_redo,
+            history::history_checkout,
+            history::history_switch,
+            history::history_branch,
+            history::history_rename,
+            history::history_delete,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tonality");

@@ -1,7 +1,8 @@
-//! tonality-core: the edit model, the git-like history graph and the catalog.
-//! Has no GUI or GPU dependencies so it can be tested in isolation.
-
+pub mod catalog;
 pub mod color;
 pub mod edit;
+pub mod history;
 
+pub use catalog::{Catalog, CatalogError, ImageId};
 pub use edit::EditState;
+pub use history::{Checkout, CommitId, HistoryView};

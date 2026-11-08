@@ -1,6 +1,7 @@
 <script lang="ts">
   import Adjustments from "./Adjustments.svelte";
   import Canvas from "./Canvas.svelte";
+  import HistoryPanel from "$lib/history/HistoryPanel.svelte";
   import { session } from "./session.svelte";
   import type { EditState } from "$lib/bindings/EditState";
 
@@ -14,30 +15,38 @@
   function onKeyDown(e: KeyboardEvent) {
     if (e.target instanceof HTMLInputElement) return;
     if (e.key === "\\" && !e.repeat) before = true;
-    if (e.key === "o" && (e.ctrlKey || e.metaKey)) {
+    const mod = e.ctrlKey || e.metaKey;
+    if (mod && e.key.toLowerCase() === "o") {
       e.preventDefault();
       session.pickAndOpen();
+    } else if (mod && e.key.toLowerCase() === "z") {
+      e.preventDefault();
+      if (e.shiftKey) session.redo();
+      else session.undo();
+    } else if (mod && e.key.toLowerCase() === "y") {
+      e.preventDefault();
+      session.redo();
     }
   }
   function onKeyUp(e: KeyboardEvent) {
     if (e.key === "\\") before = false;
   }
 
-  // Phase 2 turns these into history commits.
-  function onCommit(summary: string) {
-    console.debug("[tonality] commit:", summary);
-  }
 </script>
 
 <svelte:window onkeydown={onKeyDown} onkeyup={onKeyUp} onblur={() => (before = false)} />
 
 <div class="edit" class:history-closed={!historyOpen}>
   <aside class="history">
-    <div class="panel-head">
-      <span>History</span>
-      <button class="icon" onclick={() => (historyOpen = false)} title="Hide history">‹</button>
-    </div>
-    <p class="hint">Branch graph arrives in Phase 2.</p>
+    {#if session.history}
+      <HistoryPanel view={session.history} onhide={() => (historyOpen = false)} />
+    {:else}
+      <div class="panel-head">
+        <span>History</span>
+        <button class="icon" onclick={() => (historyOpen = false)} title="Hide history">‹</button>
+      </div>
+      <p class="hint">Open an image to see its history.</p>
+    {/if}
   </aside>
 
   <section class="canvas-area">
@@ -68,7 +77,7 @@
 
   <aside class="adjust">
     {#if session.image && session.edit}
-      <Adjustments bind:edit={session.edit} image={session.image} oncommit={onCommit} />
+      <Adjustments bind:edit={session.edit} image={session.image} oncommit={(key) => session.commit(key)} />
     {/if}
   </aside>
 </div>
@@ -88,6 +97,7 @@
     border-right: 1px solid var(--line);
     background: var(--bg-1);
     white-space: nowrap;
+    min-height: 0;
   }
   .panel-head {
     display: flex;
