@@ -5,10 +5,12 @@
 //!   preview and the (wgpu) export can never drift apart.
 
 mod glsl;
+mod gpu;
 mod params;
 
 pub use glsl::{preview_glsl, GlslProgram};
-pub use params::{curve_lut_rgba16f, DevelopParams};
+pub use gpu::{Gpu, Rendered, Source};
+pub use params::{curve_lut_rgba16f, DevelopParams, CURVE_LUT_SIZE};
 
 /// The develop shader source.
 pub const DEVELOP_WGSL: &str = include_str!("../shaders/develop.wgsl");

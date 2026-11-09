@@ -11,6 +11,7 @@
   let before = $state(false);
   let beforeEdit = $state<EditState | null>(null);
   let histogram = $state.raw<Histogram | null>(null);
+  let canvas = $state<ReturnType<typeof Canvas> | null>(null);
   $effect(() => {
     session.defaultEdit().then((d) => (beforeEdit = d));
   });
@@ -29,6 +30,20 @@
     } else if (mod && e.key.toLowerCase() === "y") {
       e.preventDefault();
       session.redo();
+    } else if (mod && e.key === "0") {
+      e.preventDefault();
+      canvas?.setZoom(null);
+    } else if (mod && e.key === "1") {
+      e.preventDefault();
+      canvas?.setZoom(1);
+    } else if (mod && (e.key === "=" || e.key === "+")) {
+      e.preventDefault();
+      canvas?.zoomBy(Math.SQRT2);
+    } else if (mod && e.key === "-") {
+      e.preventDefault();
+      canvas?.zoomBy(Math.SQRT1_2);
+    } else if (!mod && !e.altKey && (e.key === "z" || e.key === "Z") && !e.repeat) {
+      canvas?.toggleZoom();
     }
   }
   function onKeyUp(e: KeyboardEvent) {
@@ -55,6 +70,7 @@
   <section class="canvas-area">
     {#if session.image && session.pixels && session.edit && beforeEdit}
       <Canvas
+        bind:this={canvas}
         image={session.image}
         pixels={session.pixels}
         edit={session.edit}

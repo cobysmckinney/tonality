@@ -15,6 +15,7 @@ pub struct EditState {
     pub white_balance: WhiteBalance,
     pub curve: ToneCurve,
     pub color: Color,
+    pub detail: Detail,
     pub effects: Effects,
 }
 
@@ -96,6 +97,30 @@ pub struct HueBand {
     pub luminance: f32,
 }
 
+/// Sharpening and noise reduction. Sizes are in full-resolution pixels, so the effect is only
+/// fully visible at 1:1 (as in the export).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(default, rename_all = "camelCase")]
+#[ts(export)]
+pub struct Detail {
+    /// 0..=150
+    pub sharpen_amount: f32,
+    /// 0.5..=3.0 pixels.
+    pub sharpen_radius: f32,
+    /// 0..=100: restricts sharpening to edges (0 = everywhere).
+    pub sharpen_masking: f32,
+    /// 0..=100
+    pub luminance_noise: f32,
+    /// 0..=100
+    pub color_noise: f32,
+}
+
+impl Default for Detail {
+    fn default() -> Self {
+        Self { sharpen_amount: 0.0, sharpen_radius: 1.0, sharpen_masking: 0.0, luminance_noise: 0.0, color_noise: 0.0 }
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, TS)]
 #[serde(default, rename_all = "camelCase")]
 #[ts(export)]
@@ -164,6 +189,8 @@ enum Fmt {
     SignedOpt,
     /// Unsigned integer.
     Plain,
+    /// Unsigned, with this many decimals.
+    Decimal(usize),
 }
 
 struct Field {
@@ -194,6 +221,11 @@ const FIELDS: &[Field] = &[
     Field { label: "Blacks", get: |s| Some(s.light.blacks), fmt: Fmt::Signed(0) },
     Field { label: "Vibrance", get: |s| Some(s.color.vibrance), fmt: Fmt::Signed(0) },
     Field { label: "Saturation", get: |s| Some(s.color.saturation), fmt: Fmt::Signed(0) },
+    Field { label: "Sharpening", get: |s| Some(s.detail.sharpen_amount), fmt: Fmt::Plain },
+    Field { label: "Sharpen Radius", get: |s| Some(s.detail.sharpen_radius), fmt: Fmt::Decimal(1) },
+    Field { label: "Sharpen Masking", get: |s| Some(s.detail.sharpen_masking), fmt: Fmt::Plain },
+    Field { label: "Noise Reduction", get: |s| Some(s.detail.luminance_noise), fmt: Fmt::Plain },
+    Field { label: "Color Noise Reduction", get: |s| Some(s.detail.color_noise), fmt: Fmt::Plain },
     Field { label: "Vignette", get: |s| Some(s.effects.vignette.amount), fmt: Fmt::Signed(0) },
     Field { label: "Vignette Midpoint", get: |s| Some(s.effects.vignette.midpoint), fmt: Fmt::Plain },
     Field { label: "Vignette Feather", get: |s| Some(s.effects.vignette.feather), fmt: Fmt::Plain },
@@ -238,6 +270,7 @@ fn format_value(fmt: &Fmt, v: Option<f32>) -> String {
         (Fmt::Kelvin, Some(v)) => format!("{}K", v.round() as i64),
         (Fmt::SignedOpt, Some(v)) => format_value(&Fmt::Signed(0), Some(v)),
         (Fmt::Plain, v) => format!("{}", v.unwrap_or(0.0).round() as i64),
+        (Fmt::Decimal(d), v) => format!("{:.d$}", v.unwrap_or(0.0), d = *d),
         (_, None) => "As Shot".into(),
     }
 }
@@ -301,6 +334,9 @@ mod tests {
         assert_eq!(describe_change(&a, &e), "Red Curve");
         e.effects.vignette.midpoint = 30.0;
         assert_eq!(describe_change(&EditState { curve: e.curve.clone(), ..a.clone() }, &e), "Vignette Midpoint 30");
+        let mut f = a.clone();
+        f.detail.sharpen_radius = 1.5;
+        assert_eq!(describe_change(&a, &f), "Sharpen Radius 1.5");
     }
 
     #[test]

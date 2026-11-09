@@ -15,10 +15,12 @@ pub struct DevelopParams {
     pub mix_lum: [[f32; 4]; 2],
     pub vignette: [f32; 4],
     pub grain: [f32; 4],
+    pub detail0: [f32; 4],
+    pub detail1: [f32; 4],
 }
 
 impl DevelopParams {
-    pub const FLOATS: usize = 60;
+    pub const FLOATS: usize = 68;
 
     pub fn new(edit: &EditState, color: &CameraColor) -> Self {
         let (shot_t, shot_tint) = color.as_shot_temperature_tint();
@@ -35,6 +37,7 @@ impl DevelopParams {
         let c = &edit.color;
         let bands = c.mixer.bands();
         let (v, g) = (&edit.effects.vignette, &edit.effects.grain);
+        let d = &edit.detail;
         Self {
             wb: [wb[0], wb[1], wb[2], 1.0],
             cam: [
@@ -50,6 +53,13 @@ impl DevelopParams {
             mix_lum: split(bands.map(|b| n(b.luminance))),
             vignette: [n(v.amount), u(v.midpoint), u(v.feather), 0.0],
             grain: [u(g.amount), u(g.size), 0.0, 0.0],
+            detail0: [
+                (d.sharpen_amount / 100.0).clamp(0.0, 1.5) * 1.6,
+                d.sharpen_radius.clamp(0.5, 3.0),
+                u(d.sharpen_masking),
+                u(d.luminance_noise),
+            ],
+            detail1: [u(d.color_noise), 0.0, 0.0, 0.0],
         }
     }
 
@@ -68,6 +78,8 @@ impl DevelopParams {
         }
         v.extend_from_slice(&self.vignette);
         v.extend_from_slice(&self.grain);
+        v.extend_from_slice(&self.detail0);
+        v.extend_from_slice(&self.detail1);
         v
     }
 }
@@ -75,6 +87,9 @@ impl DevelopParams {
 fn split(v: [f32; 8]) -> [[f32; 4]; 2] {
     [[v[0], v[1], v[2], v[3]], [v[4], v[5], v[6], v[7]]]
 }
+
+/// Width of the tone-curve lookup texture.
+pub const CURVE_LUT_SIZE: usize = tonality_core::curve::LUT_SIZE;
 
 /// The tone-curve lookup table as RGBA half floats (`LUT_SIZE` × 1), for a texture upload.
 pub fn curve_lut_rgba16f(edit: &EditState) -> Vec<u8> {

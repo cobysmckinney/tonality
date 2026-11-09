@@ -11,7 +11,7 @@ mod thumbnail;
 use std::path::Path;
 
 pub use meta::read_meta;
-pub use preview::{decode_preview, Preview};
+pub use preview::{decode_full, decode_preview, FullImage, Preview, Region};
 pub use thumbnail::thumbnail;
 
 /// File extensions treated as RAW images (lower case).

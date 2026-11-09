@@ -20,10 +20,17 @@ struct Params {
     mix_lum1: vec4<f32>,
     vignette: vec4<f32>, // x: amount (-1..1), y: midpoint (0..1), z: feather (0..1)
     grain: vec4<f32>,    // x: amount (0..1), y: size (0..1)
+    detail0: vec4<f32>,  // x: sharpen amount, y: sharpen radius (px), z: masking (0..1), w: luminance NR (0..1)
+    detail1: vec4<f32>,  // x: colour NR (0..1)
 };
 
+// Geometry. All rects are (x, y, w, h) in uv units of the full image (0..1), so the preview,
+// zoomed-in tiles and export tiles all address the same image the same way.
 struct View {
-    xform: vec4<f32>,   // xy: scale, zw: offset (clip space)
+    xform: vec4<f32>,   // xy: scale, zw: offset — places the quad in clip space
+    quad: vec4<f32>,    // the part of the image the quad shows
+    tex: vec4<f32>,     // the part of the image the bound texture holds
+    frame: vec4<f32>,   // xy: full-resolution size in pixels
 };
 
 @group(0) @binding(0) var<uniform> params: Params;
@@ -36,7 +43,9 @@ struct View {
 
 struct VsOut {
     @builtin(position) pos: vec4<f32>,
-    @location(0) uv: vec2<f32>,
+    @location(0) uv: vec2<f32>,                   // full-image coordinates
+    @location(1) tc: vec2<f32>,                   // texture coordinates
+    @location(2) @interpolate(flat) px: vec4<f32>, // xy: texture units per full-res pixel, z: aspect
 };
 
 @vertex
@@ -47,10 +56,110 @@ fn vs_main(@builtin(vertex_index) i: u32) -> VsOut {
         vec2<f32>(-1.0, 1.0), vec2<f32>(1.0, -1.0), vec2<f32>(1.0, 1.0),
     );
     let p = corners[i];
+    let local = vec2<f32>(p.x * 0.5 + 0.5, 0.5 - p.y * 0.5);
     var out: VsOut;
     out.pos = vec4<f32>(p * view.xform.xy + view.xform.zw, 0.0, 1.0);
-    out.uv = vec2<f32>(p.x * 0.5 + 0.5, 0.5 - p.y * 0.5);
+    out.uv = view.quad.xy + local * view.quad.zw;
+    out.tc = (out.uv - view.tex.xy) / view.tex.zw;
+    out.px = vec4<f32>(1.0 / (view.frame.xy * view.tex.zw), view.frame.x / view.frame.y, 0.0);
     return out;
+}
+
+// ---- Detail: noise reduction and sharpening ----------------------------------------------------
+// Runs on white-balanced camera RGB. Luminance is handled as sqrt(L), where photon (shot) noise
+// is roughly uniform, so one strength works across shadows and highlights. Kernel sizes are in
+// full-resolution pixels: on the downscaled preview the taps fall within a texel and the effect
+// shrinks accordingly, just as it would in a downscaled export.
+
+const CAM_LUMA = vec3<f32>(0.25, 0.5, 0.25);
+
+fn cam_at(tc: vec2<f32>) -> vec3<f32> {
+    let c = textureSampleLevel(image, image_sampler, tc, 0.0).rgb;
+    // White balance, then clip so blown highlights stay neutral.
+    return clamp(c * params.wb.xyz, vec3<f32>(0.0), vec3<f32>(params.wb.w));
+}
+
+fn root_luma(c: vec3<f32>) -> f32 {
+    return sqrt(max(dot(c, CAM_LUMA), 0.0));
+}
+
+fn detail(tc: vec2<f32>, px: vec2<f32>) -> vec3<f32> {
+    let c0 = cam_at(tc);
+    let amount = params.detail0.x;
+    let lnr = params.detail0.w;
+    let cnr = params.detail1.x;
+    if (amount == 0.0 && lnr == 0.0 && cnr == 0.0) {
+        return c0;
+    }
+    let s0 = root_luma(c0);
+    var s = s0;
+    var chroma = c0 / max(s0 * s0, 1e-6);
+
+    // Luminance: 5×5 bilateral filter.
+    let sigma_r = 0.06 * lnr + 1e-4;
+    if (lnr > 0.0) {
+        var acc = 0.0;
+        var wsum = 0.0;
+        for (var j = -2; j <= 2; j = j + 1) {
+            for (var i = -2; i <= 2; i = i + 1) {
+                let o = vec2<f32>(f32(i), f32(j));
+                let v = root_luma(cam_at(tc + o * px));
+                let d = (v - s0) / sigma_r;
+                let w = exp(-dot(o, o) / 4.5 - 0.5 * d * d);
+                acc = acc + v * w;
+                wsum = wsum + w;
+            }
+        }
+        s = mix(s0, acc / wsum, min(1.0, lnr * 2.0));
+    }
+
+    // Colour: average the chroma ratio over a wide window, stopping at luminance edges.
+    if (cnr > 0.0) {
+        let step = 1.5 + 2.5 * cnr;
+        var acc = vec3<f32>(0.0);
+        var wsum = 0.0;
+        for (var j = -2; j <= 2; j = j + 1) {
+            for (var i = -2; i <= 2; i = i + 1) {
+                let o = vec2<f32>(f32(i), f32(j));
+                let c = cam_at(tc + o * step * px);
+                let v = root_luma(c);
+                let d = (v - s0) / 0.05;
+                let w = exp(-dot(o, o) / 8.0 - 0.5 * d * d);
+                acc = acc + w * c / max(v * v, 1e-6);
+                wsum = wsum + w;
+            }
+        }
+        chroma = mix(chroma, acc / wsum, min(1.0, cnr * 1.5));
+    }
+
+    // Sharpening: unsharp mask on sqrt luminance, with coring (ignores noise-sized detail when
+    // noise reduction is on), edge masking and overshoot limiting (no halos).
+    if (amount > 0.0) {
+        let r = params.detail0.y;
+        var n: array<f32, 9>;
+        var mn = s0;
+        var mx = s0;
+        for (var k = 0; k < 9; k = k + 1) {
+            let o = vec2<f32>(f32(k % 3 - 1), f32(k / 3 - 1));
+            n[k] = root_luma(cam_at(tc + o * r * px));
+            mn = min(mn, n[k]);
+            mx = max(mx, n[k]);
+        }
+        let blur = (4.0 * n[4] + 2.0 * (n[1] + n[3] + n[5] + n[7]) + n[0] + n[2] + n[6] + n[8]) / 16.0;
+        var d = s0 - blur;
+        let t = 0.5 * sigma_r * step(1e-3, lnr);
+        d = sign(d) * max(abs(d) - t, 0.0);
+        let gx = (n[2] + 2.0 * n[5] + n[8]) - (n[0] + 2.0 * n[3] + n[6]);
+        let gy = (n[6] + 2.0 * n[7] + n[8]) - (n[0] + 2.0 * n[1] + n[2]);
+        let edge = abs(gx) + abs(gy);
+        let m = params.detail0.z * 0.12;
+        let mask = select(1.0, smoothstep(m * 0.5, m, edge), m > 0.0);
+        let margin = 0.02 + 0.1 * (mx - mn);
+        s = clamp(s + amount * d * mask, mn - margin, mx + margin);
+        s = max(s, 0.0);
+    }
+
+    return max(chroma * s * s, vec3<f32>(0.0));
 }
 
 const REC2020_LUMA = vec3<f32>(0.2627, 0.6780, 0.0593);
@@ -198,14 +307,13 @@ fn value_noise(p: vec2<f32>) -> f32 {
 }
 
 // Film-like grain in display space, sized relative to the image (identical at any resolution).
-fn grain(c: vec3<f32>, uv: vec2<f32>) -> vec3<f32> {
+fn grain(c: vec3<f32>, uv: vec2<f32>, aspect: f32) -> vec3<f32> {
     let amount = params.grain.x;
     if (amount == 0.0) {
         return c;
     }
-    let dims = vec2<f32>(textureDimensions(image));
     let cells = mix(1600.0, 250.0, params.grain.y); // grains per image height
-    let q = uv * vec2<f32>(dims.x / dims.y, 1.0) * cells;
+    let q = uv * vec2<f32>(aspect, 1.0) * cells;
     let n = 0.7 * value_noise(q) + 0.3 * value_noise(q * 2.13 + 17.0);
     let y = dot(c, vec3<f32>(0.2126, 0.7152, 0.0722));
     let midtones = 0.35 + 2.6 * y * (1.0 - y);
@@ -265,9 +373,8 @@ fn srgb_encode(c: vec3<f32>) -> vec3<f32> {
     return select(hi, lo, c <= vec3<f32>(0.0031308));
 }
 
-fn develop(cam_in: vec3<f32>, uv: vec2<f32>) -> vec3<f32> {
-    // White balance in camera space, then clip so blown highlights stay neutral.
-    let cam = clamp(cam_in * params.wb.xyz, vec3<f32>(0.0), vec3<f32>(params.wb.w));
+// `cam`: white-balanced camera RGB (see `detail`); `uv`: position in the full image.
+fn develop(cam: vec3<f32>, uv: vec2<f32>, aspect: f32) -> vec3<f32> {
     var rgb = vec3<f32>(dot(params.cam0.xyz, cam), dot(params.cam1.xyz, cam), dot(params.cam2.xyz, cam));
     rgb = max(rgb, vec3<f32>(0.0)) * params.light0.x;
     rgb = vignette(rgb, uv);
@@ -275,12 +382,12 @@ fn develop(cam_in: vec3<f32>, uv: vec2<f32>) -> vec3<f32> {
     rgb = color(rgb);
     var c = srgb_encode(agx(rgb));
     c = apply_curve(c);
-    c = grain(c, uv);
+    c = grain(c, uv, aspect);
     return clamp(c, vec3<f32>(0.0), vec3<f32>(1.0));
 }
 
 @fragment
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
-    let cam = textureSampleLevel(image, image_sampler, in.uv, 0.0).rgb;
-    return vec4<f32>(develop(cam, in.uv), 1.0);
+    let cam = detail(in.tc, in.px.xy);
+    return vec4<f32>(develop(cam, in.uv, in.px.z), 1.0);
 }

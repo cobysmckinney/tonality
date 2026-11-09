@@ -10,6 +10,30 @@ const CURVE_SIZE = 1024;
 const HISTOGRAM_EDGE = 384;
 const HISTOGRAM_INTERVAL_MS = 80;
 
+/** Wait this long after the view settles before fetching full-resolution pixels. */
+const DETAIL_DELAY_MS = 120;
+/** Fetch this much extra around the visible area (fraction of its size, per side). */
+const DETAIL_MARGIN = 0.25;
+export const MIN_ZOOM = 0.05;
+export const MAX_ZOOM = 8;
+
+/** A rectangle in uv units (0..1) of the full image. */
+interface Rect {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+/** A request for full-resolution pixels: a region in full-res pixels, downsampled by 2^level. */
+export interface DetailRequest {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  level: number;
+}
+
 /** 256 bins each for red, green, blue and luma, plus the pixel count. */
 export interface Histogram {
   r: Uint32Array;
@@ -36,6 +60,20 @@ export class PreviewRenderer {
   private viewUbo: WebGLBuffer;
   private imageW = 0;
   private imageH = 0;
+  /** Full-resolution size: zoom is relative to this. */
+  private fullW = 1;
+  private fullH = 1;
+  /** Device pixels per full-res pixel, or null to fit the canvas. */
+  private zoom: number | null = null;
+  /** Point of the image (uv) at the canvas centre while zoomed. */
+  private center = { x: 0.5, y: 0.5 };
+  private detail: { texture: WebGLTexture; rect: Rect; level: number } | null = null;
+  private detailWanted: string | null = null;
+  private detailTimer: ReturnType<typeof setTimeout> | undefined;
+  /** Asked to fetch full-res pixels for the visible area; reply with `setDetail`. */
+  onNeedDetail: ((req: DetailRequest) => void) | null = null;
+  /** Called whenever the zoom level changes (scale in device px per full-res px, fit?). */
+  onView: ((scale: number, fit: boolean) => void) | null = null;
   private hasParams = false;
   private frame = 0;
   /** Called after each completed draw of an image (used by the dev snapshot hook). */
@@ -76,9 +114,14 @@ export class PreviewRenderer {
     this.requestDraw(true);
   }
 
-  setImage(width: number, height: number, rgb16f: Uint16Array) {
+  setImage(width: number, height: number, rgb16f: Uint16Array, fullW = width, fullH = height) {
     const gl = this.gl;
     if (this.texture) gl.deleteTexture(this.texture);
+    this.dropDetail();
+    this.fullW = fullW;
+    this.fullH = fullH;
+    this.zoom = null;
+    this.center = { x: 0.5, y: 0.5 };
     this.texture = gl.createTexture();
     gl.bindTexture(gl.TEXTURE_2D, this.texture);
     gl.pixelStorei(gl.UNPACK_ALIGNMENT, 2);
@@ -96,6 +139,153 @@ export class PreviewRenderer {
     gl.bufferData(gl.UNIFORM_BUFFER, params, gl.DYNAMIC_DRAW);
     this.hasParams = true;
     this.requestDraw(true);
+  }
+
+  /** Full-resolution pixels for `region` (full-res px), `width × height` RGB16F samples. */
+  setDetail(region: { x: number; y: number; w: number; h: number }, level: number, width: number, height: number, rgb16f: Uint16Array) {
+    const gl = this.gl;
+    this.dropDetail();
+    const texture = gl.createTexture()!;
+    gl.bindTexture(gl.TEXTURE_2D, texture);
+    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 2);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGB16F, width, height, 0, gl.RGB, gl.HALF_FLOAT, rgb16f);
+    setLinearClamp(gl);
+    const rect = { x: region.x / this.fullW, y: region.y / this.fullH, w: region.w / this.fullW, h: region.h / this.fullH };
+    this.detail = { texture, rect, level };
+    this.requestDraw();
+  }
+
+  private dropDetail() {
+    if (this.detail) this.gl.deleteTexture(this.detail.texture);
+    this.detail = null;
+    this.detailWanted = null;
+    clearTimeout(this.detailTimer);
+  }
+
+  // ---- zoom & pan ----
+
+  get hasDetail() {
+    return this.detail !== null;
+  }
+
+  get isFit() {
+    return this.zoom === null;
+  }
+
+  /** Current scale: device pixels per full-res pixel. */
+  get scale() {
+    return this.zoom ?? this.fitScale();
+  }
+
+  private fitScale() {
+    const dpr = window.devicePixelRatio || 1;
+    const availW = Math.max(1, this.canvas.clientWidth - 2 * MARGIN_CSS_PX) * dpr;
+    const availH = Math.max(1, this.canvas.clientHeight - 2 * MARGIN_CSS_PX) * dpr;
+    return Math.min(availW / this.fullW, availH / this.fullH, 1);
+  }
+
+  /** Zoom to `scale` (null = fit), keeping the image point under (cssX, cssY) in place. */
+  setZoom(scale: number | null, cssX?: number, cssY?: number) {
+    const dpr = window.devicePixelRatio || 1;
+    const cw = this.canvas.clientWidth * dpr;
+    const ch = this.canvas.clientHeight * dpr;
+    if (scale === null || scale <= this.fitScale() + 1e-6) {
+      this.zoom = null;
+      this.center = { x: 0.5, y: 0.5 };
+    } else {
+      scale = Math.min(MAX_ZOOM, scale);
+      const px = (cssX ?? this.canvas.clientWidth / 2) * dpr;
+      const py = (cssY ?? this.canvas.clientHeight / 2) * dpr;
+      const before = this.layout(cw, ch);
+      // Image point under the cursor now…
+      const u = (px - before.x) / before.w;
+      const v = (py - before.y) / before.h;
+      // …stays under the cursor at the new scale.
+      const w = this.fullW * scale;
+      const h = this.fullH * scale;
+      this.zoom = scale;
+      this.center = { x: (cw / 2 - (px - u * w)) / w, y: (ch / 2 - (py - v * h)) / h };
+    }
+    this.clampCenter(cw, ch);
+    this.onView?.(this.scale, this.isFit);
+    this.requestDraw();
+  }
+
+  /** Pan by a CSS-pixel drag delta. */
+  pan(dxCss: number, dyCss: number) {
+    if (this.zoom === null) return;
+    const dpr = window.devicePixelRatio || 1;
+    this.center.x -= (dxCss * dpr) / (this.fullW * this.zoom);
+    this.center.y -= (dyCss * dpr) / (this.fullH * this.zoom);
+    this.clampCenter(this.canvas.clientWidth * dpr, this.canvas.clientHeight * dpr);
+    this.requestDraw();
+  }
+
+  /** Is (cssX, cssY) over the image? */
+  hit(cssX: number, cssY: number) {
+    const dpr = window.devicePixelRatio || 1;
+    const r = this.layout(this.canvas.clientWidth * dpr, this.canvas.clientHeight * dpr);
+    const x = cssX * dpr, y = cssY * dpr;
+    return x >= r.x && y >= r.y && x <= r.x + r.w && y <= r.y + r.h;
+  }
+
+  private clampCenter(cw: number, ch: number) {
+    if (this.zoom === null) return;
+    const w = this.fullW * this.zoom;
+    const h = this.fullH * this.zoom;
+    const clamp = (c: number, view: number, size: number) =>
+      size <= view ? 0.5 : Math.min(1 - view / 2 / size, Math.max(view / 2 / size, c));
+    this.center.x = clamp(this.center.x, cw, w);
+    this.center.y = clamp(this.center.y, ch, h);
+  }
+
+  /** Where the whole image sits on a `cw × ch` device-pixel canvas. */
+  private layout(cw: number, ch: number) {
+    const s = this.scale;
+    const w = this.fullW * s;
+    const h = this.fullH * s;
+    if (this.zoom === null) return { x: (cw - w) / 2, y: (ch - h) / 2, w, h };
+    return { x: cw / 2 - this.center.x * w, y: ch / 2 - this.center.y * h, w, h };
+  }
+
+  /** View uniforms (xform, quad, tex, frame) to draw `quad` of the image from a texture holding `tex`. */
+  private viewBlock(cw: number, ch: number, img: { x: number; y: number; w: number; h: number }, quad: Rect, tex: Rect) {
+    const x = img.x + quad.x * img.w;
+    const y = img.y + quad.y * img.h;
+    const w = quad.w * img.w;
+    const h = quad.h * img.h;
+    return new Float32Array([
+      w / cw, h / ch, ((x + w / 2) / cw) * 2 - 1, 1 - ((y + h / 2) / ch) * 2,
+      quad.x, quad.y, quad.w, quad.h,
+      tex.x, tex.y, tex.w, tex.h,
+      this.fullW, this.fullH, 0, 0,
+    ]);
+  }
+
+  /** While zoomed past the preview's resolution, make sure full-res pixels for the view are on their way. */
+  private wantDetail(cw: number, ch: number, img: { x: number; y: number; w: number; h: number }) {
+    const s = this.scale;
+    if (!this.onNeedDetail || s <= (this.imageW / this.fullW) * 1.05) return;
+    // Visible part of the image, in uv.
+    const vx0 = Math.max(0, -img.x / img.w), vy0 = Math.max(0, -img.y / img.h);
+    const vx1 = Math.min(1, (cw - img.x) / img.w), vy1 = Math.min(1, (ch - img.y) / img.h);
+    if (vx1 <= vx0 || vy1 <= vy0) return;
+    const level = s >= 1 ? 0 : Math.floor(Math.log2(1 / s));
+    const d = this.detail;
+    if (d && d.level === level && d.rect.x <= vx0 + 1e-6 && d.rect.y <= vy0 + 1e-6 && d.rect.x + d.rect.w >= vx1 - 1e-6 && d.rect.y + d.rect.h >= vy1 - 1e-6) {
+      return;
+    }
+    const mx = (vx1 - vx0) * DETAIL_MARGIN, my = (vy1 - vy0) * DETAIL_MARGIN;
+    const x0 = Math.floor(Math.max(0, vx0 - mx) * this.fullW);
+    const y0 = Math.floor(Math.max(0, vy0 - my) * this.fullH);
+    const x1 = Math.ceil(Math.min(1, vx1 + mx) * this.fullW);
+    const y1 = Math.ceil(Math.min(1, vy1 + my) * this.fullH);
+    const req = { x: x0, y: y0, w: x1 - x0, h: y1 - y0, level };
+    const key = JSON.stringify(req);
+    if (key === this.detailWanted) return;
+    this.detailWanted = key;
+    clearTimeout(this.detailTimer);
+    this.detailTimer = setTimeout(() => this.onNeedDetail?.(req), DETAIL_DELAY_MS);
   }
 
   private histDirty = false;
@@ -126,23 +316,29 @@ export class PreviewRenderer {
     gl.clear(gl.COLOR_BUFFER_BIT);
     if (!this.texture || !this.hasParams) return;
 
-    // Fit the image inside the canvas with a margin; never upscale past 1:1 device pixels.
-    const availW = Math.max(1, cssW - 2 * MARGIN_CSS_PX) * dpr;
-    const availH = Math.max(1, cssH - 2 * MARGIN_CSS_PX) * dpr;
-    const scale = Math.min(availW / this.imageW, availH / this.imageH, 1);
-    const view = new Float32Array([(this.imageW * scale) / w, (this.imageH * scale) / h, 0, 0]);
-    gl.bindBuffer(gl.UNIFORM_BUFFER, this.viewUbo);
-    gl.bufferData(gl.UNIFORM_BUFFER, view, gl.DYNAMIC_DRAW);
-
+    const img = this.layout(w, h);
+    const whole = { x: 0, y: 0, w: 1, h: 1 };
     gl.useProgram(this.program);
     gl.bindBufferBase(gl.UNIFORM_BUFFER, PARAMS_BINDING, this.paramsUbo);
     gl.bindBufferBase(gl.UNIFORM_BUFFER, VIEW_BINDING, this.viewUbo);
-    gl.activeTexture(gl.TEXTURE0);
-    gl.bindTexture(gl.TEXTURE_2D, this.texture);
     gl.activeTexture(gl.TEXTURE1);
     gl.bindTexture(gl.TEXTURE_2D, this.curve);
     gl.bindVertexArray(this.vao);
+
+    // The preview covers the whole image; full-res pixels (when zoomed in) draw on top.
+    gl.bindBuffer(gl.UNIFORM_BUFFER, this.viewUbo);
+    gl.bufferData(gl.UNIFORM_BUFFER, this.viewBlock(w, h, img, whole, whole), gl.DYNAMIC_DRAW);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, this.texture);
     gl.drawArrays(gl.TRIANGLES, 0, 6);
+
+    if (this.detail && this.scale > this.imageW / this.fullW) {
+      const r = this.detail.rect;
+      gl.bufferData(gl.UNIFORM_BUFFER, this.viewBlock(w, h, img, r, r), gl.DYNAMIC_DRAW);
+      gl.bindTexture(gl.TEXTURE_2D, this.detail.texture);
+      gl.drawArrays(gl.TRIANGLES, 0, 6);
+    }
+    this.wantDetail(w, h, img);
     // Must run in the same task as the draw: the drawing buffer is not preserved.
     this.onDrawn?.(this.canvas);
     if (this.histDirty) this.scheduleHistogram();
@@ -185,7 +381,8 @@ export class PreviewRenderer {
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.histFbo);
     gl.viewport(0, 0, this.histW, this.histH);
     gl.bindBuffer(gl.UNIFORM_BUFFER, this.viewUbo);
-    gl.bufferData(gl.UNIFORM_BUFFER, new Float32Array([1, 1, 0, 0]), gl.DYNAMIC_DRAW);
+    const whole = { x: 0, y: 0, w: 1, h: 1 };
+    gl.bufferData(gl.UNIFORM_BUFFER, this.viewBlock(1, 1, { x: 0, y: 0, w: 1, h: 1 }, whole, whole), gl.DYNAMIC_DRAW);
     gl.useProgram(this.program);
     gl.bindBufferBase(gl.UNIFORM_BUFFER, PARAMS_BINDING, this.paramsUbo);
     gl.bindBufferBase(gl.UNIFORM_BUFFER, VIEW_BINDING, this.viewUbo);
@@ -220,6 +417,7 @@ export class PreviewRenderer {
   dispose() {
     cancelAnimationFrame(this.frame);
     clearTimeout(this.histTimer);
+    this.dropDetail();
     const gl = this.gl;
     if (this.texture) gl.deleteTexture(this.texture);
     gl.deleteTexture(this.curve);

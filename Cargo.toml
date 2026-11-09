@@ -24,3 +24,10 @@ tonality-render = { path = "crates/tonality-render" }
 
 [profile.dev.package."*"]
 opt-level = 3
+
+# Pixel loops are unusably slow unoptimised, even in dev.
+[profile.dev.package.tonality-raw]
+opt-level = 3
+
+[profile.dev.package.tonality-render]
+opt-level = 3

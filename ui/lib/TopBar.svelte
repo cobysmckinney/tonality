@@ -1,5 +1,6 @@
 <script lang="ts">
   import { app, type Mode } from "$lib/app.svelte";
+  import { exportCurrent, exportCount } from "$lib/export/targets";
 
   const modes: { id: Mode; label: string; key: string }[] = [
     { id: "library", label: "Library", key: "G" },
@@ -22,7 +23,9 @@
     {/each}
   </nav>
 
-  <div class="right"></div>
+  <div class="right">
+    <button class="export" onclick={exportCurrent} disabled={!exportCount()} title="Export (Ctrl+Shift+E)">Export…</button>
+  </div>
 </header>
 
 <style>
@@ -61,5 +64,17 @@
   }
   .right {
     justify-self: end;
+  }
+  .export {
+    padding: 4px 12px;
+    border-radius: var(--radius-s);
+    color: var(--text-1);
+  }
+  .export:hover:not(:disabled) {
+    background: var(--bg-2);
+    color: var(--text-0);
+  }
+  .export:disabled {
+    opacity: 0.35;
   }
 </style>

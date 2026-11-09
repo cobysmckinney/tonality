@@ -23,5 +23,6 @@ tonality-render.workspace = true
 ts-rs.workspace = true
 base64 = "0.22"
 blake3.workspace = true
-image = { version = "0.25", default-features = false, features = ["jpeg"] }
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "tiff"] }
 rayon.workspace = true
+tauri-plugin-opener = "2"

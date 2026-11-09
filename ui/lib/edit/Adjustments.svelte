@@ -191,6 +191,60 @@
       {/each}
     </Section>
 
+    <Section title="Detail">
+      <p class="note">Sharpening and noise reduction are sized for full resolution. Zoom to 100% (Z) to judge them.</p>
+      <span class="sub">Sharpening</span>
+      <Slider
+        label="Amount"
+        value={edit.detail.sharpenAmount}
+        min={0}
+        max={150}
+        bipolar={false}
+        oninput={(v) => (edit.detail.sharpenAmount = v)}
+        oncommit={() => oncommit?.("detail.sharpenAmount")}
+      />
+      <Slider
+        label="Radius"
+        value={edit.detail.sharpenRadius}
+        min={0.5}
+        max={3}
+        step={0.1}
+        decimals={1}
+        defaultValue={1}
+        bipolar={false}
+        oninput={(v) => (edit.detail.sharpenRadius = v)}
+        oncommit={() => oncommit?.("detail.sharpenRadius")}
+      />
+      <Slider
+        label="Masking"
+        value={edit.detail.sharpenMasking}
+        min={0}
+        max={100}
+        bipolar={false}
+        oninput={(v) => (edit.detail.sharpenMasking = v)}
+        oncommit={() => oncommit?.("detail.sharpenMasking")}
+      />
+      <span class="sub">Noise Reduction</span>
+      <Slider
+        label="Luminance"
+        value={edit.detail.luminanceNoise}
+        min={0}
+        max={100}
+        bipolar={false}
+        oninput={(v) => (edit.detail.luminanceNoise = v)}
+        oncommit={() => oncommit?.("detail.luminanceNoise")}
+      />
+      <Slider
+        label="Color"
+        value={edit.detail.colorNoise}
+        min={0}
+        max={100}
+        bipolar={false}
+        oninput={(v) => (edit.detail.colorNoise = v)}
+        oncommit={() => oncommit?.("detail.colorNoise")}
+      />
+    </Section>
+
     <Section title="Effects">
       <span class="sub">Vignette</span>
       <Slider
@@ -288,6 +342,12 @@
     text-transform: uppercase;
     letter-spacing: 0.06em;
     color: var(--text-2);
+  }
+  .note {
+    margin: 0 0 var(--space-1);
+    font-size: var(--fs-xs);
+    color: var(--text-2);
+    line-height: 1.4;
   }
   .mixer-head {
     display: flex;

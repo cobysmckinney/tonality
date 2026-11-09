@@ -9,12 +9,15 @@ import type { LibraryOverview } from "$lib/bindings/LibraryOverview";
 import type { EditState } from "$lib/bindings/EditState";
 import type { GlslProgram } from "$lib/bindings/GlslProgram";
 import type { ImageInfo } from "$lib/bindings/ImageInfo";
+import type { ExportSettings } from "$lib/bindings/ExportSettings";
+import type { ExportSummary } from "$lib/bindings/ExportSummary";
 
 export const api = {
   defaultEditState: () => invoke<EditState>("default_edit_state"),
   startupPath: () => invoke<string | null>("startup_path"),
   startupImport: () => invoke<string | null>("startup_import"),
   devSnapshotPath: () => invoke<string | null>("dev_snapshot_path"),
+  devZoom: () => invoke<number | null>("dev_zoom"),
   devSaveSnapshot: (dataUrl: string) => invoke<void>("dev_save_snapshot", { dataUrl }),
   previewShaders: () => invoke<GlslProgram>("preview_shaders"),
   openImage: (id: number) => invoke<ImageInfo>("open_image", { id }),
@@ -22,6 +25,14 @@ export const api = {
     new Uint16Array(await invoke<ArrayBuffer>("preview_pixels", { id })),
   developParams: async (id: number, edit: EditState) =>
     new Float32Array(await invoke<number[]>("develop_params", { id, edit })),
+  /** Full-resolution pixels for a region (see `detail_region` in Rust). */
+  detailRegion: async (id: number, r: { x: number; y: number; w: number; h: number; level: number }) => {
+    const buf = await invoke<ArrayBuffer>("detail_region", { id, ...r });
+    const [x, y, w, h, width, height] = new Uint32Array(buf, 0, 6);
+    return { region: { x, y, w, h }, width, height, pixels: new Uint16Array(buf, 24) };
+  },
+  exportImages: (ids: number[], settings: ExportSettings) =>
+    invoke<ExportSummary>("export_images", { ids, settings }),
   /** Tone-curve LUT as RGBA half floats (1024 × 1). */
   developCurve: async (edit: EditState) => new Uint16Array(await invoke<ArrayBuffer>("develop_curve", { edit })),
 

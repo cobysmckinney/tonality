@@ -7,6 +7,12 @@ license.workspace = true
 [dependencies]
 half.workspace = true
 naga = { version = "30", features = ["wgsl-in", "glsl-out"] }
+pollster = "0.4"
 serde.workspace = true
 tonality-core.workspace = true
 ts-rs.workspace = true
+wgpu = "30"
+
+[dev-dependencies]
+tonality-raw.workspace = true
+image = { version = "0.25", default-features = false, features = ["png"] }

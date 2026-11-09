@@ -1,3 +1,4 @@
+mod export;
 mod history;
 mod images;
 mod library;
@@ -45,6 +46,12 @@ fn dev_snapshot_path() -> Option<String> {
     std::env::var("TONALITY_SNAPSHOT").ok().filter(|p| !p.is_empty())
 }
 
+/// Dev/test hook: `TONALITY_ZOOM=1` opens images at that zoom (and snapshots once full-res pixels arrive).
+#[tauri::command]
+fn dev_zoom() -> Option<f32> {
+    std::env::var("TONALITY_ZOOM").ok().and_then(|z| z.parse().ok())
+}
+
 /// Dev/test hook: save a `data:image/png;base64,…` URL to `TONALITY_SNAPSHOT`.
 #[tauri::command]
 fn dev_save_snapshot(data_url: String) -> CmdResult<()> {
@@ -83,6 +90,41 @@ fn preview_pixels(id: ImageId, images: State<'_, Images>) -> CmdResult<Response>
     Ok(Response::new(p.pixel_bytes()))
 }
 
+/// A region of the full-resolution image for 1:1 zoom, box-downsampled by `2^level`.
+/// Layout: six little-endian u32s (x, y, w, h in full-res pixels; texture width, height), then
+/// RGB16F little-endian. Waits for the full-resolution decode if it is still running.
+#[tauri::command]
+#[allow(clippy::too_many_arguments)] // Tauri commands take their arguments flat.
+async fn detail_region(
+    id: ImageId,
+    x: u32,
+    y: u32,
+    w: u32,
+    h: u32,
+    level: u32,
+    images: State<'_, Images>,
+    store: State<'_, Store>,
+    catalog: State<'_, history::CatalogState>,
+) -> CmdResult<Response> {
+    let (rel, _, _) = catalog.with(|c| c.image_file(id))?;
+    let path = store.abs(&rel);
+    let images = images.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let full = images.full(id, &path)?;
+        let r = full.region(x, y, w, h, level);
+        let mut out = Vec::with_capacity(24 + r.pixels.len() * 2);
+        for v in [r.x, r.y, r.w, r.h, r.width, r.height] {
+            out.extend_from_slice(&v.to_le_bytes());
+        }
+        for p in &r.pixels {
+            out.extend_from_slice(&p.to_le_bytes());
+        }
+        Ok(Response::new(out))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// Tone-curve lookup table for `develop.wgsl`: RGBA16F little-endian, `LUT_SIZE` × 1.
 #[tauri::command]
 fn develop_curve(edit: EditState) -> Response {
@@ -100,6 +142,7 @@ fn develop_params(id: ImageId, edit: EditState, images: State<'_, Images>) -> Cm
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_opener::init())
         .manage(Images::default())
         .register_asynchronous_uri_scheme_protocol(thumbs::SCHEME, thumbs::handle)
         .setup(|app| {
@@ -118,9 +161,12 @@ pub fn run() {
             dev_log,
             dev_snapshot_path,
             dev_save_snapshot,
+            dev_zoom,
             preview_shaders,
             open_image,
             preview_pixels,
+            detail_region,
+            export::export_images,
             develop_params,
             develop_curve,
             history::history_open,
