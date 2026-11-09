@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, State};
 use tonality_core::{EditState, ImageId};
 use tonality_raw::FullImage;
+use tonality_core::mask::brush_layers;
 use tonality_render::{curve_lut_rgba16f, DevelopParams, Gpu, Rendered, Source};
 use ts_rs::TS;
 
@@ -193,7 +194,7 @@ fn run(
                     let (_, (w, h, px)) = scaled.iter().find(|(l, _)| *l == src_long).unwrap();
                     Source { width: *w, height: *h, pixels: px, frame: [full.width, full.height] }
                 };
-                let rendered = gpu()?.render(&src, &params, &curve_lut_rgba16f(edit), |f| emit(done as f32 + f * 0.9, &label))?;
+                let rendered = gpu()?.render(&src, &params, &curve_lut_rgba16f(edit), &brush_layers(&edit.masks, full.width, full.height), |f| emit(done as f32 + f * 0.9, &label))?;
                 let target = unique_path(&folder, &sanitize(&label), settings.format.extension());
                 write(&rendered, &target, &settings)?;
                 Ok(target)

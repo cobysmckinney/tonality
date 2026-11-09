@@ -1,6 +1,12 @@
 use tonality_core::color::CameraColor;
 use tonality_core::geometry::Geometry;
+use tonality_core::mask::{Mask, MaskShape};
 use tonality_core::EditState;
+
+/// Masks the shader evaluates (more are ignored).
+pub const MAX_MASKS: usize = 16;
+/// vec4s per mask in the uniform block.
+const MASK_VEC4S: usize = 7;
 
 /// Uniform block matching `struct Params` in `develop.wgsl` (std140-compatible: all vec4).
 #[repr(C)]
@@ -20,10 +26,12 @@ pub struct DevelopParams {
     pub detail1: [f32; 4],
     pub geo0: [f32; 4],
     pub geo1: [f32; 4],
+    pub masks_head: [f32; 4],
+    pub masks: [[[f32; 4]; MASK_VEC4S]; MAX_MASKS],
 }
 
 impl DevelopParams {
-    pub const FLOATS: usize = 76;
+    pub const FLOATS: usize = 80 + MAX_MASKS * MASK_VEC4S * 4;
 
     /// `src_w × src_h`: the full-resolution source size (framing is computed in its pixels).
     pub fn new(edit: &EditState, color: &CameraColor, src_w: u32, src_h: u32) -> Self {
@@ -67,7 +75,54 @@ impl DevelopParams {
             detail1: [u(d.color_noise), 0.0, 0.0, 0.0],
             geo0: [geo.m[0][0], geo.m[0][1], geo.m[0][2], geo.width],
             geo1: [geo.m[1][0], geo.m[1][1], geo.m[1][2], geo.height],
+            masks_head: [0.0; 4],
+            masks: [[[0.0; 4]; MASK_VEC4S]; MAX_MASKS],
         }
+        .with_masks(&edit.masks, src_w, src_h)
+    }
+
+    fn with_masks(mut self, masks: &[Mask], src_w: u32, src_h: u32) -> Self {
+        let long = src_w.max(src_h).max(1) as f32;
+        let norm = [src_w as f32 / long, src_h as f32 / long];
+        let q = |p: [f32; 2]| [p[0] * norm[0], p[1] * norm[1]];
+        let n = |v: f32| v / 100.0;
+        let mut count = 0;
+        let mut layer = 0.0;
+        for m in masks {
+            let brush_layer = layer;
+            if matches!(m.shape, MaskShape::Brush { .. }) {
+                layer += 1.0;
+            }
+            if !m.enabled || count == MAX_MASKS {
+                continue;
+            }
+            let (kind, shape0, shape1) = match &m.shape {
+                MaskShape::Linear { from, to } => {
+                    let (a, b) = (q(*from), q(*to));
+                    (1.0, [a[0], a[1], b[0], b[1]], [0.0; 4])
+                }
+                MaskShape::Radial { center, radius, angle, feather } => {
+                    let c = q(*center);
+                    let (s, co) = angle.to_radians().sin_cos();
+                    (2.0, [c[0], c[1], radius[0].max(1e-4), radius[1].max(1e-4)], [co, s, feather.clamp(0.0, 1.0), 0.0])
+                }
+                MaskShape::Brush { .. } => (3.0, [0.0; 4], [0.0; 4]),
+            };
+            let r = &m.range;
+            let a = &m.adjust;
+            self.masks[count] = [
+                shape0,
+                shape1,
+                [kind, if m.invert { 1.0 } else { 0.0 }, (m.amount / 100.0).clamp(0.0, 1.0), brush_layer],
+                [n(r.low).clamp(0.0, 1.0), n(r.high).clamp(0.0, 1.0), n(r.smoothness).clamp(0.0, 1.0), if r.is_full() { 0.0 } else { 1.0 }],
+                [a.exposure.clamp(-5.0, 5.0), n(a.contrast), n(a.highlights), n(a.shadows)],
+                [n(a.whites), n(a.blacks), n(a.temperature), n(a.tint)],
+                [n(a.saturation), 0.0, 0.0, 0.0],
+            ];
+            count += 1;
+        }
+        self.masks_head = [count as f32, norm[0], norm[1], 0.0];
+        self
     }
 
     pub fn to_vec(&self) -> Vec<f32> {
@@ -89,6 +144,12 @@ impl DevelopParams {
         v.extend_from_slice(&self.detail1);
         v.extend_from_slice(&self.geo0);
         v.extend_from_slice(&self.geo1);
+        v.extend_from_slice(&self.masks_head);
+        for m in &self.masks {
+            for row in m {
+                v.extend_from_slice(row);
+            }
+        }
         v
     }
 }
@@ -135,6 +196,19 @@ mod tests {
         let m = color().as_shot_multipliers();
         assert_eq!(&p.wb[..3], &m[..]);
         assert_eq!(p.light0, [1.0, 0.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn masks_skip_hidden_ones_but_keep_brush_layers() {
+        let mut e = EditState::default();
+        let brush = || Mask { shape: MaskShape::Brush { strokes: vec![] }, ..Mask::default() };
+        e.masks = vec![Mask { enabled: false, ..brush() }, Mask::default(), brush()];
+        e.masks[1].adjust.exposure = 1.0;
+        let p = DevelopParams::new(&e, &color(), 600, 400);
+        assert_eq!(p.masks_head, [2.0, 1.0, 400.0 / 600.0, 0.0]);
+        assert_eq!(p.masks[0][2][0], 2.0); // radial
+        assert_eq!(p.masks[0][4][0], 1.0);
+        assert_eq!(p.masks[1][2], [3.0, 0.0, 1.0, 1.0]); // second brush mask: layer 1
     }
 
     #[test]

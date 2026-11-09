@@ -35,6 +35,12 @@ export const api = {
   },
   exportImages: (ids: number[], settings: ExportSettings) =>
     invoke<ExportSummary>("export_images", { ids, settings }),
+  /** Brush mask rasters: `layers` 8-bit `width × height` images, one per brush mask. */
+  maskLayers: async (id: number, edit: EditState) => {
+    const buf = await invoke<ArrayBuffer>("mask_layers", { id, edit });
+    const [width, height, layers] = new Uint32Array(buf, 0, 3);
+    return { width, height, layers, data: new Uint8Array(buf, 12) };
+  },
   /** Tone-curve LUT as RGBA half floats (1024 × 1). */
   developCurve: async (edit: EditState) => new Uint16Array(await invoke<ArrayBuffer>("develop_curve", { edit })),
 

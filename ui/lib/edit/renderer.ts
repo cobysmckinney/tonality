@@ -1,6 +1,9 @@
 // WebGL2 preview renderer. Runs the GLSL that naga transpiled from develop.wgsl.
 // The image is uploaded once; edits only change a small uniform block (and the curve LUT).
 import type { GlslProgram } from "$lib/bindings/GlslProgram";
+import type { Stroke } from "$lib/bindings/Stroke";
+import { paint, stampSegment } from "./brush";
+import type { BrushLayers } from "./masks";
 
 const PARAMS_BINDING = 0;
 const VIEW_BINDING = 1;
@@ -54,6 +57,15 @@ export interface DetailRequest {
   w: number;
   h: number;
   level: number;
+}
+
+/** Brush mask rasters on the GPU (a 2D array texture), plus a CPU copy for live painting. */
+interface BrushSlot {
+  texture: WebGLTexture;
+  w: number;
+  h: number;
+  layers: number;
+  data: Uint8Array;
 }
 
 /** 256 bins each for red, green, blue and luma, plus the pixel count. */
@@ -112,6 +124,12 @@ export class PreviewRenderer {
   onDrawn: ((canvas: HTMLCanvasElement) => void) | null = null;
   /** Called with a fresh histogram after the image or edit changes (throttled). */
   onHistogram: ((h: Histogram) => void) | null = null;
+  /** Brush rasters for the main view, the compare pane and stills. */
+  private brush: Record<"main" | "compare" | "still", BrushSlot>;
+  /** The stroke being painted (re-applied if new rasters arrive mid-stroke). */
+  private live: { layer: number; stroke: Stroke } | null = null;
+  /** 1 + shader index of the mask to tint, or 0. */
+  private overlay = 0;
 
   constructor(private canvas: HTMLCanvasElement, src: GlslProgram) {
     const gl = canvas.getContext("webgl2", { antialias: false, alpha: false, premultipliedAlpha: false });
@@ -128,6 +146,8 @@ export class PreviewRenderer {
     gl.useProgram(this.program);
     gl.uniform1i(gl.getUniformLocation(this.program, src.imageSampler), 0);
     gl.uniform1i(gl.getUniformLocation(this.program, src.curveSampler), 1);
+    gl.uniform1i(gl.getUniformLocation(this.program, src.brushSampler), 2);
+    this.brush = { main: emptyBrush(gl), compare: emptyBrush(gl), still: emptyBrush(gl) };
 
     // Identity curves until the first real ones arrive.
     this.curve = identityCurve(gl);
@@ -140,6 +160,57 @@ export class PreviewRenderer {
   setCurve(rgba16f: Uint16Array) {
     uploadCurve(this.gl, this.curve, rgba16f);
     this.requestDraw(true);
+  }
+
+  /** Brush rasters for the main view or the compare pane (null: none). */
+  setBrush(slot: "main" | "compare", layers: BrushLayers | null) {
+    const b = this.brush[slot];
+    uploadBrush(this.gl, b, layers);
+    if (slot === "main" && this.live) {
+      paint(b.data.subarray(this.live.layer * b.w * b.h, (this.live.layer + 1) * b.w * b.h), b.w, b.h, this.live.stroke);
+      uploadBrush(this.gl, b, null, true);
+    }
+    this.requestDraw(true);
+  }
+
+  /**
+   * Paint the stroke being drawn into brush layer `layer` of the main view, from `a` to `b`
+   * (source uv). `size` is the raster size the backend uses (`mask_size`).
+   */
+  paintLive(layer: number, stroke: Stroke, a: readonly number[], b: readonly number[], size: [number, number]) {
+    const gl = this.gl;
+    const slot = this.brush.main;
+    if (slot.w !== size[0] || slot.h !== size[1] || layer >= slot.layers) {
+      // A new brush mask (or the first one): grow the layers, keeping what's painted.
+      const layers = Math.max(layer + 1, slot.w === size[0] && slot.h === size[1] ? slot.layers : 0);
+      const data = new Uint8Array(size[0] * size[1] * layers);
+      if (slot.w === size[0] && slot.h === size[1]) data.set(slot.data.subarray(0, data.length));
+      uploadBrush(gl, slot, { width: size[0], height: size[1], layers, data });
+    }
+    this.live = { layer, stroke };
+    const n = slot.w * slot.h;
+    const plane = slot.data.subarray(layer * n, (layer + 1) * n);
+    const r = stampSegment(plane, slot.w, slot.h, a, b, stroke);
+    if (!r) return;
+    const sub = new Uint8Array(r.w * r.h);
+    for (let y = 0; y < r.h; y++) sub.set(plane.subarray((r.y + y) * slot.w + r.x, (r.y + y) * slot.w + r.x + r.w), y * r.w);
+    gl.bindTexture(gl.TEXTURE_2D_ARRAY, slot.texture);
+    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+    gl.texSubImage3D(gl.TEXTURE_2D_ARRAY, 0, r.x, r.y, layer, r.w, r.h, 1, gl.RED, gl.UNSIGNED_BYTE, sub);
+    this.requestDraw(true);
+  }
+
+  /** The live stroke is finished (its committed rasters will follow). */
+  endLive() {
+    this.live = null;
+  }
+
+  /** Tint what mask `index` (its shader index) selects, or null for no overlay. */
+  setOverlay(index: number | null) {
+    const v = index === null ? 0 : index + 1;
+    if (v === this.overlay) return;
+    this.overlay = v;
+    this.requestDraw();
   }
 
   /** Compare with another version side by side (null to stop). Zoom and pan are shared. */
@@ -169,7 +240,7 @@ export class PreviewRenderer {
    * Render the whole image with `params` (and `curve`) at `edge` px on the long side, into a
    * new 2D canvas. Used for branch and library thumbnails; doesn't disturb the main view.
    */
-  renderStill(edge: number, params: Float32Array, curve: Uint16Array | null): HTMLCanvasElement | null {
+  renderStill(edge: number, params: Float32Array, curve: Uint16Array | null, brush: BrushLayers | null = null): HTMLCanvasElement | null {
     const gl = this.gl;
     if (!this.texture) return null;
     const fr = framingOf(params);
@@ -197,6 +268,9 @@ export class PreviewRenderer {
     gl.bindTexture(gl.TEXTURE_2D, this.texture);
     gl.activeTexture(gl.TEXTURE1);
     gl.bindTexture(gl.TEXTURE_2D, curve ? this.stillCurve : this.curve);
+    uploadBrush(gl, this.brush.still, brush);
+    gl.activeTexture(gl.TEXTURE2);
+    gl.bindTexture(gl.TEXTURE_2D_ARRAY, this.brush.still.texture);
     gl.bindVertexArray(this.vao);
     gl.drawArrays(gl.TRIANGLES, 0, 6);
     const px = new Uint8Array(w * h * 4);
@@ -382,7 +456,7 @@ export class PreviewRenderer {
   }
 
   /** View uniforms (xform, quad, tex, frame) to draw `quad` of the frame from a texture holding `tex` of the source. */
-  private viewBlock(cw: number, ch: number, img: { x: number; y: number; w: number; h: number }, quad: Rect, tex: Rect) {
+  private viewBlock(cw: number, ch: number, img: { x: number; y: number; w: number; h: number }, quad: Rect, tex: Rect, overlay = 0) {
     const x = img.x + quad.x * img.w;
     const y = img.y + quad.y * img.h;
     const w = quad.w * img.w;
@@ -391,7 +465,7 @@ export class PreviewRenderer {
       w / cw, h / ch, ((x + w / 2) / cw) * 2 - 1, 1 - ((y + h / 2) / ch) * 2,
       quad.x, quad.y, quad.w, quad.h,
       tex.x, tex.y, tex.w, tex.h,
-      this.fullW, this.fullH, 0, 0,
+      this.fullW, this.fullH, overlay, 0,
     ]);
   }
 
@@ -472,18 +546,21 @@ export class PreviewRenderer {
       gl.bindBufferBase(gl.UNIFORM_BUFFER, PARAMS_BINDING, i ? this.compareUbo : this.paramsUbo);
       gl.activeTexture(gl.TEXTURE1);
       gl.bindTexture(gl.TEXTURE_2D, i ? this.compareCurve : this.curve);
+      gl.activeTexture(gl.TEXTURE2);
+      gl.bindTexture(gl.TEXTURE_2D_ARRAY, (i ? this.brush.compare : this.brush.main).texture);
       const pane = i ? this.layout(pw, h, this.compareOut) : img;
+      const overlay = i ? 0 : this.overlay;
 
       // The preview covers the whole frame; full-res pixels (when zoomed in) draw on top,
       // wherever their texture has data.
       gl.bindBuffer(gl.UNIFORM_BUFFER, this.viewUbo);
-      gl.bufferData(gl.UNIFORM_BUFFER, this.viewBlock(pw, h, pane, whole, whole), gl.DYNAMIC_DRAW);
+      gl.bufferData(gl.UNIFORM_BUFFER, this.viewBlock(pw, h, pane, whole, whole, overlay), gl.DYNAMIC_DRAW);
       gl.activeTexture(gl.TEXTURE0);
       gl.bindTexture(gl.TEXTURE_2D, this.texture);
       gl.drawArrays(gl.TRIANGLES, 0, 6);
 
       if (this.detail && this.scale > this.imageW / this.fullW) {
-        gl.bufferData(gl.UNIFORM_BUFFER, this.viewBlock(pw, h, pane, whole, this.detail.rect), gl.DYNAMIC_DRAW);
+        gl.bufferData(gl.UNIFORM_BUFFER, this.viewBlock(pw, h, pane, whole, this.detail.rect, overlay), gl.DYNAMIC_DRAW);
         gl.bindTexture(gl.TEXTURE_2D, this.detail.texture);
         gl.drawArrays(gl.TRIANGLES, 0, 6);
       }
@@ -543,6 +620,8 @@ export class PreviewRenderer {
     gl.bindTexture(gl.TEXTURE_2D, this.texture);
     gl.activeTexture(gl.TEXTURE1);
     gl.bindTexture(gl.TEXTURE_2D, this.curve);
+    gl.activeTexture(gl.TEXTURE2);
+    gl.bindTexture(gl.TEXTURE_2D_ARRAY, this.brush.main.texture);
     gl.bindVertexArray(this.vao);
     gl.drawArrays(gl.TRIANGLES, 0, 6);
     gl.readPixels(0, 0, this.histW, this.histH, gl.RGBA, gl.UNSIGNED_BYTE, this.histPixels);
@@ -576,6 +655,7 @@ export class PreviewRenderer {
     gl.deleteTexture(this.curve);
     gl.deleteTexture(this.compareCurve);
     gl.deleteTexture(this.stillCurve);
+    for (const b of Object.values(this.brush)) gl.deleteTexture(b.texture);
     gl.deleteBuffer(this.compareUbo);
     gl.deleteBuffer(this.stillUbo);
     if (this.histTex) gl.deleteTexture(this.histTex);
@@ -585,6 +665,40 @@ export class PreviewRenderer {
     gl.deleteVertexArray(this.vao);
     gl.deleteProgram(this.program);
   }
+}
+
+function emptyBrush(gl: WebGL2RenderingContext): BrushSlot {
+  const slot: BrushSlot = { texture: gl.createTexture()!, w: 0, h: 0, layers: 0, data: new Uint8Array(0) };
+  uploadBrush(gl, slot, null);
+  return slot;
+}
+
+/** Replace a slot's rasters (null: none), or with `reupload`, send its CPU copy again. */
+function uploadBrush(gl: WebGL2RenderingContext, slot: BrushSlot, layers: BrushLayers | null, reupload = false) {
+  if (!reupload) {
+    if (layers && layers.layers > 0) {
+      slot.w = layers.width;
+      slot.h = layers.height;
+      slot.layers = layers.layers;
+      slot.data = new Uint8Array(layers.data); // own copy: live painting writes into it
+    } else {
+      slot.w = slot.h = slot.layers = 0;
+      slot.data = new Uint8Array(0);
+    }
+  }
+  // An empty slot is a single black texel, so the sampler always has something.
+  const empty = slot.layers === 0;
+  gl.bindTexture(gl.TEXTURE_2D_ARRAY, slot.texture);
+  gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+  gl.texImage3D(
+    gl.TEXTURE_2D_ARRAY, 0, gl.R8,
+    empty ? 1 : slot.w, empty ? 1 : slot.h, empty ? 1 : slot.layers,
+    0, gl.RED, gl.UNSIGNED_BYTE, empty ? new Uint8Array(1) : slot.data,
+  );
+  gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
 }
 
 function identityCurve(gl: WebGL2RenderingContext): WebGLTexture {

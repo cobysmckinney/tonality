@@ -7,6 +7,8 @@
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
+use crate::mask::{describe_masks, Mask};
+
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, TS)]
 #[serde(default, rename_all = "camelCase")]
 #[ts(export)]
@@ -18,6 +20,11 @@ pub struct EditState {
     pub detail: Detail,
     pub effects: Effects,
     pub crop: Crop,
+    /// Local adjustments, applied in order. Omitted from the JSON when empty, so states saved
+    /// before masks existed keep their hashes.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[ts(optional = nullable)]
+    pub masks: Vec<Mask>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, TS)]
@@ -199,11 +206,20 @@ pub enum Panel {
     Detail,
     Effects,
     Crop,
+    Masks,
 }
 
 impl Panel {
-    pub const ALL: [Panel; 7] =
-        [Panel::WhiteBalance, Panel::Light, Panel::ToneCurve, Panel::Color, Panel::Detail, Panel::Effects, Panel::Crop];
+    pub const ALL: [Panel; 8] = [
+        Panel::WhiteBalance,
+        Panel::Light,
+        Panel::ToneCurve,
+        Panel::Color,
+        Panel::Detail,
+        Panel::Effects,
+        Panel::Crop,
+        Panel::Masks,
+    ];
 
     pub fn label(self) -> &'static str {
         match self {
@@ -214,6 +230,7 @@ impl Panel {
             Panel::Detail => "Detail",
             Panel::Effects => "Effects",
             Panel::Crop => "Crop",
+            Panel::Masks => "Masks",
         }
     }
 }
@@ -231,6 +248,7 @@ impl EditState {
                 Panel::Detail => out.detail = src.detail.clone(),
                 Panel::Effects => out.effects = src.effects.clone(),
                 Panel::Crop => out.crop = src.crop.clone(),
+                Panel::Masks => out.masks = src.masks.clone(),
             }
         }
         out
@@ -328,20 +346,21 @@ const CURVES: &[(&str, CurveGetter)] = &[
     ("Blue Curve", |s| &s.curve.blue),
 ];
 
+/// `v` with a sign and `d` decimals, without "-0" / "+0.00" noise.
+pub(crate) fn signed(v: f32, d: usize) -> String {
+    let s = format!("{v:.d$}");
+    if s.trim_start_matches(['-', '0', '.']).is_empty() {
+        format!("{:.d$}", 0.0)
+    } else if v > 0.0 {
+        format!("+{s}")
+    } else {
+        s
+    }
+}
+
 fn format_value(fmt: &Fmt, v: Option<f32>) -> String {
     match (fmt, v) {
-        (Fmt::Signed(d), v) => {
-            let v = v.unwrap_or(0.0);
-            let s = format!("{v:.d$}", d = *d);
-            // Avoid "-0" / "+0.00" noise.
-            if s.trim_start_matches(['-', '0', '.']).is_empty() {
-                format!("{:.d$}", 0.0, d = *d)
-            } else if v > 0.0 {
-                format!("+{s}")
-            } else {
-                s
-            }
-        }
+        (Fmt::Signed(d), v) => signed(v.unwrap_or(0.0), *d),
         (Fmt::Kelvin, Some(v)) => format!("{}K", v.round() as i64),
         (Fmt::SignedOpt, Some(v)) => format_value(&Fmt::Signed(0), Some(v)),
         (Fmt::Plain, v) => format!("{}", v.unwrap_or(0.0).round() as i64),
@@ -372,6 +391,11 @@ pub fn describe_change(prev: &EditState, next: &EditState) -> String {
     if a.rect != b.rect {
         curves.push("Crop");
     }
+    let masks = describe_masks(&prev.masks, &next.masks);
+    if let ([], [], [(_, full)]) = (changed.as_slice(), curves.as_slice(), masks.as_slice()) {
+        return full.clone();
+    }
+    curves.extend(masks.iter().map(|(short, _)| short.as_str()));
     let wb_as_shot = next.white_balance == WhiteBalance::default();
     match (changed.as_slice(), curves.as_slice()) {
         ([], []) => "No change".into(),

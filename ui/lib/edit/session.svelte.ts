@@ -6,7 +6,10 @@ import type { EditState } from "$lib/bindings/EditState";
 import type { HistoryView } from "$lib/bindings/HistoryView";
 import type { ImageInfo } from "$lib/bindings/ImageInfo";
 import type { Panel } from "$lib/bindings/Panel";
+import type { Mask } from "$lib/bindings/Mask";
 import { scheduleLibraryThumb } from "./versions";
+import { MAX_MASKS, masksOf, newMask, type BrushTool, type MaskKind } from "./masks";
+import type { Framing } from "./renderer";
 
 class EditSession {
   image = $state<ImageInfo | null>(null);
@@ -23,6 +26,54 @@ class EditSession {
   /** Locked crop aspect (pixel w/h), or null for free. */
   cropAspect = $state<number | null>(null);
 
+  /** Mask mode: the mask list replaces the adjustments, and the selected mask has handles. */
+  masking = $state(false);
+  maskIndex = $state<number | null>(null);
+  /** Tint the selected mask's area (O). */
+  maskOverlay = $state(false);
+  brush = $state<BrushTool>({ size: 0.04, feather: 0.6, strength: 1, erase: false });
+  /** The main view's framing, for placing new masks (set by Canvas). */
+  framing = $state.raw<Framing | null>(null);
+
+  get masks(): Mask[] {
+    return this.edit ? masksOf(this.edit) : [];
+  }
+
+  /** The selected mask's index, if it (still) exists. */
+  get selected(): number | null {
+    const i = this.maskIndex;
+    return i !== null && i < this.masks.length ? i : null;
+  }
+
+  startMasks() {
+    if (!this.edit || this.cropping) return;
+    this.compare = null;
+    this.masking = true;
+    if (this.selected === null && this.masks.length) this.maskIndex = this.masks.length - 1;
+  }
+
+  stopMasks() {
+    this.masking = false;
+  }
+
+  addMask(kind: MaskKind) {
+    const img = this.image;
+    if (!this.edit || !img || this.masks.length >= MAX_MASKS) return;
+    const fr = this.framing ?? { w: img.fullWidth, h: img.fullHeight, m: [1, 0, 0, 0, 1, 0] };
+    const m = newMask(kind, this.masks, fr, img.fullWidth, img.fullHeight);
+    this.edit.masks = [...this.masks, m];
+    this.maskIndex = this.edit.masks.length - 1;
+    return this.commit(null);
+  }
+
+  deleteMask(i: number) {
+    if (!this.edit || i >= this.masks.length) return;
+    this.edit.masks = this.masks.filter((_, k) => k !== i);
+    const n = this.edit.masks.length;
+    this.maskIndex = n ? Math.min(i, n - 1) : null;
+    return this.commit(null);
+  }
+
   get cropping() {
     return this.cropEntry !== null;
   }
@@ -30,6 +81,7 @@ class EditSession {
   startCrop() {
     if (!this.edit || this.cropping) return;
     this.compare = null;
+    this.masking = false;
     this.cropEntry = $state.snapshot(this.edit.crop);
   }
 
@@ -69,6 +121,8 @@ class EditSession {
       this.compare = null;
       this.applying = null;
       this.cropEntry = null;
+      this.masking = false;
+      this.maskIndex = null;
       this.edit = checkout.state;
       this.history = checkout.view;
       this.image = info;

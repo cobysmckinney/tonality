@@ -7,6 +7,7 @@
 use std::sync::mpsc;
 
 use tonality_core::geometry::Geometry;
+use tonality_core::mask::BrushLayers;
 
 use crate::{DevelopParams, DEVELOP_WGSL};
 
@@ -100,13 +101,15 @@ impl Gpu {
         Ok(Self { device, queue, pipeline, sampler, adapter: name })
     }
 
-    /// Develop `src` with `params` and the tone-curve LUT (`curve_lut_rgba16f`).
-    /// `progress` receives the fraction of tiles done.
+    /// Develop `src` with `params`, the tone-curve LUT (`curve_lut_rgba16f`) and the brush
+    /// mask rasters (`tonality_core::mask::brush_layers`). `progress` receives the fraction of
+    /// tiles done.
     pub fn render(
         &self,
         src: &Source,
         params: &DevelopParams,
         curve_lut: &[u8],
+        brush: &BrushLayers,
         mut progress: impl FnMut(f32),
     ) -> Result<Rendered, String> {
         let (sw_all, sh_all) = (src.width, src.height);
@@ -139,6 +142,7 @@ impl Gpu {
             curve.size(),
         );
         let curve_view = curve.create_view(&Default::default());
+        let brush_view = self.brush_texture(brush);
 
         let mut out = vec![0u16; (w * h * 3) as usize];
         let tiles: Vec<(u32, u32)> =
@@ -191,6 +195,7 @@ impl Gpu {
                     wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::Sampler(&self.sampler) },
                     wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::TextureView(&curve_view) },
                     wgpu::BindGroupEntry { binding: 5, resource: wgpu::BindingResource::Sampler(&self.sampler) },
+                    wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(&brush_view) },
                 ],
             });
 
@@ -267,6 +272,33 @@ impl Gpu {
             progress((n + 1) as f32 / tiles.len() as f32);
         }
         Ok(Rendered { width: w, height: h, pixels: out })
+    }
+
+    /// The brush layers as a texture array (one empty layer when there are none).
+    fn brush_texture(&self, b: &BrushLayers) -> wgpu::TextureView {
+        let (w, h, layers) = if b.layers == 0 { (1, 1, 1) } else { (b.width, b.height, b.layers) };
+        let tex = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("brush masks"),
+            size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: layers },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::R8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let zero = [0u8];
+        let data = if b.layers == 0 { &zero[..] } else { &b.data[..] };
+        self.queue.write_texture(
+            tex.as_image_copy(),
+            data,
+            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(w), rows_per_image: Some(h) },
+            tex.size(),
+        );
+        tex.create_view(&wgpu::TextureViewDescriptor {
+            dimension: Some(wgpu::TextureViewDimension::D2Array),
+            ..Default::default()
+        })
     }
 
     fn texture(&self, label: &str, width: u32, height: u32) -> wgpu::Texture {

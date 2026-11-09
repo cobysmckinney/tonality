@@ -8,6 +8,11 @@
   import type { Crop } from "$lib/bindings/Crop";
   import CropOverlay from "./CropOverlay.svelte";
   import { FULL, turnedSize } from "./crop";
+  import MaskOverlay from "./MaskOverlay.svelte";
+  import { brushKey, brushLayer, maskSize, masksOf, shaderIndex, type BrushLayers } from "./masks";
+  import { session } from "./session.svelte";
+  import type { Mask } from "$lib/bindings/Mask";
+  import type { Stroke } from "$lib/bindings/Stroke";
 
   interface Props {
     image: ImageInfo;
@@ -167,6 +172,12 @@
   function onWheel(e: WheelEvent) {
     e.preventDefault();
     if (cropping) return;
+    if (e.altKey && session.masking) {
+      // Alt+wheel sizes the brush.
+      const b = session.brush;
+      b.size = Math.min(0.3, Math.max(0.003, b.size * Math.exp(-e.deltaY * 0.002)));
+      return;
+    }
     const lines = e.deltaMode === 1 ? e.deltaY * 16 : e.deltaY;
     zoomBy(Math.exp(-lines * 0.0025), local(e));
   }
@@ -176,10 +187,13 @@
   // Latest-wins parameter pipelines (the main view, and the compare pane): at most one request
   // in flight each, always ending on the newest state. The curve LUT is only refetched when the
   // curve itself changes.
-  function pipeline(apply: (r: PreviewRenderer, params: Float32Array, curve: Uint16Array | null) => void) {
+  function pipeline(
+    apply: (r: PreviewRenderer, params: Float32Array, curve: Uint16Array | null, brush: BrushLayers | null | undefined) => void,
+  ) {
     let inflight = false;
     let pending: EditState | null = null;
     let curveKey = "";
+    let brushK: string | null = null;
     async function pump(r: PreviewRenderer, id: number) {
       if (inflight) return;
       inflight = true;
@@ -188,12 +202,16 @@
           const next = pending;
           pending = null;
           const key = JSON.stringify(next.curve);
-          const [params, curve] = await Promise.all([
+          // Brush rasters only when strokes change (undefined: unchanged; null: none).
+          const bk = `${id}:${brushKey(next)}`;
+          const [params, curve, brush] = await Promise.all([
             api.developParams(id, next),
             key !== curveKey ? api.developCurve(next) : null,
+            bk === brushK ? undefined : brushKey(next) ? api.maskLayers(id, next) : null,
           ]);
           if (curve) curveKey = key;
-          apply(r, params, curve);
+          brushK = bk;
+          apply(r, params, curve, brush);
         }
       } catch (e) {
         error = String(e);
@@ -206,13 +224,56 @@
       pump(r, id);
     };
   }
-  const main = pipeline((r, params, curve) => {
+  const main = pipeline((r, params, curve, brush) => {
     if (curve) r.setCurve(curve);
+    if (brush !== undefined) r.setBrush("main", brush);
     r.setParams(params);
+    session.framing = r.framing;
   });
-  const side = pipeline((r, params, curve) => {
-    if (comparing) r.setCompare(params, curve);
+  const side = pipeline((r, params, curve, brush) => {
+    if (!comparing) return;
+    if (brush !== undefined) r.setBrush("compare", brush);
+    r.setCompare(params, curve);
   });
+
+  // ---- masks ----
+  const masks = $derived(masksOf(edit));
+  const selected = $derived(session.masking && !before ? session.selected : null);
+  let interacting = $state(false);
+  let spaceHeld = $state(false);
+
+  $effect(() => {
+    const r = renderer;
+    if (!r) return;
+    const show = selected !== null && (session.maskOverlay || interacting);
+    r.setOverlay(show && selected !== null ? shaderIndex(masks, selected) : null);
+  });
+
+  function setMask(i: number, m: Mask) {
+    if (!edit.masks) return;
+    edit.masks[i] = m;
+  }
+
+  function paintLive(i: number, stroke: Stroke, a: readonly number[], b: readonly number[]) {
+    const r = renderer;
+    if (!r) return;
+    r.paintLive(brushLayer(masks, i), stroke, a, b, maskSize(image.fullWidth, image.fullHeight));
+  }
+
+  function endStroke(i: number, stroke: Stroke) {
+    renderer?.endLive();
+    const m = edit.masks?.[i];
+    if (!m || m.shape.kind !== "brush") return;
+    m.shape.strokes.push(stroke);
+    session.commit(null);
+  }
+
+  function onKey(e: KeyboardEvent) {
+    if (e.key === " " && session.masking && !(e.target instanceof HTMLInputElement)) {
+      spaceHeld = e.type === "keydown";
+      if (spaceHeld) e.preventDefault();
+    }
+  }
 
   $effect(() => {
     const state = $state.snapshot(before ? beforeEdit : edit) as EditState;
@@ -246,7 +307,10 @@
   });
 </script>
 
-<div class="wrap">
+<svelte:window onkeydown={onKey} onkeyup={onKey} onblur={() => (spaceHeld = false)} />
+
+<div class="wrap" onwheel={onWheel}>
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
   <canvas
     bind:this={canvas}
     class:zoomed={!fit}
@@ -255,10 +319,26 @@
     onpointermove={onPointerMove}
     onpointerup={onPointerUp}
     onpointercancel={onPointerUp}
-    onwheel={onWheel}
   ></canvas>
   {#if cropping && oncrop && frameRect.w > 0}
     <CropOverlay crop={edit.crop} frame={frameRect} tw={turned[0]} th={turned[1]} aspect={cropAspect} {level} onchange={oncrop} {onlevel} />
+  {/if}
+  {#if selected !== null && masks[selected] && renderer && frameRect.w > 0}
+    {@const i = selected}
+    <MaskOverlay
+      mask={masks[i]}
+      frame={frameRect}
+      framing={session.framing ?? renderer.framing}
+      fullW={image.fullWidth}
+      fullH={image.fullHeight}
+      brush={session.brush}
+      passthrough={spaceHeld}
+      onchange={(m) => setMask(i, m)}
+      oncommit={() => session.commit(null)}
+      onpaint={(stroke, a, b) => paintLive(i, stroke, a, b)}
+      onstroke={(stroke) => endStroke(i, stroke)}
+      oninteract={(v) => (interacting = v)}
+    />
   {/if}
   <div class="zoom" class:hidden={cropping}>
     <button onclick={() => toggleZoom()} title="Toggle fit / 100% (Z)">{zoomLabel}</button>

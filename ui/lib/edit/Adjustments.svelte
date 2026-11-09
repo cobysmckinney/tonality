@@ -93,6 +93,10 @@
         <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M4 1v11h11M1 4h11v11" /></svg>
         Crop &amp; Rotate
       </button>
+      <button class="crop" onclick={() => session.startMasks()} title="Local adjustments: gradients and brush (M)">
+        <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><circle cx="8" cy="8" r="6" /><path d="M8 2a6 6 0 0 0 0 12Z" /></svg>
+        Masks{#if edit.masks?.length}<span class="count">{edit.masks.length}</span>{/if}
+      </button>
     </div>
     <Section title="White Balance">
       <div class="wb-mode">
@@ -319,7 +323,16 @@
     overflow-y: auto;
   }
   .tools {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: var(--space-2);
     padding: var(--space-2) var(--space-4) 0;
+  }
+  .count {
+    margin-left: auto;
+    font-family: var(--font-num);
+    font-size: var(--fs-xs);
+    color: var(--text-2);
   }
   .crop {
     display: flex;

@@ -19,4 +19,8 @@ imageSampler: string,
 /**
  * Combined sampler uniform name for `curve` + `curve_sampler`.
  */
-curveSampler: string, };
+curveSampler: string, 
+/**
+ * Combined sampler uniform name for `brush` (a 2D array) + `image_sampler`.
+ */
+brushSampler: string, };

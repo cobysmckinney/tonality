@@ -4,7 +4,13 @@ import type { Crop } from "./Crop";
 import type { Detail } from "./Detail";
 import type { Effects } from "./Effects";
 import type { Light } from "./Light";
+import type { Mask } from "./Mask";
 import type { ToneCurve } from "./ToneCurve";
 import type { WhiteBalance } from "./WhiteBalance";
 
-export type EditState = { light: Light, whiteBalance: WhiteBalance, curve: ToneCurve, color: Color, detail: Detail, effects: Effects, crop: Crop, };
+export type EditState = { light: Light, whiteBalance: WhiteBalance, curve: ToneCurve, color: Color, detail: Detail, effects: Effects, crop: Crop, 
+/**
+ * Local adjustments, applied in order. Omitted from the JSON when empty, so states saved
+ * before masks existed keep their hashes.
+ */
+masks?: Array<Mask>, };

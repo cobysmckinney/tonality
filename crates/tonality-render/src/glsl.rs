@@ -20,6 +20,8 @@ pub struct GlslProgram {
     pub image_sampler: String,
     /// Combined sampler uniform name for `curve` + `curve_sampler`.
     pub curve_sampler: String,
+    /// Combined sampler uniform name for `brush` (a 2D array) + `image_sampler`.
+    pub brush_sampler: String,
 }
 
 pub fn preview_glsl() -> Result<GlslProgram, String> {
@@ -70,8 +72,9 @@ pub fn preview_glsl() -> Result<GlslProgram, String> {
     };
     let image_sampler = sampler_for("image")?;
     let curve_sampler = sampler_for("curve")?;
+    let brush_sampler = sampler_for("brush")?;
 
-    Ok(GlslProgram { vertex, fragment, params_block, view_block, image_sampler, curve_sampler })
+    Ok(GlslProgram { vertex, fragment, params_block, view_block, image_sampler, curve_sampler, brush_sampler })
 }
 
 #[cfg(test)]
@@ -85,6 +88,8 @@ mod tests {
         assert!(p.fragment.contains(&p.image_sampler));
         assert!(p.fragment.contains(&p.curve_sampler));
         assert_ne!(p.image_sampler, p.curve_sampler);
+        assert!(p.fragment.contains(&p.brush_sampler));
+        assert!(p.fragment.contains("sampler2DArray"));
         assert!(p.fragment.contains(&p.params_block));
         assert!(p.vertex.contains(&p.view_block));
         println!("{}\n----\n{}\n{p:?}", p.vertex, p.fragment.lines().take(40).collect::<Vec<_>>().join("\n"));

@@ -3,4 +3,4 @@
 /**
  * The sections of the Adjustments panel, for copying settings between versions.
  */
-export type Panel = "whiteBalance" | "light" | "toneCurve" | "color" | "detail" | "effects" | "crop";
+export type Panel = "whiteBalance" | "light" | "toneCurve" | "color" | "detail" | "effects" | "crop" | "masks";

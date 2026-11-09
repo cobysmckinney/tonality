@@ -23,13 +23,18 @@ fn main() {
         edit.crop.rect = [v[1], v[2], v[3], v[4]];
         edit.crop.turns = v[5] as u8;
     }
+    // MASKS=masks.json (a JSON array of masks) adds local adjustments.
+    if let Ok(path) = std::env::var("MASKS") {
+        edit.masks = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+    }
     let params = DevelopParams::new(&edit, &full.color, full.width, full.height);
+    let brush = tonality_core::mask::brush_layers(&edit.masks, full.width, full.height);
     let src = Source { width: full.width, height: full.height, pixels: &full.pixels, frame: [full.width, full.height] };
     let t = Instant::now();
-    let out = gpu.render(&src, &params, &curve_lut_rgba16f(&edit), |_| {}).expect("render");
+    let out = gpu.render(&src, &params, &curve_lut_rgba16f(&edit), &brush, |_| {}).expect("render");
     println!("render in {:?}", t.elapsed());
     println!("output {}×{}", out.width, out.height);
-    if std::env::var("CROP").is_ok() {
+    if std::env::var("CROP").is_ok() || std::env::var("MASKS").is_ok() {
         let rgb: Vec<u8> = out.pixels.iter().map(|v| (v >> 8) as u8).collect();
         let img = image::RgbImage::from_raw(out.width, out.height, rgb).unwrap();
         image::imageops::thumbnail(&img, out.width / 6, out.height / 6).save(&args[1]).unwrap();

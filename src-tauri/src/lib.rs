@@ -154,6 +154,20 @@ fn develop_params(id: ImageId, edit: EditState, images: State<'_, Images>) -> Cm
     Ok(DevelopParams::new(&edit, &p.color, p.full_width, p.full_height).to_vec())
 }
 
+/// Brush mask rasters for `develop.wgsl`: three little-endian u32s (width, height, layers),
+/// then one 8-bit `width × height` layer per brush mask, in mask order.
+#[tauri::command]
+fn mask_layers(id: ImageId, edit: EditState, images: State<'_, Images>) -> CmdResult<Response> {
+    let p = images.get(id).ok_or("image not open")?;
+    let l = tonality_core::mask::brush_layers(&edit.masks, p.full_width, p.full_height);
+    let mut out = Vec::with_capacity(12 + l.data.len());
+    for v in [l.width, l.height, l.layers] {
+        out.extend_from_slice(&v.to_le_bytes());
+    }
+    out.extend_from_slice(&l.data);
+    Ok(Response::new(out))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -186,6 +200,7 @@ pub fn run() {
             export::export_images,
             develop_params,
             develop_curve,
+            mask_layers,
             history::history_open,
             history::history_commit,
             history::history_undo,

@@ -8,6 +8,7 @@ import { api } from "$lib/api";
 import type { EditState } from "$lib/bindings/EditState";
 import { invalidateThumb } from "$lib/library/thumbs";
 import type { PreviewRenderer } from "./renderer";
+import { brushKey } from "./masks";
 
 const BRANCH_EDGE = 200;
 const LIBRARY_EDGE = 640;
@@ -26,10 +27,19 @@ function serial<T>(f: () => Promise<T>): Promise<T> {
   return next;
 }
 
+/** Everything needed to render `state`: params, curve and brush rasters. */
+function inputs(imageId: number, state: EditState) {
+  return Promise.all([
+    api.developParams(imageId, state),
+    api.developCurve(state),
+    brushKey(state) ? api.maskLayers(imageId, state) : null,
+  ]);
+}
+
 async function still(imageId: number, state: EditState, edge: number) {
-  const [params, curve] = await Promise.all([api.developParams(imageId, state), api.developCurve(state)]);
+  const [params, curve, brush] = await inputs(imageId, state);
   if (!renderer || rendererImage !== imageId) return null;
-  return renderer.renderStill(edge, params, curve);
+  return renderer.renderStill(edge, params, curve, brush);
 }
 
 /** Called by Canvas once its renderer shows `imageId` (null when it goes away). */
@@ -89,8 +99,8 @@ function flushSave() {
   pending = null;
   // Render synchronously now (the renderer may be about to go away), upload afterwards.
   const r = renderer;
-  const canvasP = Promise.all([api.developParams(job.imageId, job.state), api.developCurve(job.state)]).then(
-    ([params, curve]) => (rendererImage === job.imageId && renderer === r ? r.renderStill(LIBRARY_EDGE, params, curve) : null),
+  const canvasP = inputs(job.imageId, job.state).then(([params, curve, brush]) =>
+    rendererImage === job.imageId && renderer === r ? r.renderStill(LIBRARY_EDGE, params, curve, brush) : null,
   );
   serial(async () => {
     const c = await canvasP;

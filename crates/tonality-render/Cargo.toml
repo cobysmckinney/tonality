@@ -14,5 +14,6 @@ ts-rs.workspace = true
 wgpu = "30"
 
 [dev-dependencies]
+serde_json.workspace = true
 tonality-raw.workspace = true
 image = { version = "0.25", default-features = false, features = ["png"] }

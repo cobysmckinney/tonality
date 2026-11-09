@@ -4,6 +4,7 @@
   import HistoryPanel from "$lib/history/HistoryPanel.svelte";
   import ApplyDialog from "$lib/history/ApplyDialog.svelte";
   import CropPanel from "./CropPanel.svelte";
+  import MaskPanel from "./MaskPanel.svelte";
   import { turn } from "./crop";
   import { library } from "$lib/library/library.svelte";
   import { session } from "./session.svelte";
@@ -44,6 +45,33 @@
     if ((e.key === "r" || e.key === "R") && !e.ctrlKey && !e.metaKey && !e.altKey && session.edit) {
       session.startCrop();
       return;
+    }
+    const plain = !e.ctrlKey && !e.metaKey && !e.altKey;
+    if ((e.key === "m" || e.key === "M") && plain && session.edit) {
+      if (session.masking) session.stopMasks();
+      else session.startMasks();
+      return;
+    }
+    if (session.masking && plain) {
+      // Mask mode: O overlay, Delete removes the selected mask, [ ] brush size, Esc leaves.
+      const sel = session.selected;
+      if (e.key === "o" || e.key === "O") {
+        session.maskOverlay = !session.maskOverlay;
+        return;
+      }
+      if ((e.key === "Delete" || e.key === "Backspace") && sel !== null) {
+        session.deleteMask(sel);
+        return;
+      }
+      if (e.key === "[" || e.key === "]") {
+        const b = session.brush;
+        b.size = Math.min(0.3, Math.max(0.003, b.size * (e.key === "]" ? 1.2 : 1 / 1.2)));
+        return;
+      }
+      if (e.key === "Escape" && !session.compare) {
+        session.stopMasks();
+        return;
+      }
     }
     if (e.key === "\\" && !e.repeat) before = true;
     if (e.key === "Escape" && session.compare) {
@@ -146,6 +174,8 @@
   <aside class="adjust">
     {#if session.image && session.edit && session.cropping}
       <CropPanel image={session.image} {level} ontogglelevel={() => (level = !level)} />
+    {:else if session.image && session.edit && session.masking}
+      <MaskPanel {histogram} />
     {:else if session.image && session.edit}
       <Adjustments
         bind:edit={session.edit}

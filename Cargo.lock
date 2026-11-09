@@ -5067,6 +5067,7 @@ dependencies = [
  "naga",
  "pollster",
  "serde",
+ "serde_json",
  "tonality-core",
  "tonality-raw",
  "ts-rs",
