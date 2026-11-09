@@ -5,6 +5,9 @@
   import type { ImageInfo } from "$lib/bindings/ImageInfo";
   import { MAX_ZOOM, MIN_ZOOM, PreviewRenderer, type Histogram } from "./renderer";
   import { attachRenderer } from "./versions";
+  import type { Crop } from "$lib/bindings/Crop";
+  import CropOverlay from "./CropOverlay.svelte";
+  import { FULL, turnedSize } from "./crop";
 
   interface Props {
     image: ImageInfo;
@@ -16,9 +19,31 @@
     /** Another version to show side by side, labelled `compare.label`. */
     compare?: { label: string; current: string; state: EditState } | null;
     oncloseCompare?: () => void;
+    /** Crop mode: show the whole straightened frame with the crop box over it. */
+    cropping?: boolean;
+    cropAspect?: number | null;
+    level?: boolean;
+    oncrop?: (c: Crop) => void;
+    onlevel?: () => void;
     onhistogram?: (h: Histogram) => void;
   }
-  let { image, pixels, edit, before = false, beforeEdit, compare = null, oncloseCompare, onhistogram }: Props = $props();
+  let {
+    image,
+    pixels,
+    edit,
+    before = false,
+    beforeEdit,
+    compare = null,
+    oncloseCompare,
+    cropping = false,
+    cropAspect = null,
+    level = false,
+    oncrop,
+    onlevel,
+    onhistogram,
+  }: Props = $props();
+  let frameRect = $state({ x: 0, y: 0, w: 0, h: 0 });
+  const turned = $derived(turnedSize(edit.crop, image.fullWidth, image.fullHeight));
 
   let canvas: HTMLCanvasElement;
   let renderer = $state<PreviewRenderer | null>(null);
@@ -49,6 +74,7 @@
           };
         }
         r.onHistogram = (h) => onhistogram?.(h);
+        r.onLayout = (rect) => (frameRect = rect);
         r.onView = (s, f) => {
           scale = s;
           fit = f;
@@ -111,7 +137,7 @@
   }
 
   function onPointerDown(e: PointerEvent) {
-    if (e.button !== 0 || !renderer) return;
+    if (e.button !== 0 || !renderer || cropping) return;
     const [x, y] = local(e);
     if (renderer.isFit && !renderer.hit(x, y)) return;
     drag = { x: e.clientX, y: e.clientY, moved: false, id: e.pointerId };
@@ -140,6 +166,7 @@
 
   function onWheel(e: WheelEvent) {
     e.preventDefault();
+    if (cropping) return;
     const lines = e.deltaMode === 1 ? e.deltaY * 16 : e.deltaY;
     zoomBy(Math.exp(-lines * 0.0025), local(e));
   }
@@ -189,8 +216,14 @@
 
   $effect(() => {
     const state = $state.snapshot(before ? beforeEdit : edit) as EditState;
+    // While cropping, show the whole (straightened) frame; the overlay shows the crop.
+    if (cropping && !before) state.crop = { ...state.crop, rect: [...FULL] };
     const r = renderer;
     if (r) main(r, image.id, state);
+  });
+
+  $effect(() => {
+    if (cropping) renderer?.setZoom(null);
   });
 
   let comparing = false;
@@ -224,7 +257,10 @@
     onpointercancel={onPointerUp}
     onwheel={onWheel}
   ></canvas>
-  <div class="zoom">
+  {#if cropping && oncrop && frameRect.w > 0}
+    <CropOverlay crop={edit.crop} frame={frameRect} tw={turned[0]} th={turned[1]} aspect={cropAspect} {level} onchange={oncrop} {onlevel} />
+  {/if}
+  <div class="zoom" class:hidden={cropping}>
     <button onclick={() => toggleZoom()} title="Toggle fit / 100% (Z)">{zoomLabel}</button>
     {#if loadingDetail}<span class="loading">Loading detail…</span>{/if}
   </div>
@@ -292,6 +328,9 @@
     gap: var(--space-2);
     align-items: center;
     font-size: var(--fs-xs);
+  }
+  .zoom.hidden {
+    display: none;
   }
   .zoom button {
     min-width: 44px;

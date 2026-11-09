@@ -16,11 +16,25 @@ fn main() {
     edit.detail.sharpen_amount = args.get(2).map_or(0.0, |v| v.parse().unwrap());
     edit.detail.luminance_noise = args.get(3).map_or(0.0, |v| v.parse().unwrap());
     edit.detail.color_noise = args.get(3).map_or(0.0, |v| v.parse().unwrap());
-    let params = DevelopParams::new(&edit, &full.color);
+    // CROP="angle,x,y,w,h,turns" frames the render.
+    if let Ok(c) = std::env::var("CROP") {
+        let v: Vec<f32> = c.split(',').map(|x| x.parse().unwrap()).collect();
+        edit.crop.angle = v[0];
+        edit.crop.rect = [v[1], v[2], v[3], v[4]];
+        edit.crop.turns = v[5] as u8;
+    }
+    let params = DevelopParams::new(&edit, &full.color, full.width, full.height);
     let src = Source { width: full.width, height: full.height, pixels: &full.pixels, frame: [full.width, full.height] };
     let t = Instant::now();
     let out = gpu.render(&src, &params, &curve_lut_rgba16f(&edit), |_| {}).expect("render");
     println!("render in {:?}", t.elapsed());
+    println!("output {}×{}", out.width, out.height);
+    if std::env::var("CROP").is_ok() {
+        let rgb: Vec<u8> = out.pixels.iter().map(|v| (v >> 8) as u8).collect();
+        let img = image::RgbImage::from_raw(out.width, out.height, rgb).unwrap();
+        image::imageops::thumbnail(&img, out.width / 6, out.height / 6).save(&args[1]).unwrap();
+        return;
+    }
     // Mean |laplacian| of luma in the 1:1 crop (detail energy), and the seam check: the mean
     // vertical step across a tile boundary vs. across ordinary rows.
     let w = out.width as usize;

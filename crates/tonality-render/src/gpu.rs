@@ -6,6 +6,8 @@
 
 use std::sync::mpsc;
 
+use tonality_core::geometry::Geometry;
+
 use crate::{DevelopParams, DEVELOP_WGSL};
 
 /// Output tile size (pixels).
@@ -14,7 +16,7 @@ const TILE: u32 = 2048;
 const APRON: u32 = 24;
 const HALF_ONE: u16 = 0x3C00;
 
-/// Camera-space input to render: RGB half floats (bit patterns), row-major.
+/// Camera-space input to render (the whole, unframed image; `params` carries the framing): RGB half floats (bit patterns), row-major.
 pub struct Source<'a> {
     pub width: u32,
     pub height: u32,
@@ -107,10 +109,22 @@ impl Gpu {
         curve_lut: &[u8],
         mut progress: impl FnMut(f32),
     ) -> Result<Rendered, String> {
-        let (w, h) = (src.width, src.height);
-        if src.pixels.len() != (w * h * 3) as usize {
+        let (sw_all, sh_all) = (src.width, src.height);
+        if src.pixels.len() != (sw_all * sh_all * 3) as usize {
             return Err("source size mismatch".into());
         }
+        // Output size: the framed (cropped) size, at the source's scale.
+        let scale = sw_all as f32 / src.frame[0] as f32;
+        let w = ((params.geo0[3] * scale).round() as u32).max(1);
+        let h = ((params.geo1[3] * scale).round() as u32).max(1);
+        let geo = Geometry {
+            width: params.geo0[3],
+            height: params.geo1[3],
+            m: [
+                [params.geo0[0], params.geo0[1], params.geo0[2]],
+                [params.geo1[0], params.geo1[1], params.geo1[2]],
+            ],
+        };
         let d = &self.device;
         let params_buf = uniform(d, "params", bytes_f32(&params.to_vec()));
         let curve = self.texture("curve", crate::params::CURVE_LUT_SIZE as u32, 1);
@@ -132,16 +146,20 @@ impl Gpu {
         for (n, &(x, y)) in tiles.iter().enumerate() {
             let tw = TILE.min(w - x);
             let th = TILE.min(h - y);
-            // Source region with apron, clamped to the image.
-            let sx = x.saturating_sub(APRON);
-            let sy = y.saturating_sub(APRON);
-            let sw = (x + tw + APRON).min(w) - sx;
-            let sh = (y + th + APRON).min(h) - sy;
+            // The source area this tile reads (rotation makes it larger), plus an apron for
+            // Detail's neighbourhood, clamped to the image.
+            let (fw, fh) = (w as f32, h as f32);
+            let b = geo.source_bounds([x as f32 / fw, y as f32 / fh], [(x + tw) as f32 / fw, (y + th) as f32 / fh]);
+            let px = |v: f32, size: u32| (v * size as f32).clamp(0.0, size as f32);
+            let sx = (px(b[0], sw_all).floor() as u32).saturating_sub(APRON).min(sw_all - 1);
+            let sy = (px(b[1], sh_all).floor() as u32).saturating_sub(APRON).min(sh_all - 1);
+            let sw = ((px(b[2], sw_all).ceil() as u32 + APRON).min(sw_all) - sx).max(1);
+            let sh = ((px(b[3], sh_all).ceil() as u32 + APRON).min(sh_all) - sy).max(1);
 
             let image = self.texture("image", sw, sh);
             let mut rgba = Vec::with_capacity((sw * sh * 4) as usize);
             for row in sy..sy + sh {
-                let start = ((row * w + sx) * 3) as usize;
+                let start = ((row * sw_all + sx) * 3) as usize;
                 for p in src.pixels[start..start + (sw * 3) as usize].as_chunks::<3>().0 {
                     rgba.extend_from_slice(&[p[0], p[1], p[2], HALF_ONE]);
                 }
@@ -154,11 +172,11 @@ impl Gpu {
             );
             drop(rgba);
 
-            let (fw, fh) = (w as f32, h as f32);
+            let (uw, uh) = (sw_all as f32, sh_all as f32);
             let view = [
                 1.0, 1.0, 0.0, 0.0, // xform: the quad fills the tile
-                x as f32 / fw, y as f32 / fh, tw as f32 / fw, th as f32 / fh, // quad
-                sx as f32 / fw, sy as f32 / fh, sw as f32 / fw, sh as f32 / fh, // tex
+                x as f32 / fw, y as f32 / fh, tw as f32 / fw, th as f32 / fh, // quad (frame)
+                sx as f32 / uw, sy as f32 / uh, sw as f32 / uw, sh as f32 / uh, // tex (source)
                 src.frame[0] as f32, src.frame[1] as f32, 0.0, 0.0, // frame
             ];
             let view_buf = uniform(d, "view", bytes_f32(&view));

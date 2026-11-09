@@ -1,4 +1,5 @@
 use tonality_core::color::CameraColor;
+use tonality_core::geometry::Geometry;
 use tonality_core::EditState;
 
 /// Uniform block matching `struct Params` in `develop.wgsl` (std140-compatible: all vec4).
@@ -17,12 +18,16 @@ pub struct DevelopParams {
     pub grain: [f32; 4],
     pub detail0: [f32; 4],
     pub detail1: [f32; 4],
+    pub geo0: [f32; 4],
+    pub geo1: [f32; 4],
 }
 
 impl DevelopParams {
-    pub const FLOATS: usize = 68;
+    pub const FLOATS: usize = 76;
 
-    pub fn new(edit: &EditState, color: &CameraColor) -> Self {
+    /// `src_w × src_h`: the full-resolution source size (framing is computed in its pixels).
+    pub fn new(edit: &EditState, color: &CameraColor, src_w: u32, src_h: u32) -> Self {
+        let geo = Geometry::new(&edit.crop, src_w as f32, src_h as f32);
         let (shot_t, shot_tint) = color.as_shot_temperature_tint();
         let wbs = &edit.white_balance;
         let wb = if wbs.temperature.is_none() && wbs.tint.is_none() {
@@ -60,6 +65,8 @@ impl DevelopParams {
                 u(d.luminance_noise),
             ],
             detail1: [u(d.color_noise), 0.0, 0.0, 0.0],
+            geo0: [geo.m[0][0], geo.m[0][1], geo.m[0][2], geo.width],
+            geo1: [geo.m[1][0], geo.m[1][1], geo.m[1][2], geo.height],
         }
     }
 
@@ -80,6 +87,8 @@ impl DevelopParams {
         v.extend_from_slice(&self.grain);
         v.extend_from_slice(&self.detail0);
         v.extend_from_slice(&self.detail1);
+        v.extend_from_slice(&self.geo0);
+        v.extend_from_slice(&self.geo1);
         v
     }
 }
@@ -116,13 +125,13 @@ mod tests {
 
     #[test]
     fn layout_matches_floats() {
-        assert_eq!(DevelopParams::new(&EditState::default(), &color()).to_vec().len(), DevelopParams::FLOATS);
+        assert_eq!(DevelopParams::new(&EditState::default(), &color(), 600, 400).to_vec().len(), DevelopParams::FLOATS);
         assert_eq!(std::mem::size_of::<DevelopParams>(), DevelopParams::FLOATS * 4);
     }
 
     #[test]
     fn default_is_as_shot_and_neutral() {
-        let p = DevelopParams::new(&EditState::default(), &color());
+        let p = DevelopParams::new(&EditState::default(), &color(), 600, 400);
         let m = color().as_shot_multipliers();
         assert_eq!(&p.wb[..3], &m[..]);
         assert_eq!(p.light0, [1.0, 0.0, 0.0, 0.0]);
@@ -132,7 +141,7 @@ mod tests {
     fn exposure_is_in_stops() {
         let mut e = EditState::default();
         e.light.exposure = 1.0;
-        assert!((DevelopParams::new(&e, &color()).light0[0] - 2.0).abs() < 1e-6);
+        assert!((DevelopParams::new(&e, &color(), 600, 400).light0[0] - 2.0).abs() < 1e-6);
     }
 
     #[test]
@@ -142,8 +151,8 @@ mod tests {
         let mut e = EditState::default();
         e.white_balance.temperature = Some(t + 1500.0);
         e.white_balance.tint = Some(tint);
-        let warm = DevelopParams::new(&e, &c).wb;
-        let shot = DevelopParams::new(&EditState::default(), &c).wb;
+        let warm = DevelopParams::new(&e, &c, 600, 400).wb;
+        let shot = DevelopParams::new(&EditState::default(), &c, 600, 400).wb;
         assert!(warm[0] / warm[2] > shot[0] / shot[2], "warm {warm:?} vs shot {shot:?}");
     }
 }

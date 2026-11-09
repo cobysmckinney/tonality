@@ -22,15 +22,19 @@ struct Params {
     grain: vec4<f32>,    // x: amount (0..1), y: size (0..1)
     detail0: vec4<f32>,  // x: sharpen amount, y: sharpen radius (px), z: masking (0..1), w: luminance NR (0..1)
     detail1: vec4<f32>,  // x: colour NR (0..1)
+    // Framing (crop / rotate): source uv = [geo0.xyz, geo1.xyz] · (frame position, 1).
+    geo0: vec4<f32>,     // w: output width (source px)
+    geo1: vec4<f32>,     // w: output height (source px)
 };
 
-// Geometry. All rects are (x, y, w, h) in uv units of the full image (0..1), so the preview,
-// zoomed-in tiles and export tiles all address the same image the same way.
+// Where to draw. Rects are (x, y, w, h). The *frame* is the framed (cropped, rotated) output,
+// 0..1 across; the *source* is the full-resolution image, 0..1 across. So the preview, zoomed
+// tiles and export tiles all address the same image the same way.
 struct View {
     xform: vec4<f32>,   // xy: scale, zw: offset — places the quad in clip space
-    quad: vec4<f32>,    // the part of the image the quad shows
-    tex: vec4<f32>,     // the part of the image the bound texture holds
-    frame: vec4<f32>,   // xy: full-resolution size in pixels
+    quad: vec4<f32>,    // the part of the frame the quad shows
+    tex: vec4<f32>,     // the part of the source the bound texture holds
+    frame: vec4<f32>,   // xy: full-resolution source size in pixels
 };
 
 @group(0) @binding(0) var<uniform> params: Params;
@@ -43,9 +47,9 @@ struct View {
 
 struct VsOut {
     @builtin(position) pos: vec4<f32>,
-    @location(0) uv: vec2<f32>,                   // full-image coordinates
-    @location(1) tc: vec2<f32>,                   // texture coordinates
-    @location(2) @interpolate(flat) px: vec4<f32>, // xy: texture units per full-res pixel, z: aspect
+    @location(0) f: vec2<f32>,                       // frame coordinates
+    @location(1) @interpolate(flat) tex: vec4<f32>,  // view.tex
+    @location(2) @interpolate(flat) px: vec4<f32>,   // xy: texture units per source pixel; zw: source uv per pixel
 };
 
 @vertex
@@ -59,9 +63,9 @@ fn vs_main(@builtin(vertex_index) i: u32) -> VsOut {
     let local = vec2<f32>(p.x * 0.5 + 0.5, 0.5 - p.y * 0.5);
     var out: VsOut;
     out.pos = vec4<f32>(p * view.xform.xy + view.xform.zw, 0.0, 1.0);
-    out.uv = view.quad.xy + local * view.quad.zw;
-    out.tc = (out.uv - view.tex.xy) / view.tex.zw;
-    out.px = vec4<f32>(1.0 / (view.frame.xy * view.tex.zw), view.frame.x / view.frame.y, 0.0);
+    out.f = view.quad.xy + local * view.quad.zw;
+    out.tex = view.tex;
+    out.px = vec4<f32>(1.0 / (view.frame.xy * view.tex.zw), 1.0 / view.frame.xy);
     return out;
 }
 
@@ -388,6 +392,17 @@ fn develop(cam: vec3<f32>, uv: vec2<f32>, aspect: f32) -> vec3<f32> {
 
 @fragment
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
-    let cam = detail(in.tc, in.px.xy);
-    return vec4<f32>(develop(cam, in.uv, in.px.z), 1.0);
+    let uv = vec2<f32>(dot(params.geo0.xyz, vec3<f32>(in.f, 1.0)), dot(params.geo1.xyz, vec3<f32>(in.f, 1.0)));
+    // Outside the source (a straightened frame's corners while cropping): leave the background.
+    let eps = 0.5 * in.px.zw;
+    if (any(uv < -eps) || any(uv > vec2<f32>(1.0) + eps)) {
+        discard;
+    }
+    let tc = (uv - in.tex.xy) / in.tex.zw;
+    // Outside this texture (a zoomed-in full-res tile): whatever is underneath shows.
+    if (any(tc < vec2<f32>(0.0)) || any(tc > vec2<f32>(1.0))) {
+        discard;
+    }
+    let cam = detail(tc, in.px.xy);
+    return vec4<f32>(develop(cam, in.f, params.geo0.w / params.geo1.w), 1.0);
 }

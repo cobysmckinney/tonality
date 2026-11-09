@@ -1,6 +1,7 @@
 // The image currently open in Edit. Module-level so it survives switching to Library and back.
 import { api } from "$lib/api";
 import type { Checkout } from "$lib/bindings/Checkout";
+import type { Crop } from "$lib/bindings/Crop";
 import type { EditState } from "$lib/bindings/EditState";
 import type { HistoryView } from "$lib/bindings/HistoryView";
 import type { ImageInfo } from "$lib/bindings/ImageInfo";
@@ -17,6 +18,32 @@ class EditSession {
   compare = $state<{ branch: string; state: EditState } | null>(null);
   /** Branch whose settings the "Copy settings" dialog is offering. */
   applying = $state<string | null>(null);
+  /** Crop mode: the crop as it was on entering (for Cancel). Changes commit on Done. */
+  cropEntry = $state<Crop | null>(null);
+  /** Locked crop aspect (pixel w/h), or null for free. */
+  cropAspect = $state<number | null>(null);
+
+  get cropping() {
+    return this.cropEntry !== null;
+  }
+
+  startCrop() {
+    if (!this.edit || this.cropping) return;
+    this.compare = null;
+    this.cropEntry = $state.snapshot(this.edit.crop);
+  }
+
+  finishCrop() {
+    if (!this.cropping) return;
+    this.cropEntry = null;
+    return this.commit(null);
+  }
+
+  cancelCrop() {
+    if (!this.cropEntry || !this.edit) return;
+    this.edit.crop = this.cropEntry;
+    this.cropEntry = null;
+  }
   /** Preview pixels (not reactive: large and replaced wholesale). Read when `image` changes. */
   pixels: Uint16Array | null = null;
   private defaults: EditState | null = null;
@@ -41,6 +68,7 @@ class EditSession {
       this.pixels = pixels;
       this.compare = null;
       this.applying = null;
+      this.cropEntry = null;
       this.edit = checkout.state;
       this.history = checkout.view;
       this.image = info;

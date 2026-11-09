@@ -3,6 +3,8 @@
   import Canvas from "./Canvas.svelte";
   import HistoryPanel from "$lib/history/HistoryPanel.svelte";
   import ApplyDialog from "$lib/history/ApplyDialog.svelte";
+  import CropPanel from "./CropPanel.svelte";
+  import { turn } from "./crop";
   import { library } from "$lib/library/library.svelte";
   import { session } from "./session.svelte";
   import type { EditState } from "$lib/bindings/EditState";
@@ -13,12 +15,36 @@
   let beforeEdit = $state<EditState | null>(null);
   let histogram = $state.raw<Histogram | null>(null);
   let canvas = $state<ReturnType<typeof Canvas> | null>(null);
+  let level = $state(false);
   $effect(() => {
     session.defaultEdit().then((d) => (beforeEdit = d));
   });
 
   function onKeyDown(e: KeyboardEvent) {
     if (e.target instanceof HTMLInputElement) return;
+    if (session.cropping) {
+      // Crop mode owns the keyboard: Enter applies, Esc cancels, [ ] rotate.
+      const mod = e.ctrlKey || e.metaKey;
+      if (e.key === "Enter") {
+        e.preventDefault();
+        level = false;
+        session.finishCrop();
+      } else if (e.key === "Escape") {
+        level = false;
+        session.cancelCrop();
+      } else if ((e.key === "r" || e.key === "R") && !mod) {
+        level = false;
+        session.finishCrop();
+      } else if ((e.key === "[" || e.key === "]") && session.edit) {
+        session.edit.crop = turn(session.edit.crop, e.key === "]" ? 1 : -1);
+        if (session.cropAspect) session.cropAspect = 1 / session.cropAspect;
+      } else if (mod) e.preventDefault(); // no undo/zoom mid-crop
+      return;
+    }
+    if ((e.key === "r" || e.key === "R") && !e.ctrlKey && !e.metaKey && !e.altKey && session.edit) {
+      session.startCrop();
+      return;
+    }
     if (e.key === "\\" && !e.repeat) before = true;
     if (e.key === "Escape" && session.compare) {
       session.stopCompare();
@@ -87,6 +113,11 @@
           ? { label: session.compare.branch, current: session.history.head.branch, state: session.compare.state }
           : null}
         oncloseCompare={() => session.stopCompare()}
+        cropping={session.cropping}
+        cropAspect={session.cropAspect}
+        {level}
+        oncrop={(c) => session.edit && (session.edit.crop = c)}
+        onlevel={() => (level = false)}
         onhistogram={(h) => (histogram = h)}
       />
       <div class="caption">
@@ -113,7 +144,9 @@
   </section>
 
   <aside class="adjust">
-    {#if session.image && session.edit}
+    {#if session.image && session.edit && session.cropping}
+      <CropPanel image={session.image} {level} ontogglelevel={() => (level = !level)} />
+    {:else if session.image && session.edit}
       <Adjustments
         bind:edit={session.edit}
         image={session.image}

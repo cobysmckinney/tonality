@@ -134,6 +134,9 @@ pub async fn export_images(
         .map_err(|e| e.to_string())?
 }
 
+/// A downscaled source: width, height, RGB halves.
+type Scaled = (u32, u32, Vec<u16>);
+
 fn run(
     jobs: Vec<Job>,
     settings: ExportSettings,
@@ -163,16 +166,8 @@ fn run(
                 continue;
             }
         };
-        let (w, h, pixels) = match settings.long_edge {
-            Some(edge) if edge < full.width.max(full.height) => full.scaled(edge),
-            _ => (full.width, full.height, Vec::new()),
-        };
-        let src = Source {
-            width: w,
-            height: h,
-            pixels: if pixels.is_empty() { &full.pixels } else { &pixels },
-            frame: [full.width, full.height],
-        };
+        // Downscaled sources, by source long edge (versions with the same crop share one).
+        let mut scaled: Vec<(u32, Scaled)> = Vec::new();
 
         for (suffix, edit) in &job.versions {
             let label = match suffix {
@@ -181,7 +176,23 @@ fn run(
             };
             emit(done as f32, &label);
             let result = (|| -> Result<PathBuf, String> {
-                let params = DevelopParams::new(edit, &full.color);
+                let params = DevelopParams::new(edit, &full.color, full.width, full.height);
+                // The long-edge limit applies to the framed output; scale the source to match.
+                let out_long = params.geo0[3].max(params.geo1[3]);
+                let full_long = full.width.max(full.height);
+                let src_long = match settings.long_edge {
+                    Some(edge) if (edge as f32) < out_long => ((full_long as f32 * edge as f32 / out_long).round() as u32).max(1),
+                    _ => full_long,
+                };
+                let src = if src_long >= full_long {
+                    Source { width: full.width, height: full.height, pixels: &full.pixels, frame: [full.width, full.height] }
+                } else {
+                    if !scaled.iter().any(|(l, _)| *l == src_long) {
+                        scaled.push((src_long, full.scaled(src_long)));
+                    }
+                    let (_, (w, h, px)) = scaled.iter().find(|(l, _)| *l == src_long).unwrap();
+                    Source { width: *w, height: *h, pixels: px, frame: [full.width, full.height] }
+                };
                 let rendered = gpu()?.render(&src, &params, &curve_lut_rgba16f(edit), |f| emit(done as f32 + f * 0.9, &label))?;
                 let target = unique_path(&folder, &sanitize(&label), settings.format.extension());
                 write(&rendered, &target, &settings)?;

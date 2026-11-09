@@ -26,7 +26,7 @@
       if (!src) return;
       const { session } = await import("$lib/edit/session.svelte");
       const { snapshotNextFrame } = await import("$lib/edit/versions");
-      const snapshot = async () => api.devSaveSnapshot(await snapshotNextFrame());
+      const snapshot = async (name: string | null = null) => api.devSaveSnapshot(await snapshotNextFrame(), name);
       const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
       try {
         await new Function("ctx", `return (async ({ app, api, library, session, sleep, snapshot }) => { ${src} })(ctx);`)({

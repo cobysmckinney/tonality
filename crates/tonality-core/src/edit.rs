@@ -17,6 +17,7 @@ pub struct EditState {
     pub color: Color,
     pub detail: Detail,
     pub effects: Effects,
+    pub crop: Crop,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, TS)]
@@ -163,6 +164,29 @@ impl Default for Grain {
     }
 }
 
+/// Framing: quarter turns and flip (lossless), then a fine rotation, then a crop.
+/// See [`crate::geometry`] for how this maps output pixels to the source.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(default, rename_all = "camelCase")]
+#[ts(export)]
+pub struct Crop {
+    /// Clockwise quarter turns, 0..=3.
+    pub turns: u8,
+    /// Mirror left-right (after turning).
+    pub flip: bool,
+    /// Straighten angle in degrees, -45..=45; positive turns the image clockwise.
+    pub angle: f32,
+    /// Crop rectangle `[x, y, w, h]` as fractions of the turned frame (before straightening).
+    /// Must lie inside the rotated image; `[0, 0, 1, 1]` with no angle is uncropped.
+    pub rect: [f32; 4],
+}
+
+impl Default for Crop {
+    fn default() -> Self {
+        Self { turns: 0, flip: false, angle: 0.0, rect: [0.0, 0.0, 1.0, 1.0] }
+    }
+}
+
 /// The sections of the Adjustments panel, for copying settings between versions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -174,11 +198,12 @@ pub enum Panel {
     Color,
     Detail,
     Effects,
+    Crop,
 }
 
 impl Panel {
-    pub const ALL: [Panel; 6] =
-        [Panel::WhiteBalance, Panel::Light, Panel::ToneCurve, Panel::Color, Panel::Detail, Panel::Effects];
+    pub const ALL: [Panel; 7] =
+        [Panel::WhiteBalance, Panel::Light, Panel::ToneCurve, Panel::Color, Panel::Detail, Panel::Effects, Panel::Crop];
 
     pub fn label(self) -> &'static str {
         match self {
@@ -188,6 +213,7 @@ impl Panel {
             Panel::Color => "Color",
             Panel::Detail => "Detail",
             Panel::Effects => "Effects",
+            Panel::Crop => "Crop",
         }
     }
 }
@@ -204,6 +230,7 @@ impl EditState {
                 Panel::Color => out.color = src.color.clone(),
                 Panel::Detail => out.detail = src.detail.clone(),
                 Panel::Effects => out.effects = src.effects.clone(),
+                Panel::Crop => out.crop = src.crop.clone(),
             }
         }
         out
@@ -236,6 +263,8 @@ enum Fmt {
     Plain,
     /// Unsigned, with this many decimals.
     Decimal(usize),
+    /// Signed degrees, one decimal.
+    Degrees,
 }
 
 struct Field {
@@ -271,6 +300,7 @@ const FIELDS: &[Field] = &[
     Field { label: "Sharpen Masking", get: |s| Some(s.detail.sharpen_masking), fmt: Fmt::Plain },
     Field { label: "Noise Reduction", get: |s| Some(s.detail.luminance_noise), fmt: Fmt::Plain },
     Field { label: "Color Noise Reduction", get: |s| Some(s.detail.color_noise), fmt: Fmt::Plain },
+    Field { label: "Straighten", get: |s| Some(s.crop.angle), fmt: Fmt::Degrees },
     Field { label: "Vignette", get: |s| Some(s.effects.vignette.amount), fmt: Fmt::Signed(0) },
     Field { label: "Vignette Midpoint", get: |s| Some(s.effects.vignette.midpoint), fmt: Fmt::Plain },
     Field { label: "Vignette Feather", get: |s| Some(s.effects.vignette.feather), fmt: Fmt::Plain },
@@ -315,6 +345,7 @@ fn format_value(fmt: &Fmt, v: Option<f32>) -> String {
         (Fmt::Kelvin, Some(v)) => format!("{}K", v.round() as i64),
         (Fmt::SignedOpt, Some(v)) => format_value(&Fmt::Signed(0), Some(v)),
         (Fmt::Plain, v) => format!("{}", v.unwrap_or(0.0).round() as i64),
+        (Fmt::Degrees, v) => format!("{}°", format_value(&Fmt::Signed(1), v)),
         (Fmt::Decimal(d), v) => format!("{:.d$}", v.unwrap_or(0.0), d = *d),
         (_, None) => "As Shot".into(),
     }
@@ -329,7 +360,18 @@ fn all_fields() -> impl Iterator<Item = &'static Field> {
 /// `"White Balance As Shot"`, `"Shadows, Blacks"` or `"5 adjustments"`.
 pub fn describe_change(prev: &EditState, next: &EditState) -> String {
     let changed: Vec<&Field> = all_fields().filter(|f| (f.get)(prev) != (f.get)(next)).collect();
-    let curves: Vec<&str> = CURVES.iter().filter(|(_, c)| c(prev) != c(next)).map(|(l, _)| *l).collect();
+    let mut curves: Vec<&str> = CURVES.iter().filter(|(_, c)| c(prev) != c(next)).map(|(l, _)| *l).collect();
+    // Framing changes that aren't scalars are named, like curves.
+    let (a, b) = (&prev.crop, &next.crop);
+    if a.turns != b.turns {
+        curves.push("Rotate");
+    }
+    if a.flip != b.flip {
+        curves.push("Flip");
+    }
+    if a.rect != b.rect {
+        curves.push("Crop");
+    }
     let wb_as_shot = next.white_balance == WhiteBalance::default();
     match (changed.as_slice(), curves.as_slice()) {
         ([], []) => "No change".into(),
@@ -379,6 +421,11 @@ mod tests {
         assert_eq!(describe_change(&a, &e), "Red Curve");
         e.effects.vignette.midpoint = 30.0;
         assert_eq!(describe_change(&EditState { curve: e.curve.clone(), ..a.clone() }, &e), "Vignette Midpoint 30");
+        let mut g = a.clone();
+        g.crop.angle = 2.34;
+        assert_eq!(describe_change(&a, &g), "Straighten +2.3°");
+        g.crop.rect = [0.1, 0.1, 0.8, 0.8];
+        assert_eq!(describe_change(&a, &g), "Straighten, Crop");
         let mut f = a.clone();
         f.detail.sharpen_radius = 1.5;
         assert_eq!(describe_change(&a, &f), "Sharpen Radius 1.5");

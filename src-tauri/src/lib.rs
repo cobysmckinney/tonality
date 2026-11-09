@@ -65,9 +65,14 @@ fn dev_script() -> Option<String> {
 
 /// Dev/test hook: save a `data:image/png;base64,…` URL to `TONALITY_SNAPSHOT`.
 #[tauri::command]
-fn dev_save_snapshot(data_url: String) -> CmdResult<()> {
+fn dev_save_snapshot(data_url: String, name: Option<String>) -> CmdResult<()> {
     use base64::Engine;
-    let path = dev_snapshot_path().ok_or("TONALITY_SNAPSHOT not set")?;
+    let mut path = std::path::PathBuf::from(dev_snapshot_path().ok_or("TONALITY_SNAPSHOT not set")?);
+    // Named snapshots go next to it: `snap.png` + "crop" → `snap-crop.png`.
+    if let Some(n) = name.filter(|n| n.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')) {
+        let stem = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+        path.set_file_name(format!("{stem}-{n}.png"));
+    }
     let b64 = data_url.split_once(',').map(|(_, b)| b).ok_or("bad data url")?;
     let bytes = base64::engine::general_purpose::STANDARD.decode(b64).map_err(|e| e.to_string())?;
     std::fs::write(path, bytes).map_err(|e| e.to_string())
@@ -146,7 +151,7 @@ fn develop_curve(edit: EditState) -> Response {
 #[tauri::command]
 fn develop_params(id: ImageId, edit: EditState, images: State<'_, Images>) -> CmdResult<Vec<f32>> {
     let p = images.get(id).ok_or("image not open")?;
-    Ok(DevelopParams::new(&edit, &p.color).to_vec())
+    Ok(DevelopParams::new(&edit, &p.color, p.full_width, p.full_height).to_vec())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]

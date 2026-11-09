@@ -20,7 +20,7 @@ export const api = {
   devSnapshotPath: () => invoke<string | null>("dev_snapshot_path"),
   devScript: () => invoke<string | null>("dev_script"),
   devZoom: () => invoke<number | null>("dev_zoom"),
-  devSaveSnapshot: (dataUrl: string) => invoke<void>("dev_save_snapshot", { dataUrl }),
+  devSaveSnapshot: (dataUrl: string, name: string | null = null) => invoke<void>("dev_save_snapshot", { dataUrl, name }),
   previewShaders: () => invoke<GlslProgram>("preview_shaders"),
   openImage: (id: number) => invoke<ImageInfo>("open_image", { id }),
   previewPixels: async (id: number) =>

@@ -6,6 +6,7 @@
   import Section from "$lib/design/Section.svelte";
   import Slider from "$lib/design/Slider.svelte";
   import CurveEditor from "./CurveEditor.svelte";
+  import { session } from "./session.svelte";
   import HistogramView from "./Histogram.svelte";
   import type { Histogram } from "./renderer";
 
@@ -87,6 +88,12 @@
   <HistogramView {histogram} />
 
   <div class="scroll">
+    <div class="tools">
+      <button class="crop" onclick={() => session.startCrop()} title="Crop, rotate and straighten (R)">
+        <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M4 1v11h11M1 4h11v11" /></svg>
+        Crop &amp; Rotate
+      </button>
+    </div>
     <Section title="White Balance">
       <div class="wb-mode">
         <button class:active={isAsShot} onclick={resetWb} disabled={isAsShot}>As Shot</button>
@@ -310,6 +317,29 @@
     flex: 1;
     min-height: 0;
     overflow-y: auto;
+  }
+  .tools {
+    padding: var(--space-2) var(--space-4) 0;
+  }
+  .crop {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    width: 100%;
+    padding: 6px 10px;
+    border-radius: var(--radius-m);
+    background: var(--bg-2);
+    color: var(--text-1);
+    font-size: var(--fs-s);
+  }
+  .crop:hover {
+    background: var(--bg-3);
+    color: var(--text-0);
+  }
+  .crop svg {
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.5;
   }
   .wb-mode {
     display: flex;
