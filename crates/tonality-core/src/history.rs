@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use crate::catalog::{Catalog, CatalogError, ImageId, Result};
-use crate::edit::{describe_change, EditState};
+use crate::edit::{describe_change, EditState, Panel};
 
 pub type CommitId = i64;
 
@@ -286,6 +286,38 @@ impl Catalog {
     /// Record `state` as the result of an edit. `key` identifies the control that made the
     /// change, for coalescing; pass `None` for one-off actions (e.g. "As Shot").
     pub fn commit(&mut self, image: ImageId, state: &EditState, key: Option<&str>) -> Result<Checkout> {
+        self.commit_inner(image, state, key, None)
+    }
+
+    /// Copy `panels` from the tip of branch `source` onto HEAD, as one commit
+    /// ("Color from B&W"). A no-op if nothing differs.
+    pub fn apply_from_branch(&mut self, image: ImageId, source: &str, panels: &[Panel]) -> Result<Checkout> {
+        if panels.is_empty() {
+            return Err(CatalogError::Invalid("choose at least one panel".into()));
+        }
+        let h = self.require_head(image)?;
+        if h.branch == source {
+            return Err(CatalogError::Invalid("can't copy a branch onto itself".into()));
+        }
+        let tip = branch_tip(&self.conn, image, source)?;
+        let src = self.state_at(tip)?;
+        let cur = self.state_at(h.commit)?;
+        let next = cur.with_panels_from(&src, panels);
+        let what = if panels.len() == Panel::ALL.len() {
+            "All settings".to_string()
+        } else {
+            Panel::ALL.iter().filter(|p| panels.contains(p)).map(|p| p.label()).collect::<Vec<_>>().join(", ")
+        };
+        self.commit_inner(image, &next, None, Some(format!("{what} from {source}")))
+    }
+
+    fn commit_inner(
+        &mut self,
+        image: ImageId,
+        state: &EditState,
+        key: Option<&str>,
+        summary: Option<String>,
+    ) -> Result<Checkout> {
         let now = self.now();
         let tx = self.conn.transaction()?;
         let h = head(&tx, image)?.ok_or_else(|| CatalogError::NotFound("history".into()))?;
@@ -327,7 +359,8 @@ impl Catalog {
         } else if cur.state_hash != new_hash {
             let prev = load_state(&tx, &cur.state_hash)?;
             store_state(&tx, state)?;
-            let id = insert_commit(&tx, image, Some(cur.id), &new_hash, &describe_change(&prev, state), key, now)?;
+            let summary = summary.unwrap_or_else(|| describe_change(&prev, state));
+            let id = insert_commit(&tx, image, Some(cur.id), &new_hash, &summary, key, now)?;
             let branch = if at_tip {
                 h.branch.clone()
             } else {
@@ -474,6 +507,33 @@ mod tests {
 
     fn summaries(c: &Checkout) -> Vec<&str> {
         c.view.commits.iter().map(|c| c.summary.as_str()).collect()
+    }
+
+    #[test]
+    fn applies_panels_from_another_branch() {
+        let (mut cat, _, img) = catalog();
+        let root = cat.history_open(img).unwrap().view.head.commit;
+        // main: exposure +1. bw: saturation -100, contrast +20.
+        cat.commit(img, &exp(1.0), None).unwrap();
+        cat.create_branch(img, root, Some("bw")).unwrap();
+        let mut bw = EditState::default();
+        bw.color.saturation = -100.0;
+        bw.light.contrast = 20.0;
+        cat.commit(img, &bw, None).unwrap();
+        cat.switch_branch(img, "main").unwrap();
+
+        let c = cat.apply_from_branch(img, "bw", &[Panel::Color]).unwrap();
+        assert_eq!(c.view.head.branch, "main");
+        assert_eq!(c.state.color.saturation, -100.0);
+        assert_eq!(c.state.light.exposure, 1.0, "Light was not copied");
+        assert_eq!(c.state.light.contrast, 0.0);
+        assert_eq!(summaries(&c).last(), Some(&"Color from bw"));
+
+        let c = cat.apply_from_branch(img, "bw", &Panel::ALL).unwrap();
+        assert_eq!(c.state, bw);
+        assert_eq!(summaries(&c).last(), Some(&"All settings from bw"));
+        assert!(cat.apply_from_branch(img, "main", &[Panel::Light]).is_err());
+        assert!(cat.apply_from_branch(img, "bw", &[]).is_err());
     }
 
     #[test]

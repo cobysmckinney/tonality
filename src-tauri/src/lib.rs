@@ -52,6 +52,17 @@ fn dev_zoom() -> Option<f32> {
     std::env::var("TONALITY_ZOOM").ok().and_then(|z| z.parse().ok())
 }
 
+/// Dev/test hook (debug builds only): contents of the JS file at `TONALITY_DEV_SCRIPT`, run by
+/// the frontend after startup with the app's state objects in scope, to drive the UI in tests.
+#[tauri::command]
+fn dev_script() -> Option<String> {
+    if !cfg!(debug_assertions) {
+        return None;
+    }
+    let p = std::env::var("TONALITY_DEV_SCRIPT").ok().filter(|p| !p.is_empty())?;
+    std::fs::read_to_string(p).ok()
+}
+
 /// Dev/test hook: save a `data:image/png;base64,…` URL to `TONALITY_SNAPSHOT`.
 #[tauri::command]
 fn dev_save_snapshot(data_url: String) -> CmdResult<()> {
@@ -162,6 +173,7 @@ pub fn run() {
             dev_snapshot_path,
             dev_save_snapshot,
             dev_zoom,
+            dev_script,
             preview_shaders,
             open_image,
             preview_pixels,
@@ -178,6 +190,9 @@ pub fn run() {
             history::history_branch,
             history::history_rename,
             history::history_delete,
+            history::history_apply_from,
+            history::history_state,
+            thumbs::library_save_edited,
             library::library_overview,
             library::library_import,
             library::library_images,

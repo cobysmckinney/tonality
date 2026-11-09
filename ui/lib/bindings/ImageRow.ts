@@ -9,4 +9,9 @@ flag: number, meta: ImageMeta | null,
 /**
  * Number of branches (versions) in this image's history; 0 if never edited.
  */
-branches: number, };
+branches: number, 
+/**
+ * HEAD commit, if the image has a history. Changes whenever the shown version does
+ * (used to refresh its thumbnail).
+ */
+head: number | null, };

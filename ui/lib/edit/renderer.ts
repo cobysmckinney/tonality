@@ -70,6 +70,10 @@ export class PreviewRenderer {
   private detail: { texture: WebGLTexture; rect: Rect; level: number } | null = null;
   private detailWanted: string | null = null;
   private detailTimer: ReturnType<typeof setTimeout> | undefined;
+  /** Side-by-side compare: the right pane renders these params (and curve). */
+  private compareUbo: WebGLBuffer;
+  private compareCurve: WebGLTexture;
+  private comparing = false;
   /** Asked to fetch full-res pixels for the visible area; reply with `setDetail`. */
   onNeedDetail: ((req: DetailRequest) => void) | null = null;
   /** Called whenever the zoom level changes (scale in device px per full-res px, fit?). */
@@ -89,6 +93,7 @@ export class PreviewRenderer {
     this.vao = gl.createVertexArray()!;
 
     this.paramsUbo = gl.createBuffer()!;
+    this.compareUbo = gl.createBuffer()!;
     this.viewUbo = gl.createBuffer()!;
     bindBlock(gl, this.program, src.paramsBlock, PARAMS_BINDING);
     bindBlock(gl, this.program, src.viewBlock, VIEW_BINDING);
@@ -96,22 +101,90 @@ export class PreviewRenderer {
     gl.uniform1i(gl.getUniformLocation(this.program, src.imageSampler), 0);
     gl.uniform1i(gl.getUniformLocation(this.program, src.curveSampler), 1);
 
-    // Identity curve until the first real one arrives.
-    this.curve = gl.createTexture()!;
-    const ramp = new Float32Array(CURVE_SIZE * 4);
-    for (let i = 0; i < CURVE_SIZE; i++) ramp.fill(i / (CURVE_SIZE - 1), i * 4, i * 4 + 3), (ramp[i * 4 + 3] = 1);
-    gl.bindTexture(gl.TEXTURE_2D, this.curve);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA16F, CURVE_SIZE, 1, 0, gl.RGBA, gl.FLOAT, ramp);
-    setLinearClamp(gl);
+    // Identity curves until the first real ones arrive.
+    this.curve = identityCurve(gl);
+    this.compareCurve = identityCurve(gl);
+    this.stillCurve = identityCurve(gl);
+    this.stillUbo = gl.createBuffer()!;
   }
 
   /** Upload a tone-curve LUT (RGBA16F, CURVE_SIZE × 1). */
   setCurve(rgba16f: Uint16Array) {
-    const gl = this.gl;
-    gl.bindTexture(gl.TEXTURE_2D, this.curve);
-    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 2);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA16F, CURVE_SIZE, 1, 0, gl.RGBA, gl.HALF_FLOAT, rgba16f);
+    uploadCurve(this.gl, this.curve, rgba16f);
     this.requestDraw(true);
+  }
+
+  /** Compare with another version side by side (null to stop). Zoom and pan are shared. */
+  setCompare(params: Float32Array | null, curve?: Uint16Array | null) {
+    const gl = this.gl;
+    const was = this.comparing;
+    this.comparing = params !== null;
+    if (params) {
+      gl.bindBuffer(gl.UNIFORM_BUFFER, this.compareUbo);
+      gl.bufferData(gl.UNIFORM_BUFFER, params, gl.DYNAMIC_DRAW);
+    }
+    if (curve) uploadCurve(gl, this.compareCurve, curve);
+    if (was !== this.comparing) this.setZoom(this.isFit ? null : this.scale);
+    else this.requestDraw();
+  }
+
+  get isComparing() {
+    return this.comparing;
+  }
+
+  // ---- stills (thumbnails) ----
+  private stillUbo: WebGLBuffer;
+  private stillCurve: WebGLTexture;
+
+  /**
+   * Render the whole image with `params` (and `curve`) at `edge` px on the long side, into a
+   * new 2D canvas. Used for branch and library thumbnails; doesn't disturb the main view.
+   */
+  renderStill(edge: number, params: Float32Array, curve: Uint16Array | null): HTMLCanvasElement | null {
+    const gl = this.gl;
+    if (!this.texture) return null;
+    const s = Math.min(1, edge / Math.max(this.imageW, this.imageH));
+    const w = Math.max(1, Math.round(this.imageW * s));
+    const h = Math.max(1, Math.round(this.imageH * s));
+    const tex = gl.createTexture()!;
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.texStorage2D(gl.TEXTURE_2D, 1, gl.RGBA8, w, h);
+    const fbo = gl.createFramebuffer()!;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+    gl.viewport(0, 0, w, h);
+
+    gl.bindBuffer(gl.UNIFORM_BUFFER, this.stillUbo);
+    gl.bufferData(gl.UNIFORM_BUFFER, params, gl.DYNAMIC_DRAW);
+    if (curve) uploadCurve(gl, this.stillCurve, curve);
+    const whole = { x: 0, y: 0, w: 1, h: 1 };
+    gl.bindBuffer(gl.UNIFORM_BUFFER, this.viewUbo);
+    gl.bufferData(gl.UNIFORM_BUFFER, this.viewBlock(1, 1, whole, whole, whole), gl.DYNAMIC_DRAW);
+    gl.useProgram(this.program);
+    gl.bindBufferBase(gl.UNIFORM_BUFFER, PARAMS_BINDING, this.stillUbo);
+    gl.bindBufferBase(gl.UNIFORM_BUFFER, VIEW_BINDING, this.viewUbo);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, this.texture);
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, curve ? this.stillCurve : this.curve);
+    gl.bindVertexArray(this.vao);
+    gl.drawArrays(gl.TRIANGLES, 0, 6);
+    const px = new Uint8Array(w * h * 4);
+    gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, px);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.deleteFramebuffer(fbo);
+    gl.deleteTexture(tex);
+
+    // GL rows run bottom-up.
+    const out = document.createElement("canvas");
+    out.width = w;
+    out.height = h;
+    const ctx = out.getContext("2d")!;
+    const data = ctx.createImageData(w, h);
+    const row = w * 4;
+    for (let y = 0; y < h; y++) data.data.set(px.subarray((h - 1 - y) * row, (h - y) * row), y * row);
+    ctx.putImageData(data, 0, 0);
+    return out;
   }
 
   setImage(width: number, height: number, rgb16f: Uint16Array, fullW = width, fullH = height) {
@@ -177,9 +250,20 @@ export class PreviewRenderer {
     return this.zoom ?? this.fitScale();
   }
 
+  /** CSS width of one pane (half the canvas while comparing). */
+  private get paneW() {
+    return this.comparing ? this.canvas.clientWidth / 2 : this.canvas.clientWidth;
+  }
+
+  /** Map a canvas x coordinate into its pane. */
+  private paneX(cssX: number) {
+    const p = this.paneW;
+    return this.comparing && cssX >= p ? cssX - p : cssX;
+  }
+
   private fitScale() {
     const dpr = window.devicePixelRatio || 1;
-    const availW = Math.max(1, this.canvas.clientWidth - 2 * MARGIN_CSS_PX) * dpr;
+    const availW = Math.max(1, this.paneW - 2 * MARGIN_CSS_PX) * dpr;
     const availH = Math.max(1, this.canvas.clientHeight - 2 * MARGIN_CSS_PX) * dpr;
     return Math.min(availW / this.fullW, availH / this.fullH, 1);
   }
@@ -187,14 +271,15 @@ export class PreviewRenderer {
   /** Zoom to `scale` (null = fit), keeping the image point under (cssX, cssY) in place. */
   setZoom(scale: number | null, cssX?: number, cssY?: number) {
     const dpr = window.devicePixelRatio || 1;
-    const cw = this.canvas.clientWidth * dpr;
+    const cw = this.paneW * dpr;
     const ch = this.canvas.clientHeight * dpr;
+    if (cssX !== undefined) cssX = this.paneX(cssX);
     if (scale === null || scale <= this.fitScale() + 1e-6) {
       this.zoom = null;
       this.center = { x: 0.5, y: 0.5 };
     } else {
       scale = Math.min(MAX_ZOOM, scale);
-      const px = (cssX ?? this.canvas.clientWidth / 2) * dpr;
+      const px = (cssX ?? this.paneW / 2) * dpr;
       const py = (cssY ?? this.canvas.clientHeight / 2) * dpr;
       const before = this.layout(cw, ch);
       // Image point under the cursor now…
@@ -217,15 +302,15 @@ export class PreviewRenderer {
     const dpr = window.devicePixelRatio || 1;
     this.center.x -= (dxCss * dpr) / (this.fullW * this.zoom);
     this.center.y -= (dyCss * dpr) / (this.fullH * this.zoom);
-    this.clampCenter(this.canvas.clientWidth * dpr, this.canvas.clientHeight * dpr);
+    this.clampCenter(this.paneW * dpr, this.canvas.clientHeight * dpr);
     this.requestDraw();
   }
 
   /** Is (cssX, cssY) over the image? */
   hit(cssX: number, cssY: number) {
     const dpr = window.devicePixelRatio || 1;
-    const r = this.layout(this.canvas.clientWidth * dpr, this.canvas.clientHeight * dpr);
-    const x = cssX * dpr, y = cssY * dpr;
+    const r = this.layout(this.paneW * dpr, this.canvas.clientHeight * dpr);
+    const x = this.paneX(cssX) * dpr, y = cssY * dpr;
     return x >= r.x && y >= r.y && x <= r.x + r.w && y <= r.y + r.h;
   }
 
@@ -316,29 +401,37 @@ export class PreviewRenderer {
     gl.clear(gl.COLOR_BUFFER_BIT);
     if (!this.texture || !this.hasParams) return;
 
-    const img = this.layout(w, h);
+    // One pane, or two side by side (current | compare) with a hairline between them.
+    const panes = this.comparing ? 2 : 1;
+    const gap = this.comparing ? Math.round(dpr) : 0;
+    const pw = Math.floor((w - gap) / panes);
+    const img = this.layout(pw, h);
     const whole = { x: 0, y: 0, w: 1, h: 1 };
     gl.useProgram(this.program);
-    gl.bindBufferBase(gl.UNIFORM_BUFFER, PARAMS_BINDING, this.paramsUbo);
     gl.bindBufferBase(gl.UNIFORM_BUFFER, VIEW_BINDING, this.viewUbo);
-    gl.activeTexture(gl.TEXTURE1);
-    gl.bindTexture(gl.TEXTURE_2D, this.curve);
     gl.bindVertexArray(this.vao);
+    for (let i = 0; i < panes; i++) {
+      gl.viewport(i ? w - pw : 0, 0, pw, h);
+      gl.bindBufferBase(gl.UNIFORM_BUFFER, PARAMS_BINDING, i ? this.compareUbo : this.paramsUbo);
+      gl.activeTexture(gl.TEXTURE1);
+      gl.bindTexture(gl.TEXTURE_2D, i ? this.compareCurve : this.curve);
 
-    // The preview covers the whole image; full-res pixels (when zoomed in) draw on top.
-    gl.bindBuffer(gl.UNIFORM_BUFFER, this.viewUbo);
-    gl.bufferData(gl.UNIFORM_BUFFER, this.viewBlock(w, h, img, whole, whole), gl.DYNAMIC_DRAW);
-    gl.activeTexture(gl.TEXTURE0);
-    gl.bindTexture(gl.TEXTURE_2D, this.texture);
-    gl.drawArrays(gl.TRIANGLES, 0, 6);
-
-    if (this.detail && this.scale > this.imageW / this.fullW) {
-      const r = this.detail.rect;
-      gl.bufferData(gl.UNIFORM_BUFFER, this.viewBlock(w, h, img, r, r), gl.DYNAMIC_DRAW);
-      gl.bindTexture(gl.TEXTURE_2D, this.detail.texture);
+      // The preview covers the whole image; full-res pixels (when zoomed in) draw on top.
+      gl.bindBuffer(gl.UNIFORM_BUFFER, this.viewUbo);
+      gl.bufferData(gl.UNIFORM_BUFFER, this.viewBlock(pw, h, img, whole, whole), gl.DYNAMIC_DRAW);
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_2D, this.texture);
       gl.drawArrays(gl.TRIANGLES, 0, 6);
+
+      if (this.detail && this.scale > this.imageW / this.fullW) {
+        const r = this.detail.rect;
+        gl.bufferData(gl.UNIFORM_BUFFER, this.viewBlock(pw, h, img, r, r), gl.DYNAMIC_DRAW);
+        gl.bindTexture(gl.TEXTURE_2D, this.detail.texture);
+        gl.drawArrays(gl.TRIANGLES, 0, 6);
+      }
     }
-    this.wantDetail(w, h, img);
+    gl.viewport(0, 0, w, h);
+    this.wantDetail(pw, h, img);
     // Must run in the same task as the draw: the drawing buffer is not preserved.
     this.onDrawn?.(this.canvas);
     if (this.histDirty) this.scheduleHistogram();
@@ -421,6 +514,10 @@ export class PreviewRenderer {
     const gl = this.gl;
     if (this.texture) gl.deleteTexture(this.texture);
     gl.deleteTexture(this.curve);
+    gl.deleteTexture(this.compareCurve);
+    gl.deleteTexture(this.stillCurve);
+    gl.deleteBuffer(this.compareUbo);
+    gl.deleteBuffer(this.stillUbo);
     if (this.histTex) gl.deleteTexture(this.histTex);
     if (this.histFbo) gl.deleteFramebuffer(this.histFbo);
     gl.deleteBuffer(this.paramsUbo);
@@ -428,6 +525,22 @@ export class PreviewRenderer {
     gl.deleteVertexArray(this.vao);
     gl.deleteProgram(this.program);
   }
+}
+
+function identityCurve(gl: WebGL2RenderingContext): WebGLTexture {
+  const t = gl.createTexture()!;
+  const ramp = new Float32Array(CURVE_SIZE * 4);
+  for (let i = 0; i < CURVE_SIZE; i++) ramp.fill(i / (CURVE_SIZE - 1), i * 4, i * 4 + 3), (ramp[i * 4 + 3] = 1);
+  gl.bindTexture(gl.TEXTURE_2D, t);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA16F, CURVE_SIZE, 1, 0, gl.RGBA, gl.FLOAT, ramp);
+  setLinearClamp(gl);
+  return t;
+}
+
+function uploadCurve(gl: WebGL2RenderingContext, t: WebGLTexture, rgba16f: Uint16Array) {
+  gl.bindTexture(gl.TEXTURE_2D, t);
+  gl.pixelStorei(gl.UNPACK_ALIGNMENT, 2);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA16F, CURVE_SIZE, 1, 0, gl.RGBA, gl.HALF_FLOAT, rgba16f);
 }
 
 function setLinearClamp(gl: WebGL2RenderingContext) {

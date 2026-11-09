@@ -3,7 +3,7 @@
 use std::sync::Mutex;
 
 use tauri::State;
-use tonality_core::{Catalog, Checkout, CommitId, EditState, ImageId};
+use tonality_core::{Catalog, Checkout, CommitId, EditState, ImageId, Panel};
 
 use crate::CmdResult;
 
@@ -83,4 +83,21 @@ pub fn history_rename(
 #[tauri::command]
 pub fn history_delete(image_id: ImageId, name: String, catalog: State<'_, CatalogState>) -> CmdResult<Checkout> {
     catalog.with(|c| c.delete_branch(image_id, &name))
+}
+
+/// Copy `panels` from the tip of `source` onto the current version, as one commit.
+#[tauri::command]
+pub fn history_apply_from(
+    image_id: ImageId,
+    source: String,
+    panels: Vec<Panel>,
+    catalog: State<'_, CatalogState>,
+) -> CmdResult<Checkout> {
+    catalog.with(|c| c.apply_from_branch(image_id, &source, &panels))
+}
+
+/// The edit recorded at `commit` (e.g. a branch tip, for its thumbnail or for compare).
+#[tauri::command]
+pub fn history_state(commit: CommitId, catalog: State<'_, CatalogState>) -> CmdResult<EditState> {
+    catalog.with(|c| c.state_at(commit))
 }

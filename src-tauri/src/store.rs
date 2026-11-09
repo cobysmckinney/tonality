@@ -50,6 +50,11 @@ impl Store {
         self.root.join("cache").join("thumbs").join(&hash[..2]).join(format!("{}-{edge}.jpg", &hash[2..]))
     }
 
+    /// Thumbnail of an image's current edited version (rendered by Edit).
+    pub fn edited_thumb_path(&self, hash: &str) -> PathBuf {
+        self.root.join("cache").join("edited").join(&hash[..2]).join(format!("{}.jpg", &hash[2..]))
+    }
+
     /// Library-relative folder for a photo captured at `captured_at` (ISO 8601).
     pub fn originals_dir(captured_at: Option<&str>) -> String {
         match captured_at.filter(|d| d.len() >= 10 && d.as_bytes()[4] == b'-') {

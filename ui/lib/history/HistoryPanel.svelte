@@ -114,6 +114,15 @@
             ondblclick={() => startRename(b.name)}
             title="Switch to {b.name} · double-click to rename">{b.name}</button
           >
+          {#if !current}
+            <button
+              class="act"
+              class:on={session.compare?.branch === b.name}
+              onclick={() => (session.compare?.branch === b.name ? session.stopCompare() : session.startCompare(b.name))}
+              title="Compare side by side">◫</button
+            >
+            <button class="act" onclick={() => (session.applying = b.name)} title="Copy settings from {b.name}…">⇣</button>
+          {/if}
           {#if view.branches.length > 1}
             <button class="del" onclick={() => remove(b.name)} title="Delete branch">×</button>
           {/if}
@@ -245,6 +254,22 @@
     border-radius: var(--radius-s);
     padding: 1px 4px;
     outline: none;
+  }
+  .act {
+    visibility: hidden;
+    color: var(--text-2);
+    padding: 0 2px;
+    font-size: var(--fs-s);
+  }
+  .act.on {
+    visibility: visible;
+    color: var(--text-0);
+  }
+  .branches li:hover .act {
+    visibility: visible;
+  }
+  .act:hover {
+    color: var(--text-0);
   }
   .del {
     visibility: hidden;

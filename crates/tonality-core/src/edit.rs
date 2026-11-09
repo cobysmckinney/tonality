@@ -163,7 +163,52 @@ impl Default for Grain {
     }
 }
 
+/// The sections of the Adjustments panel, for copying settings between versions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum Panel {
+    WhiteBalance,
+    Light,
+    ToneCurve,
+    Color,
+    Detail,
+    Effects,
+}
+
+impl Panel {
+    pub const ALL: [Panel; 6] =
+        [Panel::WhiteBalance, Panel::Light, Panel::ToneCurve, Panel::Color, Panel::Detail, Panel::Effects];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Panel::WhiteBalance => "White Balance",
+            Panel::Light => "Light",
+            Panel::ToneCurve => "Tone Curve",
+            Panel::Color => "Color",
+            Panel::Detail => "Detail",
+            Panel::Effects => "Effects",
+        }
+    }
+}
+
 impl EditState {
+    /// This state with `panels` taken from `src`.
+    pub fn with_panels_from(&self, src: &EditState, panels: &[Panel]) -> EditState {
+        let mut out = self.clone();
+        for p in panels {
+            match p {
+                Panel::WhiteBalance => out.white_balance = src.white_balance.clone(),
+                Panel::Light => out.light = src.light.clone(),
+                Panel::ToneCurve => out.curve = src.curve.clone(),
+                Panel::Color => out.color = src.color.clone(),
+                Panel::Detail => out.detail = src.detail.clone(),
+                Panel::Effects => out.effects = src.effects.clone(),
+            }
+        }
+        out
+    }
+
     /// Canonical JSON used for hashing and storage. serde_json emits struct fields in
     /// declaration order, so this is deterministic for a given schema version.
     pub fn to_canonical_json(&self) -> String {

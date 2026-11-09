@@ -1,6 +1,7 @@
 <script lang="ts">
   import { app, type Mode } from "$lib/app.svelte";
   import { exportCurrent, exportCount } from "$lib/export/targets";
+  import BranchMenu from "$lib/history/BranchMenu.svelte";
 
   const modes: { id: Mode; label: string; key: string }[] = [
     { id: "library", label: "Library", key: "G" },
@@ -9,7 +10,10 @@
 </script>
 
 <header>
-  <div class="brand">tonality</div>
+  <div class="left">
+    <div class="brand">tonality</div>
+    {#if app.mode === "edit"}<BranchMenu />{/if}
+  </div>
 
   <nav class="modes" aria-label="Mode">
     {#each modes as m (m.id)}
@@ -36,6 +40,12 @@
     padding: 0 var(--space-4);
     border-bottom: 1px solid var(--line);
     background: var(--bg-1);
+  }
+  .left {
+    display: flex;
+    align-items: center;
+    gap: var(--space-4);
+    min-width: 0;
   }
   .brand {
     font-weight: 600;

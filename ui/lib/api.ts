@@ -7,6 +7,7 @@ import type { ImageRow } from "$lib/bindings/ImageRow";
 import type { ImportSummary } from "$lib/bindings/ImportSummary";
 import type { LibraryOverview } from "$lib/bindings/LibraryOverview";
 import type { EditState } from "$lib/bindings/EditState";
+import type { Panel } from "$lib/bindings/Panel";
 import type { GlslProgram } from "$lib/bindings/GlslProgram";
 import type { ImageInfo } from "$lib/bindings/ImageInfo";
 import type { ExportSettings } from "$lib/bindings/ExportSettings";
@@ -17,6 +18,7 @@ export const api = {
   startupPath: () => invoke<string | null>("startup_path"),
   startupImport: () => invoke<string | null>("startup_import"),
   devSnapshotPath: () => invoke<string | null>("dev_snapshot_path"),
+  devScript: () => invoke<string | null>("dev_script"),
   devZoom: () => invoke<number | null>("dev_zoom"),
   devSaveSnapshot: (dataUrl: string) => invoke<void>("dev_save_snapshot", { dataUrl }),
   previewShaders: () => invoke<GlslProgram>("preview_shaders"),
@@ -49,6 +51,9 @@ export const api = {
     rename: (imageId: number, old: string, name: string) =>
       invoke<Checkout>("history_rename", { imageId, old, new: name }),
     deleteBranch: (imageId: number, name: string) => invoke<Checkout>("history_delete", { imageId, name }),
+    applyFrom: (imageId: number, source: string, panels: Panel[]) =>
+      invoke<Checkout>("history_apply_from", { imageId, source, panels }),
+    state: (commit: number) => invoke<EditState>("history_state", { commit }),
   },
 
   library: {

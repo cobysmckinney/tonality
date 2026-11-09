@@ -4,6 +4,7 @@
   import type { EditState } from "$lib/bindings/EditState";
   import type { ImageInfo } from "$lib/bindings/ImageInfo";
   import { MAX_ZOOM, MIN_ZOOM, PreviewRenderer, type Histogram } from "./renderer";
+  import { attachRenderer } from "./versions";
 
   interface Props {
     image: ImageInfo;
@@ -12,9 +13,12 @@
     /** Show the unedited image (before/after). */
     before?: boolean;
     beforeEdit: EditState;
+    /** Another version to show side by side, labelled `compare.label`. */
+    compare?: { label: string; current: string; state: EditState } | null;
+    oncloseCompare?: () => void;
     onhistogram?: (h: Histogram) => void;
   }
-  let { image, pixels, edit, before = false, beforeEdit, onhistogram }: Props = $props();
+  let { image, pixels, edit, before = false, beforeEdit, compare = null, oncloseCompare, onhistogram }: Props = $props();
 
   let canvas: HTMLCanvasElement;
   let renderer = $state<PreviewRenderer | null>(null);
@@ -142,43 +146,70 @@
 
   const zoomLabel = $derived(fit ? "Fit" : `${Math.round(scale * 100)}%`);
 
-  // Latest-wins parameter pipeline: at most one request in flight, always ending on the newest state.
-  let inflight = false;
-  let pending: EditState | null = null;
-  // The curve LUT only needs refetching when the curve itself changes.
-  let curveKey = JSON.stringify({ rgb: [], red: [], green: [], blue: [] });
-  async function pump(r: PreviewRenderer, id: number) {
-    if (inflight) return;
-    inflight = true;
-    try {
-      while (pending) {
-        const next = pending;
-        pending = null;
-        const key = JSON.stringify(next.curve);
-        const [params, curve] = await Promise.all([
-          api.developParams(id, next),
-          key !== curveKey ? api.developCurve(next) : null,
-        ]);
-        if (curve) {
-          r.setCurve(curve);
-          curveKey = key;
+  // Latest-wins parameter pipelines (the main view, and the compare pane): at most one request
+  // in flight each, always ending on the newest state. The curve LUT is only refetched when the
+  // curve itself changes.
+  function pipeline(apply: (r: PreviewRenderer, params: Float32Array, curve: Uint16Array | null) => void) {
+    let inflight = false;
+    let pending: EditState | null = null;
+    let curveKey = "";
+    async function pump(r: PreviewRenderer, id: number) {
+      if (inflight) return;
+      inflight = true;
+      try {
+        while (pending) {
+          const next = pending;
+          pending = null;
+          const key = JSON.stringify(next.curve);
+          const [params, curve] = await Promise.all([
+            api.developParams(id, next),
+            key !== curveKey ? api.developCurve(next) : null,
+          ]);
+          if (curve) curveKey = key;
+          apply(r, params, curve);
         }
-        r.setParams(params);
+      } catch (e) {
+        error = String(e);
+      } finally {
+        inflight = false;
       }
-    } catch (e) {
-      error = String(e);
-    } finally {
-      inflight = false;
     }
+    return (r: PreviewRenderer, id: number, state: EditState) => {
+      pending = state;
+      pump(r, id);
+    };
   }
+  const main = pipeline((r, params, curve) => {
+    if (curve) r.setCurve(curve);
+    r.setParams(params);
+  });
+  const side = pipeline((r, params, curve) => {
+    if (comparing) r.setCompare(params, curve);
+  });
 
   $effect(() => {
     const state = $state.snapshot(before ? beforeEdit : edit) as EditState;
     const r = renderer;
+    if (r) main(r, image.id, state);
+  });
+
+  let comparing = false;
+  $effect(() => {
+    const r = renderer;
+    const state = compare ? ($state.snapshot(compare.state) as EditState) : null;
+    if (!r) return;
+    comparing = state !== null;
+    if (state) side(r, image.id, state);
+    else r.setCompare(null);
+  });
+
+  // Branch / library thumbnails are rendered with this renderer.
+  $effect(() => {
+    const r = renderer;
     const id = image.id;
     if (!r) return;
-    pending = state;
-    pump(r, id);
+    attachRenderer(r, id);
+    return () => attachRenderer(null, null);
   });
 </script>
 
@@ -197,7 +228,13 @@
     <button onclick={() => toggleZoom()} title="Toggle fit / 100% (Z)">{zoomLabel}</button>
     {#if loadingDetail}<span class="loading">Loading detail…</span>{/if}
   </div>
-  {#if before}<div class="badge">Before</div>{/if}
+  {#if compare}
+    <div class="pane-label left">{before ? "Before" : compare.current}</div>
+    <div class="pane-label right">
+      {compare.label}
+      {#if oncloseCompare}<button onclick={oncloseCompare} title="Stop comparing (Esc)">×</button>{/if}
+    </div>
+  {:else if before}<div class="badge">Before</div>{/if}
   {#if error}<div class="error">{error}</div>{/if}
 </div>
 
@@ -218,6 +255,34 @@
   }
   canvas.panning {
     cursor: grabbing;
+  }
+  .pane-label {
+    position: absolute;
+    top: var(--space-2);
+    display: flex;
+    gap: 6px;
+    align-items: center;
+    padding: 2px 10px;
+    border-radius: 999px;
+    background: rgba(0, 0, 0, 0.55);
+    font-size: var(--fs-xs);
+    color: var(--text-0);
+    max-width: 40%;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .pane-label.left {
+    left: var(--space-3);
+  }
+  .pane-label.right {
+    left: calc(50% + var(--space-3));
+  }
+  .pane-label button {
+    color: var(--text-2);
+  }
+  .pane-label button:hover {
+    color: var(--text-0);
   }
   .zoom {
     position: absolute;

@@ -1,5 +1,8 @@
 //! `thumb://localhost/<image id>` — library thumbnails, generated on first request and cached
 //! on disk. The webview loads them like any image, so off-screen cells cost nothing.
+//!
+//! Photos that have been opened in Edit show their current version instead: Edit renders it
+//! with the preview shader and saves it here (`library_save_edited`).
 
 use std::io::Cursor;
 use std::path::Path;
@@ -52,6 +55,35 @@ fn generate(src: &Path, dest: &Path) -> Result<Vec<u8>, String> {
     Ok(buf)
 }
 
+/// Save Edit's rendering of an image's current version (JPEG bytes in the request body,
+/// image id in the `x-image-id` header).
+#[tauri::command]
+pub fn library_save_edited(
+    request: tauri::ipc::Request<'_>,
+    store: tauri::State<'_, Store>,
+    catalog: tauri::State<'_, CatalogState>,
+) -> crate::CmdResult<()> {
+    let id: i64 = request
+        .headers()
+        .get("x-image-id")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.parse().ok())
+        .ok_or("missing x-image-id")?;
+    let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else {
+        return Err("expected JPEG bytes".into());
+    };
+    if !bytes.starts_with(&[0xFF, 0xD8]) {
+        return Err("not a JPEG".into());
+    }
+    let (_, hash, _) = catalog.with(|c| c.image_file(id))?;
+    let dest = store.edited_thumb_path(&hash);
+    if let Some(dir) = dest.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    }
+    let tmp = dest.with_extension("tmp");
+    std::fs::write(&tmp, bytes).and_then(|_| std::fs::rename(&tmp, &dest)).map_err(|e| e.to_string())
+}
+
 pub fn handle<R: Runtime>(ctx: UriSchemeContext<'_, R>, request: Request<Vec<u8>>, responder: UriSchemeResponder) {
     let app = ctx.app_handle().clone();
     let id: Option<i64> = request.uri().path().trim_matches('/').parse().ok();
@@ -67,7 +99,11 @@ pub fn handle<R: Runtime>(ctx: UriSchemeContext<'_, R>, request: Request<Vec<u8>
     let path = store.abs(&rel);
     // Originals never change (they are content-addressed), so the hash is a stable cache key.
     let cache = store.thumb_path(&hash, EDGE);
+    let edited = store.edited_thumb_path(&hash);
     pool().spawn(move || {
+        if let Ok(bytes) = std::fs::read(&edited) {
+            return respond(responder, StatusCode::OK, bytes);
+        }
         if let Ok(bytes) = std::fs::read(&cache) {
             return respond(responder, StatusCode::OK, bytes);
         }

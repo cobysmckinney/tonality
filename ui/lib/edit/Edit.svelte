@@ -2,6 +2,7 @@
   import Adjustments from "./Adjustments.svelte";
   import Canvas from "./Canvas.svelte";
   import HistoryPanel from "$lib/history/HistoryPanel.svelte";
+  import ApplyDialog from "$lib/history/ApplyDialog.svelte";
   import { library } from "$lib/library/library.svelte";
   import { session } from "./session.svelte";
   import type { EditState } from "$lib/bindings/EditState";
@@ -19,6 +20,10 @@
   function onKeyDown(e: KeyboardEvent) {
     if (e.target instanceof HTMLInputElement) return;
     if (e.key === "\\" && !e.repeat) before = true;
+    if (e.key === "Escape" && session.compare) {
+      session.stopCompare();
+      return;
+    }
     const mod = e.ctrlKey || e.metaKey;
     if (mod && e.key.toLowerCase() === "o") {
       e.preventDefault();
@@ -54,6 +59,8 @@
 
 <svelte:window onkeydown={onKeyDown} onkeyup={onKeyUp} onblur={() => (before = false)} />
 
+<ApplyDialog />
+
 <div class="edit" class:history-closed={!historyOpen}>
   <aside class="history">
     {#if session.history}
@@ -76,6 +83,10 @@
         edit={session.edit}
         {before}
         {beforeEdit}
+        compare={session.compare && session.history
+          ? { label: session.compare.branch, current: session.history.head.branch, state: session.compare.state }
+          : null}
+        oncloseCompare={() => session.stopCompare()}
         onhistogram={(h) => (histogram = h)}
       />
       <div class="caption">

@@ -20,6 +20,25 @@
     if (p) library.importPaths([p]);
   });
 
+  // Dev: TONALITY_DEV_SCRIPT=file.js drives the UI (debug builds only).
+  if (import.meta.env.DEV) {
+    api.devScript().then(async (src) => {
+      if (!src) return;
+      const { session } = await import("$lib/edit/session.svelte");
+      const { snapshotNextFrame } = await import("$lib/edit/versions");
+      const snapshot = async () => api.devSaveSnapshot(await snapshotNextFrame());
+      const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+      try {
+        await new Function("ctx", `return (async ({ app, api, library, session, sleep, snapshot }) => { ${src} })(ctx);`)({
+          app, api, library, session, sleep, snapshot,
+        });
+        console.info("[dev-script] done");
+      } catch (e) {
+        console.error("[dev-script]", e);
+      }
+    });
+  }
+
   function onKey(e: KeyboardEvent) {
     if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === "e") {
       e.preventDefault();

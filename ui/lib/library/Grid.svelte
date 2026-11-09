@@ -1,7 +1,7 @@
 <script lang="ts">
   // Virtualised thumbnail grid: only rows near the viewport are in the DOM.
   import { onMount } from "svelte";
-  import { thumbnail } from "./thumbs";
+  import { thumbKey, thumbnail } from "./thumbs";
   import type { ImageRow } from "$lib/bindings/ImageRow";
 
   interface Props {
@@ -91,7 +91,7 @@
         onkeydown={() => {}}
       >
         <div class="frame" style:height="{cellW}px">
-          <img use:thumbnail={img.id} alt="" decoding="async" draggable="false" />
+          <img use:thumbnail={thumbKey(img.id, img.head)} alt="" decoding="async" draggable="false" />
           {#if img.flag > 0}
             <span class="flag pick" title="Pick">●</span>
           {:else if img.flag < 0}

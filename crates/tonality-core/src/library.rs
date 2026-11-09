@@ -70,6 +70,10 @@ pub struct ImageRow {
     pub meta: Option<ImageMeta>,
     /// Number of branches (versions) in this image's history; 0 if never edited.
     pub branches: u32,
+    /// HEAD commit, if the image has a history. Changes whenever the shown version does
+    /// (used to refresh its thumbnail).
+    #[ts(type = "number | null")]
+    pub head: Option<i64>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -192,7 +196,8 @@ impl Catalog {
     pub fn images(&self, q: &ImageQuery) -> Result<Vec<ImageRow>> {
         let mut sql = String::from(
             "SELECT i.id, i.name, i.rating, i.flag, i.meta,
-                    (SELECT COUNT(*) FROM refs r WHERE r.image_id = i.id)
+                    (SELECT COUNT(*) FROM refs r WHERE r.image_id = i.id),
+                    (SELECT h.commit_id FROM heads h WHERE h.image_id = i.id)
              FROM images i WHERE i.rating >= ?1",
         );
         let mut args: Vec<rusqlite::types::Value> = vec![(q.min_rating as i64).into()];
@@ -223,6 +228,7 @@ impl Catalog {
                 flag: r.get(3)?,
                 meta: meta.and_then(|m| serde_json::from_str(&m).ok()),
                 branches: r.get(5)?,
+                head: r.get(6)?,
             })
         })?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)

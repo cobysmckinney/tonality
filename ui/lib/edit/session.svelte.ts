@@ -4,6 +4,8 @@ import type { Checkout } from "$lib/bindings/Checkout";
 import type { EditState } from "$lib/bindings/EditState";
 import type { HistoryView } from "$lib/bindings/HistoryView";
 import type { ImageInfo } from "$lib/bindings/ImageInfo";
+import type { Panel } from "$lib/bindings/Panel";
+import { scheduleLibraryThumb } from "./versions";
 
 class EditSession {
   image = $state<ImageInfo | null>(null);
@@ -11,6 +13,10 @@ class EditSession {
   history = $state<HistoryView | null>(null);
   loading = $state<string | null>(null);
   error = $state<string | null>(null);
+  /** Side-by-side compare with another branch (its tip). */
+  compare = $state<{ branch: string; state: EditState } | null>(null);
+  /** Branch whose settings the "Copy settings" dialog is offering. */
+  applying = $state<string | null>(null);
   /** Preview pixels (not reactive: large and replaced wholesale). Read when `image` changes. */
   pixels: Uint16Array | null = null;
   private defaults: EditState | null = null;
@@ -33,9 +39,12 @@ class EditSession {
       const pixels = await api.previewPixels(info.id);
       console.info(`[tonality] opened ${info.name} ${info.width}×${info.height} in ${Math.round(performance.now() - t0)}ms`);
       this.pixels = pixels;
+      this.compare = null;
+      this.applying = null;
       this.edit = checkout.state;
       this.history = checkout.view;
       this.image = info;
+      scheduleLibraryThumb(id, checkout.state);
     } catch (e) {
       this.error = String(e);
     } finally {
@@ -50,8 +59,14 @@ class EditSession {
       try {
         const r = await op(id);
         if (this.history?.imageId !== id) return; // another image was opened meanwhile
+        const moved = this.history.head.commit !== r.view.head.commit;
         this.history = r.view;
         if (applyState) this.edit = r.state;
+        if (moved) scheduleLibraryThumb(id, r.state);
+        const cmp = this.compare;
+        if (cmp && (!r.view.branches.some((b) => b.name === cmp.branch) || cmp.branch === r.view.head.branch)) {
+          this.compare = null;
+        }
       } catch (e) {
         this.flashError(String(e));
         throw e;
@@ -80,8 +95,27 @@ class EditSession {
   checkout = (commit: number) => this.run((id) => api.history.checkout(id, commit), true);
   switchBranch = (name: string) => this.run((id) => api.history.switchBranch(id, name), true);
   branch = (at: number, name: string | null = null) => this.run((id) => api.history.branch(id, at, name), true);
-  renameBranch = (old: string, name: string) => this.run((id) => api.history.rename(id, old, name), true);
+  renameBranch = (old: string, name: string) => {
+    if (this.compare?.branch === old) this.compare.branch = name.trim();
+    return this.run((id) => api.history.rename(id, old, name), true);
+  };
   deleteBranch = (name: string) => this.run((id) => api.history.deleteBranch(id, name), true);
+  applyFrom = (source: string, panels: Panel[]) => this.run((id) => api.history.applyFrom(id, source, panels), true);
+
+  /** Show `branch` next to the current version. */
+  async startCompare(branch: string) {
+    const b = this.history?.branches.find((x) => x.name === branch);
+    if (!b || branch === this.history?.head.branch) return;
+    try {
+      this.compare = { branch, state: await api.history.state(b.tip) };
+    } catch (e) {
+      this.flashError(String(e));
+    }
+  }
+
+  stopCompare() {
+    this.compare = null;
+  }
 }
 
 export const session = new EditSession();
