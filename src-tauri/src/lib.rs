@@ -221,6 +221,11 @@ pub fn run() {
             library::library_images,
             library::library_set_rating,
             library::library_set_flag,
+            library::album_create,
+            library::album_rename,
+            library::album_delete,
+            library::album_add,
+            library::album_remove,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tonality")

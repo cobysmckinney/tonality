@@ -116,15 +116,17 @@
 <ApplyDialog />
 
 <div class="edit" class:history-closed={!historyOpen}>
-  <aside class="history">
+  <aside class="history surface">
     {#if session.history}
       <HistoryPanel view={session.history} onhide={() => (historyOpen = false)} />
     {:else}
       <div class="panel-head">
-        <span>History</span>
-        <button class="icon" onclick={() => (historyOpen = false)} title="Hide history">‹</button>
+        <span class="eyebrow">Versions</span>
+        <button class="icon-btn" onclick={() => (historyOpen = false)} title="Hide panel">
+          <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M10 3 5 8l5 5" /></svg>
+        </button>
       </div>
-      <p class="hint">Open an image to see its history.</p>
+      <p class="hint">Open a photo to see its versions and history.</p>
     {/if}
   </aside>
 
@@ -154,7 +156,7 @@
       </div>
     {:else if !session.loading}
       <div class="empty">
-        <button class="primary" onclick={() => library.importFiles({ open: true })}>Import Photos…</button>
+        <button class="btn primary" onclick={() => library.importFiles({ open: true })}>Import Photos…</button>
         <p class="hint">Ctrl+O, or drop RAW files here. They’re copied into your library.</p>
       </div>
     {/if}
@@ -167,11 +169,13 @@
     {/if}
 
     {#if !historyOpen}
-      <button class="reveal" onclick={() => (historyOpen = true)} title="Show history">›</button>
+      <button class="reveal icon-btn" onclick={() => (historyOpen = true)} title="Show versions &amp; history">
+        <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="m6 3 5 5-5 5" /></svg>
+      </button>
     {/if}
   </section>
 
-  <aside class="adjust">
+  <aside class="adjust surface">
     {#if session.image && session.edit && session.cropping}
       <CropPanel image={session.image} {level} ontogglelevel={() => (level = !level)} />
     {:else if session.image && session.edit && session.masking}
@@ -190,7 +194,7 @@
 <style>
   .edit {
     display: grid;
-    grid-template-columns: 240px 1fr var(--panel-w);
+    grid-template-columns: 268px 1fr var(--panel-w);
     height: 100%;
     transition: grid-template-columns 180ms var(--ease);
   }
@@ -198,51 +202,49 @@
     grid-template-columns: 0 1fr var(--panel-w);
   }
   .history {
-    overflow: hidden;
-    border-right: 1px solid var(--line);
-    background: var(--bg-1);
-    white-space: nowrap;
     min-height: 0;
+    white-space: nowrap;
+  }
+  .history-closed .history {
+    border: none;
   }
   .panel-head {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: var(--space-3) var(--space-4);
-    font-weight: 500;
-  }
-  .icon,
-  .reveal {
-    color: var(--text-2);
-    padding: 0 4px;
-  }
-  .icon:hover,
-  .reveal:hover {
-    color: var(--text-0);
+    height: 44px;
+    padding: 0 var(--space-2) 0 var(--space-4);
   }
   .reveal {
     position: absolute;
     left: var(--space-2);
     top: var(--space-2);
+    background: var(--bg-1);
+    z-index: 2;
   }
   .canvas-area {
     position: relative;
     display: grid;
     place-items: center;
+    margin: 0 var(--gutter);
+    border-radius: var(--radius-l);
     background: var(--bg-0);
     min-width: 0;
     overflow: hidden;
   }
   .caption {
     position: absolute;
-    bottom: 4px;
-    left: 0;
-    right: 0;
+    bottom: var(--space-3);
+    left: 50%;
+    transform: translateX(-50%);
     display: flex;
-    justify-content: center;
     gap: var(--space-3);
+    padding: 3px 12px;
+    border-radius: var(--radius-pill);
+    background: color-mix(in srgb, var(--bg-1) 80%, transparent);
     font-size: var(--fs-xs);
     color: var(--text-1);
+    white-space: nowrap;
     pointer-events: none;
   }
   .dim,
@@ -250,34 +252,36 @@
     color: var(--text-2);
     font-size: var(--fs-s);
   }
+  .caption .dim {
+    font-size: var(--fs-xs);
+  }
   .hint {
     padding: 0 var(--space-4);
+    white-space: normal;
   }
   .empty {
+    display: grid;
+    justify-items: center;
+    gap: var(--space-3);
     text-align: center;
   }
-  .primary {
-    padding: 8px 18px;
-    border-radius: var(--radius-m);
-    background: var(--bg-3);
-    color: var(--text-0);
-    font-weight: 500;
-  }
-  .primary:hover {
-    background: var(--line-strong);
+  .empty .btn {
+    height: 36px;
+    padding: 0 var(--space-5);
   }
   .status {
     position: absolute;
+    padding: 4px 12px;
+    border-radius: var(--radius-pill);
+    background: var(--bg-1);
     color: var(--text-1);
     font-size: var(--fs-s);
   }
   .status.error {
-    bottom: var(--space-5);
+    bottom: var(--space-6);
     color: var(--danger);
   }
   .adjust {
-    border-left: 1px solid var(--line);
-    background: var(--bg-1);
     min-height: 0;
   }
 </style>

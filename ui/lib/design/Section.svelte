@@ -1,20 +1,48 @@
-<!-- Collapsible panel section. All sections are visible at once; collapsing is only for focus. -->
+<!--
+  Collapsible panel section. Open/closed is remembered per title.
+  - `edited` shows a dot next to the title; with `onreset`, a reset button appears on hover.
+-->
 <script lang="ts">
   import type { Snippet } from "svelte";
 
   interface Props {
     title: string;
     open?: boolean;
+    edited?: boolean;
+    onreset?: () => void;
     children: Snippet;
   }
-  let { title, open = $bindable(true), children }: Props = $props();
+  let { title, open = $bindable(true), edited = false, onreset, children }: Props = $props();
+
+  const key = () => `tonality.section.${title}`;
+  try {
+    const v = localStorage.getItem(key());
+    if (v !== null) open = v === "1";
+  } catch {
+    /* per-viewer convenience only */
+  }
+
+  function toggle() {
+    open = !open;
+    try {
+      localStorage.setItem(key(), open ? "1" : "0");
+    } catch {
+      /* ignore */
+    }
+  }
 </script>
 
-<section>
-  <button class="head" onclick={() => (open = !open)} aria-expanded={open}>
-    <span>{title}</span>
-    <span class="chev" class:open>›</span>
-  </button>
+<section class:open>
+  <div class="head">
+    <button class="toggle" onclick={toggle} aria-expanded={open}>
+      <svg class="chev" viewBox="0 0 16 16" width="12" height="12" aria-hidden="true"><path d="m6 4 4 4-4 4" /></svg>
+      <span class="title">{title}</span>
+      {#if edited}<span class="dot" title="Edited"></span>{/if}
+    </button>
+    {#if edited && onreset}
+      <button class="reset" onclick={onreset} title="Reset {title}">Reset</button>
+    {/if}
+  </div>
   {#if open}
     <div class="body">{@render children()}</div>
   {/if}
@@ -22,28 +50,74 @@
 
 <style>
   section {
-    border-bottom: 1px solid var(--line);
+    margin: 0 var(--space-2);
+    border-radius: var(--radius-m);
+  }
+  section + :global(section) {
+    margin-top: 2px;
   }
   .head {
-    width: 100%;
     display: flex;
-    justify-content: space-between;
     align-items: center;
-    padding: var(--space-3) var(--space-4);
-    font-weight: 500;
-    font-size: var(--fs-m);
+    border-radius: var(--radius-m);
   }
   .head:hover {
     background: var(--bg-2);
   }
+  .toggle {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    height: 38px;
+    padding: 0 var(--space-2);
+    font-weight: 500;
+    font-size: var(--fs-m);
+    text-align: left;
+  }
   .chev {
-    color: var(--text-2);
+    flex: none;
+    fill: none;
+    stroke: var(--text-2);
+    stroke-width: 1.6;
+    stroke-linecap: round;
+    stroke-linejoin: round;
     transition: transform 150ms var(--ease);
   }
-  .chev.open {
+  .open .chev {
     transform: rotate(90deg);
   }
+  .title {
+    color: var(--text-1);
+  }
+  .open .title,
+  .head:hover .title {
+    color: var(--text-0);
+  }
+  .dot {
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: var(--text-1);
+  }
+  .reset {
+    visibility: hidden;
+    margin-right: var(--space-1);
+    padding: 2px 8px;
+    border-radius: var(--radius-s);
+    font-size: var(--fs-xs);
+    color: var(--text-2);
+  }
+  .head:hover .reset {
+    visibility: visible;
+  }
+  .reset:hover {
+    background: var(--bg-3);
+    color: var(--text-0);
+  }
   .body {
-    padding: 0 var(--space-4) var(--space-3);
+    display: grid;
+    gap: var(--space-2);
+    padding: var(--space-1) var(--space-2) var(--space-4);
   }
 </style>

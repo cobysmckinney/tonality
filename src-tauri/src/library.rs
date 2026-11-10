@@ -9,6 +9,7 @@ use std::sync::Mutex;
 use rayon::prelude::*;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
+use tonality_core::album::{AlbumId, AlbumInfo};
 use tonality_core::library::{ImageQuery, ImageRow, ImportInfo, ImportSummary, NewImage};
 use tonality_core::ImageId;
 use ts_rs::TS;
@@ -32,12 +33,13 @@ pub struct LibraryOverview {
     pub root: String,
     pub total: u32,
     pub imports: Vec<ImportInfo>,
+    pub albums: Vec<AlbumInfo>,
 }
 
 #[tauri::command]
 pub fn library_overview(store: State<'_, Store>, catalog: State<'_, CatalogState>) -> CmdResult<LibraryOverview> {
-    let (total, imports) = catalog.with(|c| Ok((c.image_count()?, c.imports()?)))?;
-    Ok(LibraryOverview { root: store.root().to_string_lossy().into_owned(), total, imports })
+    let (total, imports, albums) = catalog.with(|c| Ok((c.image_count()?, c.imports()?, c.albums()?)))?;
+    Ok(LibraryOverview { root: store.root().to_string_lossy().into_owned(), total, imports, albums })
 }
 
 #[tauri::command]
@@ -53,6 +55,39 @@ pub fn library_set_rating(ids: Vec<ImageId>, rating: u8, catalog: State<'_, Cata
 #[tauri::command]
 pub fn library_set_flag(ids: Vec<ImageId>, flag: i8, catalog: State<'_, CatalogState>) -> CmdResult<()> {
     catalog.edit(&ids, |c| c.set_flag(&ids, flag))
+}
+
+// ---------------------------------------------------------------------------------------------
+// Albums (catalog-only: they organise the library and don't travel in sidecars)
+// ---------------------------------------------------------------------------------------------
+
+#[tauri::command]
+pub fn album_create(name: String, images: Vec<ImageId>, catalog: State<'_, CatalogState>) -> CmdResult<AlbumId> {
+    catalog.with(|c| {
+        let id = c.create_album(&name)?;
+        c.add_to_album(id, &images)?;
+        Ok(id)
+    })
+}
+
+#[tauri::command]
+pub fn album_rename(id: AlbumId, name: String, catalog: State<'_, CatalogState>) -> CmdResult<()> {
+    catalog.with(|c| c.rename_album(id, &name))
+}
+
+#[tauri::command]
+pub fn album_delete(id: AlbumId, catalog: State<'_, CatalogState>) -> CmdResult<()> {
+    catalog.with(|c| c.delete_album(id))
+}
+
+#[tauri::command]
+pub fn album_add(id: AlbumId, images: Vec<ImageId>, catalog: State<'_, CatalogState>) -> CmdResult<u32> {
+    catalog.with(|c| c.add_to_album(id, &images))
+}
+
+#[tauri::command]
+pub fn album_remove(id: AlbumId, images: Vec<ImageId>, catalog: State<'_, CatalogState>) -> CmdResult<()> {
+    catalog.with(|c| c.remove_from_album(id, &images))
 }
 
 // ---------------------------------------------------------------------------------------------

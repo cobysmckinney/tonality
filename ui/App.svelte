@@ -77,5 +77,6 @@
   }
   main {
     min-height: 0;
+    padding: 0 var(--gutter) var(--gutter);
   }
 </style>

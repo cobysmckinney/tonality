@@ -2,10 +2,11 @@
 // Module-level so scroll position and selection survive a trip to Edit and back.
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
-import { open } from "@tauri-apps/plugin-dialog";
+import { ask, open } from "@tauri-apps/plugin-dialog";
 import { SvelteSet } from "svelte/reactivity";
 import { api, RAW_EXTENSIONS } from "$lib/api";
 import { app } from "$lib/app.svelte";
+import type { AlbumInfo } from "$lib/bindings/AlbumInfo";
 import type { ImageQuery } from "$lib/bindings/ImageQuery";
 import type { ImageRow } from "$lib/bindings/ImageRow";
 import type { ImportInfo } from "$lib/bindings/ImportInfo";
@@ -23,13 +24,27 @@ function storedSize(): number {
   }
 }
 
+/** What the grid is showing. */
+export type View = { kind: "all" } | { kind: "album"; id: number } | { kind: "import"; id: number };
+
+/** Photos being dragged from the grid (onto an album). */
+export interface PhotoDrag {
+  ids: number[];
+  x: number;
+  y: number;
+  /** Album under the pointer. */
+  over: number | null;
+}
+
 class LibraryState {
   imports = $state<ImportInfo[]>([]);
+  albums = $state<AlbumInfo[]>([]);
+  drag = $state<PhotoDrag | null>(null);
   total = $state(0);
   root = $state("");
   /** Photos matching the current query. Raw (not deeply reactive): replaced wholesale. */
   images = $state.raw<ImageRow[]>([]);
-  query = $state<ImageQuery>({ import: null, minRating: 0, flag: null, sort: "captureTime", descending: false });
+  query = $state<ImageQuery>({ import: null, album: null, minRating: 0, flag: null, sort: "captureTime", descending: true });
   selected = new SvelteSet<number>();
   /** Keyboard focus / range anchor (image id). */
   focus = $state<number | null>(null);
@@ -61,6 +76,23 @@ class LibraryState {
       .catch(() => {});
   }
 
+  get view(): View {
+    if (this.query.album !== null) return { kind: "album", id: this.query.album };
+    if (this.query.import !== null) return { kind: "import", id: this.query.import };
+    return { kind: "all" };
+  }
+
+  get viewName(): string {
+    const v = this.view;
+    if (v.kind === "album") return this.albums.find((a) => a.id === v.id)?.name ?? "Album";
+    if (v.kind === "import") return this.imports.find((m) => m.id === v.id)?.name ?? "Import";
+    return "All Photos";
+  }
+
+  show(v: View) {
+    this.setQuery({ album: v.kind === "album" ? v.id : null, import: v.kind === "import" ? v.id : null });
+  }
+
   get focused(): ImageRow | null {
     return this.images.find((i) => i.id === this.focus) ?? null;
   }
@@ -74,10 +106,16 @@ class LibraryState {
     }
   }
 
-  async refresh() {
+  async refresh(): Promise<void> {
     try {
       const [overview, images] = await Promise.all([api.library.overview(), api.library.images(this.query)]);
       this.imports = overview.imports;
+      this.albums = overview.albums;
+      // The album being shown was deleted.
+      if (this.query.album !== null && !overview.albums.some((a) => a.id === this.query.album)) {
+        this.query = { ...this.query, album: null };
+        return this.refresh();
+      }
       this.total = overview.total;
       this.root = overview.root;
       this.images = images;
@@ -123,7 +161,7 @@ class LibraryState {
       this.message = parts.length ? parts.join(" · ") : (s.error ?? "Nothing to import");
       if (s.failed && s.error) console.warn("[import]", s.error);
       // Show what just arrived.
-      this.query = { ...this.query, import: s.import?.id ?? this.query.import };
+      if (s.import) this.query = { ...this.query, import: s.import.id, album: null };
       this.scrollTop = 0;
       await this.refresh();
       if (s.images.length) {
@@ -193,12 +231,9 @@ class LibraryState {
     this.selected.clear();
   }
 
-  /** Move focus by `delta` positions (±1 horizontally, ±cols vertically). */
-  move(delta: number, extend: boolean) {
-    if (!this.images.length) return;
-    const cur = this.images.findIndex((i) => i.id === this.focus);
-    const next = cur < 0 ? 0 : Math.max(0, Math.min(this.images.length - 1, cur + delta));
-    const id = this.images[next].id;
+  /** Move keyboard focus to `id` (from arrow keys), extending the selection with Shift. */
+  moveTo(id: number | null, extend: boolean) {
+    if (id === null) return;
     if (extend) {
       this.selected.add(id);
       this.focus = id;
@@ -206,7 +241,7 @@ class LibraryState {
   }
 
   /** Photos an action applies to: the selection, else the focused photo. */
-  private targets(): number[] {
+  targets(): number[] {
     if (this.selected.size) return [...this.selected];
     return this.focus !== null ? [this.focus] : [];
   }
@@ -231,6 +266,93 @@ class LibraryState {
     if (!ids.length) return;
     this.patch(ids, (i) => ({ ...i, flag }));
     await api.library.setFlag(ids, flag).catch((e) => (this.message = String(e)));
+  }
+
+  // ---- albums ----
+
+  private async albumOp<T>(op: () => Promise<T>): Promise<T | undefined> {
+    try {
+      return await op();
+    } catch (e) {
+      this.message = String(e);
+    } finally {
+      await this.refresh();
+    }
+  }
+
+  /** Create an album, optionally holding `images`. Returns its id. */
+  createAlbum(name: string, images: number[] = []) {
+    return this.albumOp(async () => {
+      const id = await api.albums.create(name, images);
+      if (images.length) this.message = `Added ${images.length} photo${images.length === 1 ? "" : "s"} to “${name.trim()}”`;
+      return id;
+    });
+  }
+
+  renameAlbum(id: number, name: string) {
+    return this.albumOp(() => api.albums.rename(id, name));
+  }
+
+  async deleteAlbum(id: number) {
+    const a = this.albums.find((x) => x.id === id);
+    const ok = await ask(`Delete the album “${a?.name ?? ""}”? The photos stay in your library.`, {
+      title: "Delete album",
+      kind: "warning",
+      okLabel: "Delete",
+    });
+    if (ok) await this.albumOp(() => api.albums.delete(id));
+  }
+
+  addToAlbum(id: number, images = this.targets()) {
+    if (!images.length) return;
+    const name = this.albums.find((a) => a.id === id)?.name ?? "album";
+    return this.albumOp(async () => {
+      const n = await api.albums.add(id, images);
+      const skipped = images.length - n;
+      this.message =
+        `Added ${n} photo${n === 1 ? "" : "s"} to “${name}”` + (skipped ? ` · ${skipped} already there` : "");
+    });
+  }
+
+  /** Remove the selected photos from the album being shown. */
+  removeFromAlbum() {
+    const v = this.view;
+    const ids = this.targets();
+    if (v.kind !== "album" || !ids.length) return;
+    return this.albumOp(async () => {
+      await api.albums.remove(v.id, ids);
+      this.selected.clear();
+    });
+  }
+
+  // ---- dragging photos onto albums ----
+
+  /** Start dragging from a grid cell: the selection if the cell is in it, else just that photo. */
+  startDrag(id: number, x: number, y: number) {
+    if (!this.selected.has(id)) this.select(id);
+    const ids = this.images.filter((i) => this.selected.has(i.id)).map((i) => i.id);
+    this.drag = { ids, x, y, over: null };
+    const move = (e: PointerEvent) => {
+      if (!this.drag) return;
+      const el = document.elementFromPoint(e.clientX, e.clientY)?.closest<HTMLElement>("[data-album]");
+      this.drag = { ...this.drag, x: e.clientX, y: e.clientY, over: el ? Number(el.dataset.album) : null };
+    };
+    const end = (e: Event) => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", end);
+      window.removeEventListener("keydown", cancel, true);
+      const d = this.drag;
+      this.drag = null;
+      if (d && d.over !== null && e.type === "pointerup") this.addToAlbum(d.over, d.ids);
+    };
+    const cancel = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.stopPropagation();
+      end(e);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", end);
+    window.addEventListener("keydown", cancel, true);
   }
 
   /** Open a photo (default: the focused one) in Edit. */

@@ -1,11 +1,12 @@
 /* tonality design tokens — neutral greys so the UI never tints perception of the photo. */
 :root {
-  --bg-0: #121212;      /* app background / canvas surround */
-  --bg-1: #1a1a1a;      /* panels */
+  --bg-0: #0f0f0f;      /* app background / canvas surround */
+  --bg-1: #191919;      /* panels */
   --bg-2: #222222;      /* raised controls */
-  --bg-3: #2c2c2c;      /* hover */
-  --line: #2e2e2e;
-  --line-strong: #3a3a3a;
+  --bg-3: #2b2b2b;      /* hover */
+  --bg-4: #343434;      /* active */
+  --line: #262626;
+  --line-strong: #363636;
   --text-0: #ececec;
   --text-1: #a8a8a8;
   --text-2: #6e6e6e;
@@ -19,14 +20,19 @@
   --branch-4: #f07a7a;
   --branch-5: #b8d36b;
 
-  --radius-s: 4px;
-  --radius-m: 6px;
-  --radius-l: 10px;
+  --radius-s: 6px;
+  --radius-m: 8px;
+  --radius-l: 12px;
+  --radius-pill: 999px;
   --space-1: 4px;
   --space-2: 8px;
   --space-3: 12px;
   --space-4: 16px;
   --space-5: 24px;
+  --space-6: 32px;
+  /* Gap between the floating panels and the window edge. */
+  --gutter: 8px;
+  --shadow-pop: 0 16px 48px rgba(0, 0, 0, 0.55), 0 0 0 1px var(--line);
 
   --font-ui: "Inter", "SF Pro Text", system-ui, -apple-system, "Segoe UI", sans-serif;
   --font-num: "JetBrains Mono", ui-monospace, "SF Mono", monospace;
@@ -36,7 +42,7 @@
   --fs-l: 15px;
 
   --topbar-h: 44px;
-  --panel-w: 300px;
+  --panel-w: 316px;
   --ease: cubic-bezier(0.2, 0, 0, 1);
 
   color-scheme: dark;
@@ -73,6 +79,124 @@ button {
 :focus-visible {
   outline: 1px solid var(--focus);
   outline-offset: 1px;
+  border-radius: var(--radius-s);
+}
+
+/* A floating panel: the main surfaces of each mode. */
+.surface {
+  background: var(--bg-1);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-l);
+  overflow: hidden;
+}
+
+/* Small uppercase group label used in sidebars and panels. */
+.eyebrow {
+  font-size: var(--fs-xs);
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-2);
+}
+
+/* Shared button styles. */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  height: 30px;
+  padding: 0 var(--space-3);
+  border-radius: var(--radius-m);
+  background: var(--bg-2);
+  color: var(--text-1);
+  font-size: var(--fs-s);
+  white-space: nowrap;
+  transition: background 120ms var(--ease), color 120ms var(--ease);
+}
+.btn:hover:not(:disabled) {
+  background: var(--bg-3);
+  color: var(--text-0);
+}
+.btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.btn.primary {
+  background: var(--text-0);
+  color: var(--bg-0);
+  font-weight: 500;
+}
+.btn.primary:hover:not(:disabled) {
+  background: #ffffff;
+  color: var(--bg-0);
+}
+.btn svg,
+.icon-btn svg {
+  flex: none;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.icon-btn {
+  display: inline-grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border-radius: var(--radius-s);
+  color: var(--text-2);
+  transition: background 120ms var(--ease), color 120ms var(--ease);
+}
+.icon-btn:hover:not(:disabled),
+.icon-btn.on {
+  background: var(--bg-3);
+  color: var(--text-0);
+}
+.icon-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+/* Segmented control. */
+.seg {
+  display: flex;
+  gap: 2px;
+  padding: 3px;
+  border-radius: var(--radius-m);
+  background: var(--bg-0);
+}
+.seg > button {
+  flex: 1;
+  padding: 3px 10px;
+  border-radius: var(--radius-s);
+  font-size: var(--fs-xs);
+  color: var(--text-2);
+  white-space: nowrap;
+  transition: background 120ms var(--ease), color 120ms var(--ease);
+}
+.seg > button:hover {
+  color: var(--text-0);
+}
+.seg > button.active {
+  background: var(--bg-3);
+  color: var(--text-0);
+}
+
+/* Text input. */
+.field {
+  font: inherit;
+  font-size: var(--fs-s);
+  color: var(--text-0);
+  background: var(--bg-0);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-s);
+  padding: 4px 8px;
+  outline: none;
+}
+.field:focus {
+  border-color: var(--focus);
 }
 
 ::-webkit-scrollbar {
@@ -82,6 +206,8 @@ button {
 ::-webkit-scrollbar-thumb {
   background: var(--bg-3);
   border-radius: 4px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
 }
 ::-webkit-scrollbar-track {
   background: transparent;

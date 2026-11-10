@@ -5,7 +5,11 @@ export type ImageQuery = {
 /**
  * `None` = every photo in the library.
  */
-import: number | null, minRating: number, 
+import: number | null, 
+/**
+ * Only photos in this album.
+ */
+album: number | null, minRating: number, 
 /**
  * `Some(1)` picks only, `Some(-1)` rejects only, `Some(0)` unflagged only.
  */

@@ -144,13 +144,14 @@
 
 <style>
   .slider {
-    padding: 3px 0;
+    padding: 1px 0;
   }
   .row {
     display: flex;
     justify-content: space-between;
+    align-items: baseline;
     font-size: var(--fs-s);
-    margin-bottom: 2px;
+    margin-bottom: 1px;
   }
   .label {
     color: var(--text-1);

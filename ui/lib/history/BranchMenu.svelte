@@ -69,7 +69,7 @@
               }}
             >
               <span class="thumb">{#if src}<img {src} alt="" />{/if}</span>
-              <span class="label">{b.name}{#if isCurrent}<em>current</em>{/if}</span>
+              <span class="label">{b.name}{#if isCurrent}<em>editing</em>{/if}</span>
             </button>
             {#if !isCurrent}
               <div class="actions">
@@ -92,7 +92,7 @@
             {/if}
           </div>
         {/each}
-        <button class="new" onclick={newBranch}>New branch from current</button>
+        <button class="new" onclick={newBranch}>New version from current</button>
       </div>
     {/if}
   </div>
@@ -107,8 +107,10 @@
     align-items: center;
     gap: 6px;
     max-width: 260px;
-    padding: 3px 10px;
-    border-radius: var(--radius-s);
+    height: 28px;
+    padding: 0 10px;
+    background: var(--bg-1);
+    border-radius: var(--radius-m);
     color: var(--text-1);
   }
   .trigger:hover,
@@ -145,13 +147,12 @@
     max-height: 70vh;
     overflow-y: auto;
     padding: var(--space-1);
-    border: 1px solid var(--line);
-    border-radius: var(--radius-m);
+    border-radius: var(--radius-l);
     background: var(--bg-1);
-    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+    box-shadow: var(--shadow-pop);
   }
   .item {
-    border-radius: var(--radius-s);
+    border-radius: var(--radius-m);
   }
   .item:hover,
   .item.current {
@@ -162,7 +163,7 @@
     align-items: center;
     gap: var(--space-3);
     width: 100%;
-    padding: var(--space-1) var(--space-2);
+    padding: var(--space-2);
     text-align: left;
   }
   .thumb {

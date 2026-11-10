@@ -71,6 +71,14 @@ export const api = {
     setRating: (ids: number[], rating: number) => invoke<void>("library_set_rating", { ids, rating }),
     setFlag: (ids: number[], flag: number) => invoke<void>("library_set_flag", { ids, flag }),
   },
+
+  albums: {
+    create: (name: string, images: number[] = []) => invoke<number>("album_create", { name, images }),
+    rename: (id: number, name: string) => invoke<void>("album_rename", { id, name }),
+    delete: (id: number) => invoke<void>("album_delete", { id }),
+    add: (id: number, images: number[]) => invoke<number>("album_add", { id, images }),
+    remove: (id: number, images: number[]) => invoke<void>("album_remove", { id, images }),
+  },
 };
 
 /** URL of an image's library thumbnail (served by the `thumb://` protocol). */

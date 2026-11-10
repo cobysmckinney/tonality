@@ -92,26 +92,62 @@
     for (const b of bands) edit.color.mixer[b.id] = { hue: 0, saturation: 0, luminance: 0 };
     oncommit?.(null);
   }
+
+  // ---- per-section "edited" state and reset ----
+  let defaults = $state.raw<EditState | null>(null);
+  $effect(() => {
+    session.defaultEdit().then((d) => (defaults = d));
+  });
+  const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
+  const edited = $derived({
+    wb: !isAsShot,
+    light: !!defaults && !same(edit.light, defaults.light),
+    curve: !!defaults && !same(edit.curve, defaults.curve),
+    color: edit.color.vibrance !== 0 || edit.color.saturation !== 0,
+    mixer: mixerEdited,
+    detail: !!defaults && !same(edit.detail, defaults.detail),
+    lens: !!edit.lens && !same(edit.lens, LENS_DEFAULT),
+    effects: !!defaults && !same(edit.effects, defaults.effects),
+  });
+
+  function reset(section: "light" | "curve" | "detail" | "effects") {
+    if (!defaults) return;
+    (edit as Record<string, unknown>)[section] = structuredClone($state.snapshot(defaults[section]));
+    oncommit?.(null);
+  }
+  function resetColor() {
+    edit.color.vibrance = 0;
+    edit.color.saturation = 0;
+    oncommit?.(null);
+  }
+  function resetLens() {
+    edit.lens = { ...LENS_DEFAULT };
+    oncommit?.(null);
+  }
 </script>
 
 <div class="panel">
-  <HistogramView {histogram} />
-
-  <div class="scroll">
+  <div class="top">
+    <HistogramView {histogram} />
     <div class="tools">
-      <button class="crop" onclick={() => session.startCrop()} title="Crop, rotate and straighten (R)">
-        <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M4 1v11h11M1 4h11v11" /></svg>
-        Crop &amp; Rotate
+      <button class="tool" onclick={() => session.startCrop()} title="Crop, rotate and straighten (R)">
+        <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"><path d="M4 1v11h11M1 4h11v11" /></svg>
+        <span>Crop</span>
+        <kbd>R</kbd>
       </button>
-      <button class="crop" onclick={() => session.startMasks()} title="Local adjustments: gradients and brush (M)">
-        <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><circle cx="8" cy="8" r="6" /><path d="M8 2a6 6 0 0 0 0 12Z" /></svg>
-        Masks{#if edit.masks?.length}<span class="count">{edit.masks.length}</span>{/if}
+      <button class="tool" onclick={() => session.startMasks()} title="Local adjustments: gradients and brush (M)">
+        <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"><circle cx="8" cy="8" r="6" /><path d="M8 2a6 6 0 0 0 0 12Z" /></svg>
+        <span>Masks</span>
+        {#if edit.masks?.length}<span class="count">{edit.masks.length}</span>{:else}<kbd>M</kbd>{/if}
       </button>
     </div>
-    <Section title="White Balance">
-      <div class="wb-mode">
-        <button class:active={isAsShot} onclick={resetWb} disabled={isAsShot}>As Shot</button>
-        <span class="hint">{isAsShot ? "" : "Custom"}</span>
+  </div>
+
+  <div class="scroll">
+    <Section title="White Balance" edited={edited.wb} onreset={resetWb}>
+      <div class="seg wb-mode">
+        <button class:active={isAsShot} onclick={resetWb}>As Shot</button>
+        <button class:active={!isAsShot} disabled={isAsShot} title="Move a slider to set a custom balance">Custom</button>
       </div>
       <Slider
         label="Temperature"
@@ -146,8 +182,9 @@
       />
     </Section>
 
-    <Section title="Light">
-      {#each lightControls as c (c.key)}
+    <Section title="Light" edited={edited.light} onreset={() => reset("light")}>
+      {#each lightControls as c, i (c.key)}
+        {#if i === 2}<div class="spacer"></div>{/if}
         <Slider
           label={c.label}
           value={edit.light[c.key]}
@@ -161,7 +198,7 @@
       {/each}
     </Section>
 
-    <Section title="Tone Curve">
+    <Section title="Tone Curve" edited={edited.curve} onreset={() => reset("curve")}>
       <CurveEditor
         value={edit.curve}
         {histogram}
@@ -170,7 +207,7 @@
       />
     </Section>
 
-    <Section title="Color">
+    <Section title="Color" edited={edited.color} onreset={resetColor}>
       <Slider
         label="Vibrance"
         value={edit.color.vibrance}
@@ -187,11 +224,9 @@
         oninput={(v) => (edit.color.saturation = v)}
         oncommit={() => oncommit?.("saturation")}
       />
+    </Section>
 
-      <div class="mixer-head">
-        <span class="sub">Color Mixer</span>
-        <button class="link" onclick={resetMixer} disabled={!mixerEdited}>Reset</button>
-      </div>
+    <Section title="Color Mixer" open={false} edited={edited.mixer} onreset={resetMixer}>
       <div class="seg" role="tablist">
         {#each mixerModes as m (m.id)}
           <button role="tab" aria-selected={mixerMode === m.id} class:active={mixerMode === m.id} onclick={() => (mixerMode = m.id)}>
@@ -212,182 +247,196 @@
       {/each}
     </Section>
 
-    <Section title="Detail">
-      <p class="note">Sharpening and noise reduction are sized for full resolution. Zoom to 100% (Z) to judge them.</p>
-      <span class="sub">Sharpening</span>
-      <Slider
-        label="Amount"
-        value={edit.detail.sharpenAmount}
-        min={0}
-        max={150}
-        bipolar={false}
-        oninput={(v) => (edit.detail.sharpenAmount = v)}
-        oncommit={() => oncommit?.("detail.sharpenAmount")}
-      />
-      <Slider
-        label="Radius"
-        value={edit.detail.sharpenRadius}
-        min={0.5}
-        max={3}
-        step={0.1}
-        decimals={1}
-        defaultValue={1}
-        bipolar={false}
-        oninput={(v) => (edit.detail.sharpenRadius = v)}
-        oncommit={() => oncommit?.("detail.sharpenRadius")}
-      />
-      <Slider
-        label="Masking"
-        value={edit.detail.sharpenMasking}
-        min={0}
-        max={100}
-        bipolar={false}
-        oninput={(v) => (edit.detail.sharpenMasking = v)}
-        oncommit={() => oncommit?.("detail.sharpenMasking")}
-      />
-      <span class="sub">Noise Reduction</span>
-      <Slider
-        label="Luminance"
-        value={edit.detail.luminanceNoise}
-        min={0}
-        max={100}
-        bipolar={false}
-        oninput={(v) => (edit.detail.luminanceNoise = v)}
-        oncommit={() => oncommit?.("detail.luminanceNoise")}
-      />
-      <Slider
-        label="Color"
-        value={edit.detail.colorNoise}
-        min={0}
-        max={100}
-        bipolar={false}
-        oninput={(v) => (edit.detail.colorNoise = v)}
-        oncommit={() => oncommit?.("detail.colorNoise")}
-      />
+    <Section title="Detail" open={false} edited={edited.detail} onreset={() => reset("detail")}>
+      <p class="note">Sized for full resolution. Zoom to 100% (Z) to judge them.</p>
+      <div class="group">
+        <span class="eyebrow">Sharpening</span>
+        <Slider
+          label="Amount"
+          value={edit.detail.sharpenAmount}
+          min={0}
+          max={150}
+          bipolar={false}
+          oninput={(v) => (edit.detail.sharpenAmount = v)}
+          oncommit={() => oncommit?.("detail.sharpenAmount")}
+        />
+        <Slider
+          label="Radius"
+          value={edit.detail.sharpenRadius}
+          min={0.5}
+          max={3}
+          step={0.1}
+          decimals={1}
+          defaultValue={1}
+          bipolar={false}
+          oninput={(v) => (edit.detail.sharpenRadius = v)}
+          oncommit={() => oncommit?.("detail.sharpenRadius")}
+        />
+        <Slider
+          label="Masking"
+          value={edit.detail.sharpenMasking}
+          min={0}
+          max={100}
+          bipolar={false}
+          oninput={(v) => (edit.detail.sharpenMasking = v)}
+          oncommit={() => oncommit?.("detail.sharpenMasking")}
+        />
+      </div>
+      <div class="group">
+        <span class="eyebrow">Noise Reduction</span>
+        <Slider
+          label="Luminance"
+          value={edit.detail.luminanceNoise}
+          min={0}
+          max={100}
+          bipolar={false}
+          oninput={(v) => (edit.detail.luminanceNoise = v)}
+          oncommit={() => oncommit?.("detail.luminanceNoise")}
+        />
+        <Slider
+          label="Color"
+          value={edit.detail.colorNoise}
+          min={0}
+          max={100}
+          bipolar={false}
+          oninput={(v) => (edit.detail.colorNoise = v)}
+          oncommit={() => oncommit?.("detail.colorNoise")}
+        />
+      </div>
     </Section>
 
-    <Section title="Lens Correction">
-      {#if lensInfo}
-        <label class="check">
-          <input
-            type="checkbox"
-            checked={lens.profile}
-            onchange={(e) => {
-              setLens({ profile: e.currentTarget.checked });
-              oncommit?.(null);
-            }}
-          />
-          Profile corrections
-        </label>
-        <p class="note">
-          {lensInfo.name} · {lensInfo.source === "embedded" ? "the camera's own correction data" : "lensfun database"}
-        </p>
-        {#if lens.profile}
-          {#if lensInfo.distortion}
-            <Slider
-              label="Distortion"
-              value={lens.distortion}
-              min={0}
-              max={200}
-              defaultValue={100}
-              bipolar={false}
-              unit="%"
-              oninput={(v) => setLens({ distortion: v })}
-              oncommit={() => oncommit?.("lens.distortion")}
+    <Section title="Lens Correction" open={false} edited={edited.lens} onreset={resetLens}>
+      <div class="group">
+        <span class="eyebrow">Profile</span>
+        {#if lensInfo}
+          <label class="check">
+            <input
+              type="checkbox"
+              checked={lens.profile}
+              onchange={(e) => {
+                setLens({ profile: e.currentTarget.checked });
+                oncommit?.(null);
+              }}
             />
-          {/if}
-          {#if lensInfo.vignetting}
-            <Slider
-              label="Vignetting"
-              value={lens.vignetting}
-              min={0}
-              max={200}
-              defaultValue={100}
-              bipolar={false}
-              unit="%"
-              oninput={(v) => setLens({ vignetting: v })}
-              oncommit={() => oncommit?.("lens.vignetting")}
-            />
-          {/if}
-          {#if lensInfo.chromatic}
-            <label class="check">
-              <input
-                type="checkbox"
-                checked={lens.chromatic}
-                onchange={(e) => {
-                  setLens({ chromatic: e.currentTarget.checked });
-                  oncommit?.(null);
-                }}
+            Enable profile corrections
+          </label>
+          <p class="note">
+            {lensInfo.name} · {lensInfo.source === "embedded" ? "the camera's own correction data" : "lensfun database"}
+          </p>
+          {#if lens.profile}
+            {#if lensInfo.distortion}
+              <Slider
+                label="Distortion"
+                value={lens.distortion}
+                min={0}
+                max={200}
+                defaultValue={100}
+                bipolar={false}
+                unit="%"
+                oninput={(v) => setLens({ distortion: v })}
+                oncommit={() => oncommit?.("lens.distortion")}
               />
-              Remove chromatic aberration
-            </label>
+            {/if}
+            {#if lensInfo.vignetting}
+              <Slider
+                label="Vignetting"
+                value={lens.vignetting}
+                min={0}
+                max={200}
+                defaultValue={100}
+                bipolar={false}
+                unit="%"
+                oninput={(v) => setLens({ vignetting: v })}
+                oncommit={() => oncommit?.("lens.vignetting")}
+              />
+            {/if}
+            {#if lensInfo.chromatic}
+              <label class="check">
+                <input
+                  type="checkbox"
+                  checked={lens.chromatic}
+                  onchange={(e) => {
+                    setLens({ chromatic: e.currentTarget.checked });
+                    oncommit?.(null);
+                  }}
+                />
+                Remove chromatic aberration
+              </label>
+            {/if}
           {/if}
+        {:else}
+          <p class="note">No correction profile for this lens. Manual distortion still works.</p>
         {/if}
-      {:else}
-        <p class="note">No correction profile for this lens. Manual distortion still works.</p>
-      {/if}
-      <span class="sub">Manual</span>
-      <Slider
-        label="Distortion"
-        value={lens.manualDistortion}
-        min={-100}
-        max={100}
-        oninput={(v) => setLens({ manualDistortion: v })}
-        oncommit={() => oncommit?.("lens.manualDistortion")}
-      />
+      </div>
+      <div class="group">
+        <span class="eyebrow">Manual</span>
+        <Slider
+          label="Distortion"
+          value={lens.manualDistortion}
+          min={-100}
+          max={100}
+          oninput={(v) => setLens({ manualDistortion: v })}
+          oncommit={() => oncommit?.("lens.manualDistortion")}
+        />
+      </div>
     </Section>
 
-    <Section title="Effects">
-      <span class="sub">Vignette</span>
-      <Slider
-        label="Amount"
-        value={edit.effects.vignette.amount}
-        min={-100}
-        max={100}
-        oninput={(v) => (edit.effects.vignette.amount = v)}
-        oncommit={() => oncommit?.("vignette.amount")}
-      />
-      <Slider
-        label="Midpoint"
-        value={edit.effects.vignette.midpoint}
-        min={0}
-        max={100}
-        defaultValue={50}
-        bipolar={false}
-        oninput={(v) => (edit.effects.vignette.midpoint = v)}
-        oncommit={() => oncommit?.("vignette.midpoint")}
-      />
-      <Slider
-        label="Feather"
-        value={edit.effects.vignette.feather}
-        min={0}
-        max={100}
-        defaultValue={50}
-        bipolar={false}
-        oninput={(v) => (edit.effects.vignette.feather = v)}
-        oncommit={() => oncommit?.("vignette.feather")}
-      />
-      <span class="sub">Grain</span>
-      <Slider
-        label="Amount"
-        value={edit.effects.grain.amount}
-        min={0}
-        max={100}
-        bipolar={false}
-        oninput={(v) => (edit.effects.grain.amount = v)}
-        oncommit={() => oncommit?.("grain.amount")}
-      />
-      <Slider
-        label="Size"
-        value={edit.effects.grain.size}
-        min={0}
-        max={100}
-        defaultValue={25}
-        bipolar={false}
-        oninput={(v) => (edit.effects.grain.size = v)}
-        oncommit={() => oncommit?.("grain.size")}
-      />
+    <Section title="Effects" open={false} edited={edited.effects} onreset={() => reset("effects")}>
+      <div class="group">
+        <span class="eyebrow">Vignette</span>
+        <Slider
+          label="Amount"
+          value={edit.effects.vignette.amount}
+          min={-100}
+          max={100}
+          oninput={(v) => (edit.effects.vignette.amount = v)}
+          oncommit={() => oncommit?.("vignette.amount")}
+        />
+        <Slider
+          label="Midpoint"
+          value={edit.effects.vignette.midpoint}
+          min={0}
+          max={100}
+          defaultValue={50}
+          bipolar={false}
+          oninput={(v) => (edit.effects.vignette.midpoint = v)}
+          oncommit={() => oncommit?.("vignette.midpoint")}
+        />
+        <Slider
+          label="Feather"
+          value={edit.effects.vignette.feather}
+          min={0}
+          max={100}
+          defaultValue={50}
+          bipolar={false}
+          oninput={(v) => (edit.effects.vignette.feather = v)}
+          oncommit={() => oncommit?.("vignette.feather")}
+        />
+      </div>
+      <div class="group">
+        <span class="eyebrow">Grain</span>
+        <Slider
+          label="Amount"
+          value={edit.effects.grain.amount}
+          min={0}
+          max={100}
+          bipolar={false}
+          oninput={(v) => (edit.effects.grain.amount = v)}
+          oncommit={() => oncommit?.("grain.amount")}
+        />
+        <Slider
+          label="Size"
+          value={edit.effects.grain.size}
+          min={0}
+          max={100}
+          defaultValue={25}
+          bipolar={false}
+          oninput={(v) => (edit.effects.grain.size = v)}
+          oncommit={() => oncommit?.("grain.size")}
+        />
+      </div>
     </Section>
+    <div class="end"></div>
   </div>
 </div>
 
@@ -398,126 +447,104 @@
     height: 100%;
     min-height: 0;
   }
+  .top {
+    flex: none;
+    padding-bottom: var(--space-3);
+    border-bottom: 1px solid var(--line);
+  }
   .scroll {
     flex: 1;
     min-height: 0;
     overflow-y: auto;
+    padding-top: var(--space-2);
+  }
+  .end {
+    height: var(--space-5);
   }
   .tools {
     display: grid;
     grid-template-columns: 1fr 1fr;
     gap: var(--space-2);
-    padding: var(--space-2) var(--space-4) 0;
+    padding: 0 var(--space-4);
   }
-  .count {
-    margin-left: auto;
-    font-family: var(--font-num);
-    font-size: var(--fs-xs);
-    color: var(--text-2);
-  }
-  .crop {
+  .tool {
     display: flex;
     align-items: center;
     gap: var(--space-2);
-    width: 100%;
-    padding: 6px 10px;
+    height: 34px;
+    padding: 0 var(--space-3);
     border-radius: var(--radius-m);
     background: var(--bg-2);
     color: var(--text-1);
     font-size: var(--fs-s);
+    transition: background 120ms var(--ease), color 120ms var(--ease);
   }
-  .crop:hover {
+  .tool:hover {
     background: var(--bg-3);
     color: var(--text-0);
   }
-  .crop svg {
+  .tool svg {
+    flex: none;
     fill: none;
     stroke: currentColor;
     stroke-width: 1.5;
   }
-  .wb-mode {
-    display: flex;
-    align-items: center;
-    gap: var(--space-2);
-    margin-bottom: var(--space-2);
+  kbd,
+  .count {
+    margin-left: auto;
+    font-family: var(--font-num);
+    font-size: 10px;
+    color: var(--text-2);
   }
-  .wb-mode button {
-    font-size: var(--fs-xs);
-    padding: 2px 8px;
-    border-radius: var(--radius-s);
-    background: var(--bg-2);
-    color: var(--text-1);
+  kbd {
+    padding: 0 5px;
+    border-radius: 4px;
+    border: 1px solid var(--line-strong);
+    line-height: 16px;
   }
-  .wb-mode button.active {
-    background: var(--bg-3);
+  .count {
+    min-width: 18px;
+    padding: 0 5px;
+    border-radius: var(--radius-pill);
+    background: var(--bg-4);
     color: var(--text-0);
+    text-align: center;
+    line-height: 18px;
+  }
+  .wb-mode {
+    width: 100%;
   }
   .wb-mode button:disabled {
     cursor: default;
   }
-  .hint {
-    font-size: var(--fs-xs);
-    color: var(--text-2);
+  .spacer {
+    height: var(--space-1);
   }
-  .sub {
-    display: block;
-    margin: var(--space-3) 0 var(--space-1);
-    font-size: var(--fs-xs);
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-    color: var(--text-2);
+  .group {
+    display: grid;
+    gap: var(--space-2);
+  }
+  .group + .group {
+    margin-top: var(--space-3);
+    padding-top: var(--space-3);
+    border-top: 1px solid var(--line);
   }
   .check {
     display: flex;
     align-items: center;
-    gap: 6px;
-    margin: var(--space-1) 0;
+    gap: var(--space-2);
     font-size: var(--fs-s);
     color: var(--text-1);
     cursor: pointer;
   }
   .check input {
+    margin: 0;
     accent-color: var(--text-1);
   }
   .note {
-    margin: 0 0 var(--space-1);
+    margin: 0;
     font-size: var(--fs-xs);
     color: var(--text-2);
-    line-height: 1.4;
-  }
-  .mixer-head {
-    display: flex;
-    justify-content: space-between;
-    align-items: baseline;
-    margin-top: var(--space-2);
-  }
-  .link {
-    font-size: var(--fs-xs);
-    color: var(--text-2);
-  }
-  .link:hover:not(:disabled) {
-    color: var(--text-0);
-  }
-  .link:disabled {
-    opacity: 0.35;
-  }
-  .seg {
-    display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 2px;
-    padding: 2px;
-    margin-bottom: var(--space-2);
-    border-radius: var(--radius-m);
-    background: var(--bg-0);
-  }
-  .seg button {
-    padding: 3px 0;
-    border-radius: var(--radius-s);
-    font-size: var(--fs-xs);
-    color: var(--text-2);
-  }
-  .seg button.active {
-    background: var(--bg-3);
-    color: var(--text-0);
+    line-height: 1.45;
   }
 </style>

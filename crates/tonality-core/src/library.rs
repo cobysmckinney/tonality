@@ -93,6 +93,9 @@ pub struct ImageQuery {
     /// `None` = every photo in the library.
     #[ts(type = "number | null")]
     pub import: Option<ImportId>,
+    /// Only photos in this album.
+    #[ts(type = "number | null")]
+    pub album: Option<crate::album::AlbumId>,
     pub min_rating: u8,
     /// `Some(1)` picks only, `Some(-1)` rejects only, `Some(0)` unflagged only.
     pub flag: Option<i8>,
@@ -206,6 +209,10 @@ impl Catalog {
         if let Some(m) = q.import {
             args.push(m.into());
             sql += &format!(" AND i.import_id = ?{}", args.len());
+        }
+        if let Some(a) = q.album {
+            args.push(a.into());
+            sql += &format!(" AND i.id IN (SELECT image_id FROM album_images WHERE album_id = ?{})", args.len());
         }
         if let Some(flag) = q.flag {
             args.push((flag as i64).into());

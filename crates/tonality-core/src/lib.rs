@@ -1,3 +1,4 @@
+pub mod album;
 pub mod catalog;
 pub mod color;
 pub mod curve;

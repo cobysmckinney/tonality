@@ -91,6 +91,21 @@ const MIGRATIONS: &[&str] = &[
         commit_id   INTEGER NOT NULL REFERENCES commits(id)
     );
     "#,
+    // v2: albums
+    r#"
+    CREATE TABLE albums (
+        id          INTEGER PRIMARY KEY,
+        name        TEXT NOT NULL,
+        created_at  INTEGER NOT NULL
+    );
+    CREATE TABLE album_images (
+        album_id    INTEGER NOT NULL REFERENCES albums(id) ON DELETE CASCADE,
+        image_id    INTEGER NOT NULL REFERENCES images(id) ON DELETE CASCADE,
+        added_at    INTEGER NOT NULL,
+        PRIMARY KEY (album_id, image_id)
+    );
+    CREATE INDEX album_images_image ON album_images(image_id);
+    "#,
 ];
 
 pub fn system_clock() -> Clock {

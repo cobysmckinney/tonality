@@ -104,3 +104,111 @@ export function relativeTime(ms: number, now = Date.now()): string {
   if (s < 7 * 86400) return `${Math.round(s / 86400)}d`;
   return new Date(ms).toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
+
+// ---------------------------------------------------------------------------------------------
+// One version at a time: what the History panel shows.
+//
+// Each commit belongs to the earliest-created branch that reaches it (the same rule the lane
+// graph uses), so a branch's own steps are the work done since it forked, and everything older
+// is inherited from the branch it forked from.
+// ---------------------------------------------------------------------------------------------
+
+/** The branch that owns each commit. */
+export function commitOwners(view: HistoryView): Map<number, string> {
+  const parents = new Map(view.commits.map((c) => [c.id, c.parent]));
+  const owner = new Map<number, string>();
+  for (const b of view.branches) {
+    for (const id of lineage(parents, b.tip)) {
+      if (owner.has(id)) break;
+      owner.set(id, b.name);
+    }
+  }
+  return owner;
+}
+
+export interface Step {
+  commit: CommitInfo;
+  isHead: boolean;
+  /** After HEAD on this branch: what redo would bring back. */
+  ahead: boolean;
+  /** Other versions that split off at this step. */
+  forks: string[];
+}
+
+export interface StepGroup {
+  /** The branch these steps belong to. */
+  branch: string;
+  /** Inherited from an ancestor version rather than made on this one. */
+  inherited: boolean;
+  steps: Step[];
+}
+
+/** The steps of `branch` (default: the current one), newest first, grouped by owning branch. */
+export function branchSteps(view: HistoryView, branch = view.head.branch): StepGroup[] {
+  const b = view.branches.find((x) => x.name === branch);
+  if (!b) return [];
+  const parents = new Map(view.commits.map((c) => [c.id, c.parent]));
+  const byId = new Map(view.commits.map((c) => [c.id, c]));
+  const owner = commitOwners(view);
+  const line = lineage(parents, b.tip);
+  const onLine = new Set(line);
+  const isCurrent = branch === view.head.branch;
+  const behindHead = isCurrent ? new Set(lineage(parents, view.head.commit)) : onLine;
+
+  // Where each other version splits from this one (unless it's an ancestor shown as a group).
+  const ancestors = new Set(line.map((id) => owner.get(id)));
+  const forksAt = new Map<number, string[]>();
+  for (const other of view.branches) {
+    if (other.name === branch || ancestors.has(other.name)) continue;
+    const at = lineage(parents, other.tip).find((id) => onLine.has(id));
+    if (at !== undefined) forksAt.set(at, [...(forksAt.get(at) ?? []), other.name]);
+  }
+
+  const groups: StepGroup[] = [];
+  for (const id of line) {
+    const commit = byId.get(id);
+    if (!commit) continue;
+    const name = owner.get(id) ?? branch;
+    let g = groups.at(-1);
+    if (!g || g.branch !== name) {
+      g = { branch: name, inherited: name !== branch, steps: [] };
+      groups.push(g);
+    }
+    g.steps.push({
+      commit,
+      isHead: isCurrent && id === view.head.commit,
+      ahead: !behindHead.has(id),
+      forks: forksAt.get(id) ?? [],
+    });
+  }
+  return groups;
+}
+
+export interface VersionInfo {
+  name: string;
+  tip: number;
+  /** Steps made on this version since it split off. */
+  own: number;
+  /** The version it was branched from, if any. */
+  parent: string | null;
+  color: number;
+}
+
+/** Summary of every version, in creation order. */
+export function versions(view: HistoryView): VersionInfo[] {
+  const parents = new Map(view.commits.map((c) => [c.id, c.parent]));
+  const owner = commitOwners(view);
+  const colors = layoutGraph(view).branchColor;
+  return view.branches.map((b) => {
+    const line = lineage(parents, b.tip);
+    const own = line.filter((id) => owner.get(id) === b.name).length;
+    const firstForeign = line.find((id) => owner.get(id) !== b.name);
+    return {
+      name: b.name,
+      tip: b.tip,
+      own,
+      parent: firstForeign !== undefined ? (owner.get(firstForeign) ?? null) : null,
+      color: colors.get(b.name) ?? 0,
+    };
+  });
+}

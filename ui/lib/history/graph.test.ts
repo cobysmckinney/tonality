@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { HistoryView } from "$lib/bindings/HistoryView";
-import { layoutGraph, relativeTime } from "./graph";
+import { branchSteps, layoutGraph, relativeTime, versions } from "./graph";
 
 const c = (id: number, parent: number | null) => ({ id, parent, summary: `c${id}`, time: 0 });
 
@@ -57,5 +57,48 @@ describe("relativeTime", () => {
     expect(relativeTime(now - 10_000, now)).toBe("now");
     expect(relativeTime(now - 5 * 60_000, now)).toBe("5m");
     expect(relativeTime(now - 3 * 3_600_000, now)).toBe("3h");
+  });
+});
+
+describe("branchSteps", () => {
+  const ids = (groups: ReturnType<typeof branchSteps>) =>
+    groups.map((g) => [g.branch, g.inherited, g.steps.map((s) => s.commit.id)]);
+
+  it("shows a forked version's own work, then what it inherited", () => {
+    expect(ids(branchSteps(view))).toEqual([
+      ["bw", false, [5, 4]],
+      ["main", true, [2, 1]],
+    ]);
+  });
+
+  it("marks HEAD and the redo-able steps", () => {
+    const [own] = branchSteps(view);
+    expect(own.steps.map((s) => [s.commit.id, s.isHead, s.ahead])).toEqual([
+      [5, false, true],
+      [4, true, false],
+    ]);
+  });
+
+  it("marks where other versions split off, not the parent", () => {
+    const main = branchSteps(view, "main");
+    expect(ids(main)).toEqual([["main", false, [3, 2, 1]]]);
+    const forks = Object.fromEntries(main[0].steps.map((s) => [s.commit.id, s.forks]));
+    expect(forks).toEqual({ 3: [], 2: ["bw"], 1: ["hdr"] });
+    // From bw, main is the ancestor (a group), and hdr splits at 1.
+    expect(branchSteps(view).at(-1)!.steps.find((s) => s.commit.id === 1)!.forks).toEqual(["hdr"]);
+  });
+
+  it("gives a fresh version no steps of its own", () => {
+    expect(ids(branchSteps(view, "hdr"))).toEqual([["main", true, [1]]]);
+  });
+});
+
+describe("versions", () => {
+  it("counts own steps and names the parent", () => {
+    expect(versions(view).map((v) => [v.name, v.own, v.parent])).toEqual([
+      ["main", 3, null],
+      ["bw", 2, "main"],
+      ["hdr", 0, "main"],
+    ]);
   });
 });
