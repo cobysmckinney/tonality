@@ -84,6 +84,107 @@ pub fn to_raster(prob: &[f32], pw: u32, ph: u32, guide: &[f32], w: u32, h: u32) 
     refined.iter().map(|v| (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8).collect()
 }
 
+/// A 3-D Gaussian colour model (mean and inverse covariance), for [`sky_raster`].
+struct Gaussian {
+    mean: [f32; 3],
+    inv: [[f32; 3]; 3],
+    log_norm: f32,
+}
+
+impl Gaussian {
+    fn fit(samples: &[[f32; 3]]) -> Option<Gaussian> {
+        if samples.len() < 64 {
+            return None;
+        }
+        let n = samples.len() as f64;
+        let mut mean = [0f64; 3];
+        for s in samples {
+            for k in 0..3 {
+                mean[k] += s[k] as f64 / n;
+            }
+        }
+        let mut cov = [[0f64; 3]; 3];
+        for s in samples {
+            let d = [s[0] as f64 - mean[0], s[1] as f64 - mean[1], s[2] as f64 - mean[2]];
+            for i in 0..3 {
+                for j in 0..3 {
+                    cov[i][j] += d[i] * d[j] / n;
+                }
+            }
+        }
+        // Regularise: flat skies have almost no variance, and a near-singular model is brittle.
+        for (i, row) in cov.iter_mut().enumerate() {
+            row[i] += 4e-4;
+        }
+        let c = |i: usize, j: usize| cov[i][j];
+        let det = c(0, 0) * (c(1, 1) * c(2, 2) - c(1, 2) * c(2, 1)) - c(0, 1) * (c(1, 0) * c(2, 2) - c(1, 2) * c(2, 0))
+            + c(0, 2) * (c(1, 0) * c(2, 1) - c(1, 1) * c(2, 0));
+        if det <= 1e-18 {
+            return None;
+        }
+        // Inverse = adjugate / det (the matrix is symmetric).
+        let inv = [
+            [c(1, 1) * c(2, 2) - c(1, 2) * c(2, 1), c(0, 2) * c(2, 1) - c(0, 1) * c(2, 2), c(0, 1) * c(1, 2) - c(0, 2) * c(1, 1)],
+            [c(1, 2) * c(2, 0) - c(1, 0) * c(2, 2), c(0, 0) * c(2, 2) - c(0, 2) * c(2, 0), c(0, 2) * c(1, 0) - c(0, 0) * c(1, 2)],
+            [c(1, 0) * c(2, 1) - c(1, 1) * c(2, 0), c(0, 1) * c(2, 0) - c(0, 0) * c(2, 1), c(0, 0) * c(1, 1) - c(0, 1) * c(1, 0)],
+        ]
+        .map(|row| row.map(|v| (v / det) as f32));
+        Some(Gaussian { mean: mean.map(|v| v as f32), inv, log_norm: -0.5 * (det.ln() as f32) })
+    }
+
+    fn log_pdf(&self, x: [f32; 3]) -> f32 {
+        let d = [x[0] - self.mean[0], x[1] - self.mean[1], x[2] - self.mean[2]];
+        let mut q = 0.0;
+        for i in 0..3 {
+            for j in 0..3 {
+                q += d[i] * self.inv[i][j] * d[j];
+            }
+        }
+        self.log_norm - 0.5 * q
+    }
+}
+
+/// Sky: the scene model only resolves the sky at ~1/8 of the raster, which leaves a soft band
+/// round everything against it and grey holes where it shows through foliage. Near the sky's
+/// edge, each pixel is re-decided by colour: a model of the confident sky against a model of
+/// the confident foreground nearby, weighted by what the network said. Elsewhere the
+/// network's answer stands.
+pub fn sky_raster(prob: &[f32], pw: u32, ph: u32, img: &image::RgbImage) -> Vec<u8> {
+    let (w, h) = img.dimensions();
+    let (wu, hu) = (w as usize, h as usize);
+    let n = wu * hu;
+    let up = resize(prob, pw, ph, w, h);
+    let rgb: Vec<[f32; 3]> = img.pixels().map(|p| p.0.map(|v| v as f32 / 255.0)).collect();
+    let guide = crate::input::guide(img, w, h);
+    let plain = || to_raster(prob, pw, ph, &guide, w, h);
+
+    // The band round the sky's edge where colour gets a say.
+    let long = w.max(h) as f32;
+    let band_r = (0.06 * long) as usize;
+    let skyish: Vec<f32> = up.iter().map(|&p| if p > 0.5 { 1.0 } else { 0.0 }).collect();
+    let near_sky = box_mean(&skyish, wu, hu, band_r);
+    let in_band = |i: usize| near_sky[i] > 0.0 && near_sky[i] < 1.0;
+
+    let step = (n / 60_000).max(1); // plenty of samples for a 3-D Gaussian
+    let sky: Vec<[f32; 3]> = (0..n).step_by(step).filter(|&i| up[i] > 0.92).map(|i| rgb[i]).collect();
+    let fg: Vec<[f32; 3]> = (0..n).step_by(step).filter(|&i| up[i] < 0.08 && in_band(i)).map(|i| rgb[i]).collect();
+    let (Some(gs), Some(gf)) = (Gaussian::fit(&sky), Gaussian::fit(&fg)) else { return plain() };
+
+    let mut out = up.clone();
+    for i in 0..n {
+        if !in_band(i) {
+            continue;
+        }
+        let p = up[i].clamp(0.02, 0.98);
+        let prior = (p / (1.0 - p)).ln();
+        let llr = (gs.log_pdf(rgb[i]) - gf.log_pdf(rgb[i])).clamp(-12.0, 12.0);
+        out[i] = 1.0 / (1.0 + (-(llr + prior)).exp());
+    }
+    // A light edge-aware smoothing: anti-aliases without bringing the halo back.
+    let out = guided_filter(&guide, &out, w, h, 1, 1e-4);
+    out.iter().map(|v| (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -108,6 +209,55 @@ mod tests {
         // Inside each side the mask flattens out; across the photo's edge it jumps.
         assert!(at(31) < 0.45 && at(33) > 0.55, "edge {} → {}", at(31), at(33));
         assert!((at(33) - at(31)) > (blurry[33] - blurry[31]) * 4.0, "sharper than the input");
+    }
+
+    /// Bright blue sky over a dark canopy, with sky showing through holes near the canopy's
+    /// top (rows 104–109) and one deep inside it (rows 150–159).
+    fn sky_scene() -> image::RgbImage {
+        image::RgbImage::from_fn(200, 200, |x, y| {
+            let hole = (x / 10) % 3 == 0 && ((104..110).contains(&y) || (150..160).contains(&y));
+            if y < 100 || hole { image::Rgb([150, 190, 235]) } else { image::Rgb([30, 50, 25]) }
+        })
+    }
+
+    #[test]
+    fn sky_edges_follow_colour_not_the_coarse_map() {
+        let img = sky_scene();
+        // The network's view: 1/8 resolution, so the edge is a soft ramp and the holes are lost.
+        let prob: Vec<f32> = (0..25 * 25).map(|i| ((13.0 - (i / 25) as f32) / 2.0).clamp(0.0, 1.0)).collect();
+        let r = sky_raster(&prob, 25, 25, &img);
+        let at = |x: usize, y: usize| r[y * 200 + x];
+        assert!(at(100, 96) > 230, "sky just above the canopy is sky: {}", at(100, 96));
+        assert!(at(100, 104) < 25, "canopy just below the edge isn't: {}", at(100, 104));
+        assert!(at(5, 107) > 200, "sky through a hole in the canopy: {}", at(5, 107));
+        assert!(at(15, 107) < 40, "the leaves beside it: {}", at(15, 107));
+        // Far from the sky's edge, colour has no say: a bright patch there isn't sky.
+        assert!(at(5, 155) < 5, "deep hole stays foreground: {}", at(5, 155));
+    }
+
+    #[test]
+    fn gaussian_inverse_is_an_inverse() {
+        // Correlated samples, so the covariance has off-diagonal terms.
+        let samples: Vec<[f32; 3]> = (0..500).map(|i| {
+            let t = i as f32 / 500.0;
+            [t, 0.5 * t + 0.1 * (i % 7) as f32 / 7.0, 0.2 + 0.05 * (i % 3) as f32]
+        }).collect();
+        let g = Gaussian::fit(&samples).unwrap();
+        // log_pdf peaks at the mean and falls off away from it.
+        assert!(g.log_pdf(g.mean) > g.log_pdf([g.mean[0] + 0.1, g.mean[1], g.mean[2]]));
+        // inv × (covariance recomputed) ≈ identity, checked through a quadratic form:
+        // moving along x by one standard deviation (in the model's own metric) costs ~0.5.
+        let d = 1.0 / g.inv[0][0].sqrt();
+        let drop = g.log_pdf(g.mean) - g.log_pdf([g.mean[0] + d, g.mean[1], g.mean[2]]);
+        assert!((drop - 0.5).abs() < 1e-3, "{drop}");
+    }
+
+    #[test]
+    fn sky_without_confident_sky_falls_back() {
+        let img = sky_scene();
+        let prob = vec![0.3f32; 25 * 25]; // never confident: no colour model
+        let r = sky_raster(&prob, 25, 25, &img);
+        assert!(r.iter().all(|&v| v < 120), "stays uncertain rather than inventing sky");
     }
 
     #[test]

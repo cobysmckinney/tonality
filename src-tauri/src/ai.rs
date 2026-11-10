@@ -170,7 +170,7 @@ pub fn detect(
             // One pass gives both; cache both.
             let (maps, pw, ph) =
                 scene::detect(&files[0], scene::SceneModel::ADE_512, &img, &[scene::ade::SKY, scene::ade::PERSON]).map_err(err)?;
-            let sky = save("sky", refine::to_raster(&maps[0], pw, ph, &guide, w, h))?;
+            let sky = save("sky", refine::sky_raster(&maps[0], pw, ph, &img))?;
             let people = save("people", refine::to_raster(&maps[1], pw, ph, &guide, w, h))?;
             if matches!(target, AiTarget::Sky) { sky } else { people }
         }
