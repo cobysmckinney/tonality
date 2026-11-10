@@ -4,6 +4,7 @@ pub mod curve;
 pub mod edit;
 pub mod geometry;
 pub mod history;
+pub mod lens;
 pub mod library;
 pub mod mask;
 pub mod sidecar;

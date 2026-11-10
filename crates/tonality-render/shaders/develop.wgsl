@@ -28,6 +28,10 @@ struct Params {
     // Masks (local adjustments): x: count, yz: source size / its long edge.
     masks_head: vec4<f32>,
     masks: array<MaskParams, 16>,
+    // Lens correction (see `tonality_core::lens`): x: active, y: tile margin, zw: source size / diagonal.
+    lens_head: vec4<f32>,
+    // Per radius knot (0..LENS_RMAX half-diagonals): rgb: source ÷ output radius, w: vignetting gain.
+    lens: array<vec4<f32>, 32>,
 };
 
 // One mask; see `tonality_core::mask`. Positions are in "long-edge" units: source uv × masks_head.yz.
@@ -481,6 +485,18 @@ fn mask_overlay(c: vec3<f32>, f: vec2<f32>, uv: vec2<f32>, cam: vec3<f32>, which
     return mix(c, vec3<f32>(1.0, 0.18, 0.12), 0.55 * m);
 }
 
+// ---- Lens correction ---------------------------------------------------------------------------
+// Everything downstream (framing, masks) works on the corrected image; only the texture reads go
+// through the lens. Radial: a pixel at radius r reads the source at r × ratio(r), per channel.
+
+const LENS_RMAX: f32 = 1.2;
+
+fn lens_at(r: f32) -> vec4<f32> {
+    let t = clamp(r / LENS_RMAX, 0.0, 1.0) * 31.0;
+    let i = min(u32(t), 30u);
+    return mix(params.lens[i], params.lens[i + 1u], t - f32(i));
+}
+
 @fragment
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let uv = vec2<f32>(dot(params.geo0.xyz, vec3<f32>(in.f, 1.0)), dot(params.geo1.xyz, vec3<f32>(in.f, 1.0)));
@@ -489,12 +505,36 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     if (any(uv < -eps) || any(uv > vec2<f32>(1.0) + eps)) {
         discard;
     }
-    let tc = (uv - in.tex.xy) / in.tex.zw;
+    let lens_on = params.lens_head.x > 0.5;
+    var src = uv;
+    var k = vec4<f32>(1.0);
+    var gain = 1.0;
+    if (lens_on) {
+        let d = uv - vec2<f32>(0.5);
+        let r = length(d * 2.0 * params.lens_head.zw);
+        k = lens_at(r);
+        // Clamped: auto-zoom keeps the frame inside the source, up to table interpolation error.
+        src = clamp(vec2<f32>(0.5) + k.y * d, vec2<f32>(0.0), vec2<f32>(1.0));
+        gain = lens_at(r * k.y).w;
+    }
+    let tc = (src - in.tex.xy) / in.tex.zw;
     // Outside this texture (a zoomed-in full-res tile): whatever is underneath shows.
     if (any(tc < vec2<f32>(0.0)) || any(tc > vec2<f32>(1.0))) {
         discard;
     }
-    let cam = detail(tc, in.px.xy);
+    var cam = detail(tc, in.px.xy);
+    if (lens_on) {
+        // Lateral chromatic aberration: red and blue come from slightly different radii.
+        if (k.x != k.y || k.z != k.y) {
+            let d = uv - vec2<f32>(0.5);
+            let g = cam_at(tc);
+            let tr = (clamp(vec2<f32>(0.5) + k.x * d, vec2<f32>(0.0), vec2<f32>(1.0)) - in.tex.xy) / in.tex.zw;
+            let tb = (clamp(vec2<f32>(0.5) + k.z * d, vec2<f32>(0.0), vec2<f32>(1.0)) - in.tex.xy) / in.tex.zw;
+            cam.r = max(cam.r + cam_at(tr).r - g.r, 0.0);
+            cam.b = max(cam.b + cam_at(tb).b - g.b, 0.0);
+        }
+        cam = cam * gain;
+    }
     let c = develop(cam, in.f, uv, params.geo0.w / params.geo1.w);
     return vec4<f32>(mask_overlay(c, in.f, uv, cam, in.overlay), 1.0);
 }

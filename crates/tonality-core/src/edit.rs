@@ -7,6 +7,7 @@
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
+use crate::lens::LensCorrection;
 use crate::mask::{describe_masks, Mask};
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, TS)]
@@ -25,6 +26,10 @@ pub struct EditState {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     #[ts(optional = nullable)]
     pub masks: Vec<Mask>,
+    /// Lens correction. Omitted from the JSON while untouched (older states keep their hashes).
+    #[serde(skip_serializing_if = "LensCorrection::is_default")]
+    #[ts(optional = nullable)]
+    pub lens: LensCorrection,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, TS)]
@@ -207,10 +212,11 @@ pub enum Panel {
     Effects,
     Crop,
     Masks,
+    Lens,
 }
 
 impl Panel {
-    pub const ALL: [Panel; 8] = [
+    pub const ALL: [Panel; 9] = [
         Panel::WhiteBalance,
         Panel::Light,
         Panel::ToneCurve,
@@ -219,6 +225,7 @@ impl Panel {
         Panel::Effects,
         Panel::Crop,
         Panel::Masks,
+        Panel::Lens,
     ];
 
     pub fn label(self) -> &'static str {
@@ -231,6 +238,7 @@ impl Panel {
             Panel::Effects => "Effects",
             Panel::Crop => "Crop",
             Panel::Masks => "Masks",
+            Panel::Lens => "Lens Correction",
         }
     }
 }
@@ -249,6 +257,7 @@ impl EditState {
                 Panel::Effects => out.effects = src.effects.clone(),
                 Panel::Crop => out.crop = src.crop.clone(),
                 Panel::Masks => out.masks = src.masks.clone(),
+                Panel::Lens => out.lens = src.lens.clone(),
             }
         }
         out
@@ -324,6 +333,9 @@ const FIELDS: &[Field] = &[
     Field { label: "Vignette Feather", get: |s| Some(s.effects.vignette.feather), fmt: Fmt::Plain },
     Field { label: "Grain", get: |s| Some(s.effects.grain.amount), fmt: Fmt::Plain },
     Field { label: "Grain Size", get: |s| Some(s.effects.grain.size), fmt: Fmt::Plain },
+    Field { label: "Lens Distortion", get: |s| Some(s.lens.distortion), fmt: Fmt::Plain },
+    Field { label: "Lens Vignetting", get: |s| Some(s.lens.vignetting), fmt: Fmt::Plain },
+    Field { label: "Manual Distortion", get: |s| Some(s.lens.manual_distortion), fmt: Fmt::Signed(0) },
 ];
 
 const BANDS: &[[Field; 3]] = &[
@@ -390,6 +402,13 @@ pub fn describe_change(prev: &EditState, next: &EditState) -> String {
     }
     if a.rect != b.rect {
         curves.push("Crop");
+    }
+    let (a, b) = (&prev.lens, &next.lens);
+    if a.profile != b.profile {
+        curves.push(if b.profile { "Lens Profile On" } else { "Lens Profile Off" });
+    }
+    if a.chromatic != b.chromatic {
+        curves.push(if b.chromatic { "Chromatic Aberration On" } else { "Chromatic Aberration Off" });
     }
     let masks = describe_masks(&prev.masks, &next.masks);
     if let ([], [], [(_, full)]) = (changed.as_slice(), curves.as_slice(), masks.as_slice()) {

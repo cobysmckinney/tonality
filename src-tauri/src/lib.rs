@@ -152,7 +152,7 @@ fn develop_curve(edit: EditState) -> Response {
 #[tauri::command]
 fn develop_params(id: ImageId, edit: EditState, images: State<'_, Images>) -> CmdResult<Vec<f32>> {
     let p = images.get(id).ok_or("image not open")?;
-    Ok(DevelopParams::new(&edit, &p.color, p.full_width, p.full_height).to_vec())
+    Ok(DevelopParams::new(&edit, &p.color, p.lens.as_ref(), p.full_width, p.full_height).to_vec())
 }
 
 /// Brush mask rasters for `develop.wgsl`: three little-endian u32s (width, height, layers),

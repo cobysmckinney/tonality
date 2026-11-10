@@ -154,6 +154,9 @@ impl Gpu {
             // Detail's neighbourhood, clamped to the image.
             let (fw, fh) = (w as f32, h as f32);
             let b = geo.source_bounds([x as f32 / fw, y as f32 / fh], [(x + tw) as f32 / fw, (y + th) as f32 / fh]);
+            // Lens correction reads up to this far from where framing points.
+            let m = params.lens_head[1];
+            let b = [b[0] - m, b[1] - m, b[2] + m, b[3] + m];
             let px = |v: f32, size: u32| (v * size as f32).clamp(0.0, size as f32);
             let sx = (px(b[0], sw_all).floor() as u32).saturating_sub(APRON).min(sw_all - 1);
             let sy = (px(b[1], sh_all).floor() as u32).saturating_sub(APRON).min(sh_all - 1);

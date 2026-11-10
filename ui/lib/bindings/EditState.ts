@@ -3,6 +3,7 @@ import type { Color } from "./Color";
 import type { Crop } from "./Crop";
 import type { Detail } from "./Detail";
 import type { Effects } from "./Effects";
+import type { LensCorrection } from "./LensCorrection";
 import type { Light } from "./Light";
 import type { Mask } from "./Mask";
 import type { ToneCurve } from "./ToneCurve";
@@ -13,4 +14,8 @@ export type EditState = { light: Light, whiteBalance: WhiteBalance, curve: ToneC
  * Local adjustments, applied in order. Omitted from the JSON when empty, so states saved
  * before masks existed keep their hashes.
  */
-masks?: Array<Mask>, };
+masks?: Array<Mask>, 
+/**
+ * Lens correction. Omitted from the JSON while untouched (older states keep their hashes).
+ */
+lens?: LensCorrection, };

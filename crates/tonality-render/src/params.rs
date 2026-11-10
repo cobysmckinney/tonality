@@ -1,5 +1,6 @@
 use tonality_core::color::CameraColor;
 use tonality_core::geometry::Geometry;
+use tonality_core::lens::{lens_table, LensProfile, LENS_KNOTS};
 use tonality_core::mask::{Mask, MaskShape};
 use tonality_core::EditState;
 
@@ -28,13 +29,21 @@ pub struct DevelopParams {
     pub geo1: [f32; 4],
     pub masks_head: [f32; 4],
     pub masks: [[[f32; 4]; MASK_VEC4S]; MAX_MASKS],
+    /// x: active, y: tile margin (source uv), zw: source size / its diagonal.
+    pub lens_head: [f32; 4],
+    /// Per radius knot: red, green, blue source/output radius ratio; vignetting gain.
+    pub lens: [[f32; 4]; LENS_KNOTS],
 }
 
 impl DevelopParams {
-    pub const FLOATS: usize = 80 + MAX_MASKS * MASK_VEC4S * 4;
+    pub const FLOATS: usize = 80 + MAX_MASKS * MASK_VEC4S * 4 + 4 + LENS_KNOTS * 4;
 
     /// `src_w × src_h`: the full-resolution source size (framing is computed in its pixels).
-    pub fn new(edit: &EditState, color: &CameraColor, src_w: u32, src_h: u32) -> Self {
+    /// `lens`: the photo's lens profile, if known.
+    pub fn new(edit: &EditState, color: &CameraColor, lens: Option<&LensProfile>, src_w: u32, src_h: u32) -> Self {
+        let (w, h) = (src_w.max(1) as f32, src_h.max(1) as f32);
+        let lt = lens_table(lens, &edit.lens, w, h);
+        let diag = w.hypot(h);
         let geo = Geometry::new(&edit.crop, src_w as f32, src_h as f32);
         let (shot_t, shot_tint) = color.as_shot_temperature_tint();
         let wbs = &edit.white_balance;
@@ -77,6 +86,8 @@ impl DevelopParams {
             geo1: [geo.m[1][0], geo.m[1][1], geo.m[1][2], geo.height],
             masks_head: [0.0; 4],
             masks: [[[0.0; 4]; MASK_VEC4S]; MAX_MASKS],
+            lens_head: [if lt.active { 1.0 } else { 0.0 }, lt.margin, w / diag, h / diag],
+            lens: lt.knots,
         }
         .with_masks(&edit.masks, src_w, src_h)
     }
@@ -150,6 +161,10 @@ impl DevelopParams {
                 v.extend_from_slice(row);
             }
         }
+        v.extend_from_slice(&self.lens_head);
+        for k in &self.lens {
+            v.extend_from_slice(k);
+        }
         v
     }
 }
@@ -186,13 +201,13 @@ mod tests {
 
     #[test]
     fn layout_matches_floats() {
-        assert_eq!(DevelopParams::new(&EditState::default(), &color(), 600, 400).to_vec().len(), DevelopParams::FLOATS);
+        assert_eq!(DevelopParams::new(&EditState::default(), &color(), None, 600, 400).to_vec().len(), DevelopParams::FLOATS);
         assert_eq!(std::mem::size_of::<DevelopParams>(), DevelopParams::FLOATS * 4);
     }
 
     #[test]
     fn default_is_as_shot_and_neutral() {
-        let p = DevelopParams::new(&EditState::default(), &color(), 600, 400);
+        let p = DevelopParams::new(&EditState::default(), &color(), None, 600, 400);
         let m = color().as_shot_multipliers();
         assert_eq!(&p.wb[..3], &m[..]);
         assert_eq!(p.light0, [1.0, 0.0, 0.0, 0.0]);
@@ -204,7 +219,7 @@ mod tests {
         let brush = || Mask { shape: MaskShape::Brush { strokes: vec![] }, ..Mask::default() };
         e.masks = vec![Mask { enabled: false, ..brush() }, Mask::default(), brush()];
         e.masks[1].adjust.exposure = 1.0;
-        let p = DevelopParams::new(&e, &color(), 600, 400);
+        let p = DevelopParams::new(&e, &color(), None, 600, 400);
         assert_eq!(p.masks_head, [2.0, 1.0, 400.0 / 600.0, 0.0]);
         assert_eq!(p.masks[0][2][0], 2.0); // radial
         assert_eq!(p.masks[0][4][0], 1.0);
@@ -215,7 +230,7 @@ mod tests {
     fn exposure_is_in_stops() {
         let mut e = EditState::default();
         e.light.exposure = 1.0;
-        assert!((DevelopParams::new(&e, &color(), 600, 400).light0[0] - 2.0).abs() < 1e-6);
+        assert!((DevelopParams::new(&e, &color(), None, 600, 400).light0[0] - 2.0).abs() < 1e-6);
     }
 
     #[test]
@@ -225,8 +240,8 @@ mod tests {
         let mut e = EditState::default();
         e.white_balance.temperature = Some(t + 1500.0);
         e.white_balance.tint = Some(tint);
-        let warm = DevelopParams::new(&e, &c, 600, 400).wb;
-        let shot = DevelopParams::new(&EditState::default(), &c, 600, 400).wb;
+        let warm = DevelopParams::new(&e, &c, None, 600, 400).wb;
+        let shot = DevelopParams::new(&EditState::default(), &c, None, 600, 400).wb;
         assert!(warm[0] / warm[2] > shot[0] / shot[2], "warm {warm:?} vs shot {shot:?}");
     }
 }

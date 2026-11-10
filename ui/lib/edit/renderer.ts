@@ -22,6 +22,8 @@ export const MAX_ZOOM = 8;
 
 /** Offset of the framing block (geo0, geo1) in the params uniform (see `DevelopParams`). */
 const GEO_OFFSET = 68;
+/** `lens_head` in the uniform block (after 16 masks × 7 vec4s); `.y` is the lens's tile margin. */
+const LENS_OFFSET = 80 + 16 * 7 * 4;
 
 /** The framed output: size in source pixels and the frame → source-uv mapping. */
 export interface Framing {
@@ -311,11 +313,15 @@ export class PreviewRenderer {
     this.requestDraw(true);
   }
 
+  /** How far (source uv) lens correction reads from where framing points. */
+  private lensMargin = 0;
+
   setParams(params: Float32Array) {
     const gl = this.gl;
     gl.bindBuffer(gl.UNIFORM_BUFFER, this.paramsUbo);
     gl.bufferData(gl.UNIFORM_BUFFER, params, gl.DYNAMIC_DRAW);
     this.hasParams = true;
+    this.lensMargin = params[LENS_OFFSET + 1] ?? 0;
     const prev = this.out;
     this.out = framingOf(params);
     if (Math.abs(prev.w - this.out.w) > 0.5 || Math.abs(prev.h - this.out.h) > 0.5) {
@@ -478,8 +484,9 @@ export class PreviewRenderer {
     const vx1 = Math.min(1, (cw - img.x) / img.w), vy1 = Math.min(1, (ch - img.y) / img.h);
     if (vx1 <= vx0 || vy1 <= vy0) return;
     const pts = [toSource(this.out, vx0, vy0), toSource(this.out, vx1, vy0), toSource(this.out, vx0, vy1), toSource(this.out, vx1, vy1)];
-    const u0 = Math.max(0, Math.min(...pts.map((p) => p[0]))), u1 = Math.min(1, Math.max(...pts.map((p) => p[0])));
-    const w0 = Math.max(0, Math.min(...pts.map((p) => p[1]))), w1 = Math.min(1, Math.max(...pts.map((p) => p[1])));
+    const lm = this.lensMargin;
+    const u0 = Math.max(0, Math.min(...pts.map((p) => p[0])) - lm), u1 = Math.min(1, Math.max(...pts.map((p) => p[0])) + lm);
+    const w0 = Math.max(0, Math.min(...pts.map((p) => p[1])) - lm), w1 = Math.min(1, Math.max(...pts.map((p) => p[1])) + lm);
     if (u1 <= u0 || w1 <= w0) return;
     const level = s >= 1 ? 0 : Math.floor(Math.log2(1 / s));
     const d = this.detail;

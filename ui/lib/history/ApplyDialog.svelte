@@ -12,6 +12,7 @@
     { id: "effects", label: "Effects" },
     { id: "crop", label: "Crop" },
     { id: "masks", label: "Masks" },
+    { id: "lens", label: "Lens Correction" },
   ];
   let chosen = $state<Set<Panel>>(new Set(["color"]));
 

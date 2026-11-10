@@ -177,7 +177,7 @@ fn run(
             };
             emit(done as f32, &label);
             let result = (|| -> Result<PathBuf, String> {
-                let params = DevelopParams::new(edit, &full.color, full.width, full.height);
+                let params = DevelopParams::new(edit, &full.color, full.lens.as_ref(), full.width, full.height);
                 // The long-edge limit applies to the framed output; scale the source to match.
                 let out_long = params.geo0[3].max(params.geo1[3]);
                 let full_long = full.width.max(full.height);

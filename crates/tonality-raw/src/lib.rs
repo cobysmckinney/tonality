@@ -4,12 +4,14 @@
 //! balance**. White balance and the camera→working-space matrix are applied on the GPU so
 //! the temperature/tint sliders are free to move (see `tonality_core::color`).
 
+mod lens;
 mod meta;
 mod preview;
 mod thumbnail;
 
 use std::path::Path;
 
+pub use lens::{lens_profile, lens_profiles};
 pub use meta::read_meta;
 pub use preview::{decode_full, decode_preview, FullImage, Preview, Region};
 pub use thumbnail::thumbnail;

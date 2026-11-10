@@ -5,6 +5,7 @@ use std::path::Path;
 use std::sync::{Arc, Mutex, OnceLock};
 
 use serde::Serialize;
+use tonality_core::lens::{LensProfile, LensSource};
 use tonality_core::ImageId;
 use tonality_raw::{FullImage, Preview, RawDecoder, Rawler};
 use ts_rs::TS;
@@ -27,6 +28,32 @@ pub struct ImageInfo {
     /// As-shot white balance, shown on the sliders while WB is untouched.
     pub as_shot_temperature: f32,
     pub as_shot_tint: f32,
+    /// The lens profile found for this photo, if any.
+    pub lens: Option<LensInfo>,
+}
+
+/// What the lens panel shows about a photo's profile.
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct LensInfo {
+    pub name: String,
+    pub source: LensSource,
+    pub distortion: bool,
+    pub vignetting: bool,
+    pub chromatic: bool,
+}
+
+impl From<&LensProfile> for LensInfo {
+    fn from(p: &LensProfile) -> Self {
+        Self {
+            name: p.name.clone(),
+            source: p.source,
+            distortion: p.distortion.is_some(),
+            vignetting: p.vignetting.is_some(),
+            chromatic: p.chromatic,
+        }
+    }
 }
 
 /// Keeps the last few previews so flipping between photos is instant.
@@ -75,6 +102,7 @@ impl Images {
             model: preview.metadata.model.clone(),
             as_shot_temperature: t.round(),
             as_shot_tint: tint.round(),
+            lens: preview.lens.as_ref().map(LensInfo::from),
         })
     }
 

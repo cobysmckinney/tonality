@@ -8,6 +8,7 @@ use rawler::imgop::xyz::Illuminant;
 use rawler::rawimage::{RawImage, RawImageData, RawPhotometricInterpretation};
 use rayon::prelude::*;
 use tonality_core::color::{CameraColor, Mat3};
+use tonality_core::lens::LensProfile;
 
 use crate::{Metadata, RawError, Result};
 
@@ -20,6 +21,8 @@ pub struct Preview {
     /// Interleaved RGB, IEEE half floats (bit patterns), row-major, top row first.
     pub pixels: Vec<u16>,
     pub color: CameraColor,
+    /// The lens's correction profile, if known.
+    pub lens: Option<LensProfile>,
     pub metadata: Metadata,
     /// Size of the full-resolution image ([`decode_full`]), after orientation.
     pub full_width: u32,
@@ -78,6 +81,7 @@ pub fn decode_preview(path: &Path, max_edge: usize) -> Result<Preview> {
         height: img.height(),
         pixels,
         color: d.color,
+        lens: profile(path),
         metadata: d.metadata,
         full_width,
         full_height,
@@ -91,6 +95,12 @@ pub struct FullImage {
     /// Interleaved RGB, IEEE half floats (bit patterns), row-major, top row first.
     pub pixels: Vec<u16>,
     pub color: CameraColor,
+    pub lens: Option<LensProfile>,
+}
+
+/// The lens profile for a RAW (embedded data, else lensfun).
+fn profile(path: &Path) -> Option<LensProfile> {
+    crate::lens_profile(path, &crate::read_meta(path).ok()?)
 }
 
 impl FullImage {
@@ -206,7 +216,7 @@ pub fn decode_full(path: &Path) -> Result<FullImage> {
     drop(rgb);
     let img = ImageBuffer::<Rgb<u16>, Vec<u16>>::from_raw(w as u32, h as u32, halves).expect("buffer size matches");
     let img = orient(img, d.orientation);
-    Ok(FullImage { width: img.width(), height: img.height(), pixels: img.into_raw(), color: d.color })
+    Ok(FullImage { width: img.width(), height: img.height(), pixels: img.into_raw(), color: d.color, lens: profile(path) })
 }
 
 /// A decoded (scaled, not demosaiced) RAW plus what's needed to develop it.
@@ -365,6 +375,7 @@ mod tests {
             height: h,
             pixels,
             color: CameraColor { xyz_to_cam: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]], as_shot_wb: [1.0; 3] },
+            lens: None,
         }
     }
 

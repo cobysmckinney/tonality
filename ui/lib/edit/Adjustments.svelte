@@ -2,6 +2,7 @@
   import type { ColorMixer } from "$lib/bindings/ColorMixer";
   import type { EditState } from "$lib/bindings/EditState";
   import type { HueBand } from "$lib/bindings/HueBand";
+  import type { LensCorrection } from "$lib/bindings/LensCorrection";
   import type { ImageInfo } from "$lib/bindings/ImageInfo";
   import Section from "$lib/design/Section.svelte";
   import Slider from "$lib/design/Slider.svelte";
@@ -78,6 +79,15 @@
       return v.hue || v.saturation || v.luminance;
     }),
   );
+  // ---- lens ----
+  // `edit.lens` is absent until first touched (so untouched states keep their hashes).
+  const LENS_DEFAULT: LensCorrection = { profile: false, distortion: 100, vignetting: 100, chromatic: true, manualDistortion: 0 };
+  const lens = $derived(edit.lens ?? LENS_DEFAULT);
+  function setLens(patch: Partial<LensCorrection>) {
+    edit.lens = { ...(edit.lens ?? LENS_DEFAULT), ...patch };
+  }
+  const lensInfo = $derived(image.lens);
+
   function resetMixer() {
     for (const b of bands) edit.color.mixer[b.id] = { hue: 0, saturation: 0, luminance: 0 };
     oncommit?.(null);
@@ -256,6 +266,77 @@
       />
     </Section>
 
+    <Section title="Lens Correction">
+      {#if lensInfo}
+        <label class="check">
+          <input
+            type="checkbox"
+            checked={lens.profile}
+            onchange={(e) => {
+              setLens({ profile: e.currentTarget.checked });
+              oncommit?.(null);
+            }}
+          />
+          Profile corrections
+        </label>
+        <p class="note">
+          {lensInfo.name} · {lensInfo.source === "embedded" ? "the camera's own correction data" : "lensfun database"}
+        </p>
+        {#if lens.profile}
+          {#if lensInfo.distortion}
+            <Slider
+              label="Distortion"
+              value={lens.distortion}
+              min={0}
+              max={200}
+              defaultValue={100}
+              bipolar={false}
+              unit="%"
+              oninput={(v) => setLens({ distortion: v })}
+              oncommit={() => oncommit?.("lens.distortion")}
+            />
+          {/if}
+          {#if lensInfo.vignetting}
+            <Slider
+              label="Vignetting"
+              value={lens.vignetting}
+              min={0}
+              max={200}
+              defaultValue={100}
+              bipolar={false}
+              unit="%"
+              oninput={(v) => setLens({ vignetting: v })}
+              oncommit={() => oncommit?.("lens.vignetting")}
+            />
+          {/if}
+          {#if lensInfo.chromatic}
+            <label class="check">
+              <input
+                type="checkbox"
+                checked={lens.chromatic}
+                onchange={(e) => {
+                  setLens({ chromatic: e.currentTarget.checked });
+                  oncommit?.(null);
+                }}
+              />
+              Remove chromatic aberration
+            </label>
+          {/if}
+        {/if}
+      {:else}
+        <p class="note">No correction profile for this lens. Manual distortion still works.</p>
+      {/if}
+      <span class="sub">Manual</span>
+      <Slider
+        label="Distortion"
+        value={lens.manualDistortion}
+        min={-100}
+        max={100}
+        oninput={(v) => setLens({ manualDistortion: v })}
+        oncommit={() => oncommit?.("lens.manualDistortion")}
+      />
+    </Section>
+
     <Section title="Effects">
       <span class="sub">Vignette</span>
       <Slider
@@ -385,6 +466,18 @@
     text-transform: uppercase;
     letter-spacing: 0.06em;
     color: var(--text-2);
+  }
+  .check {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin: var(--space-1) 0;
+    font-size: var(--fs-s);
+    color: var(--text-1);
+    cursor: pointer;
+  }
+  .check input {
+    accent-color: var(--text-1);
   }
   .note {
     margin: 0 0 var(--space-1);
