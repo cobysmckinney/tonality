@@ -1,3 +1,4 @@
+mod ai;
 mod export;
 mod history;
 mod images;
@@ -155,15 +156,26 @@ fn develop_params(id: ImageId, edit: EditState, images: State<'_, Images>) -> Cm
     Ok(DevelopParams::new(&edit, &p.color, p.lens.as_ref(), p.full_width, p.full_height).to_vec())
 }
 
-/// Brush mask rasters for `develop.wgsl`: three little-endian u32s (width, height, layers),
-/// then one 8-bit `width × height` layer per brush mask, in mask order.
+/// Raster mask layers (brush and AI) for `develop.wgsl`. Layout, little-endian u32s: width,
+/// height, layers, then the number of AI masks whose raster isn't generated yet and their
+/// indices; then one 8-bit `width × height` layer per raster mask, in mask order.
 #[tauri::command]
-fn mask_layers(id: ImageId, edit: EditState, images: State<'_, Images>) -> CmdResult<Response> {
+fn mask_layers(
+    id: ImageId,
+    edit: EditState,
+    images: State<'_, Images>,
+    store: State<'_, Store>,
+    catalog: State<'_, history::CatalogState>,
+) -> CmdResult<Response> {
     let p = images.get(id).ok_or("image not open")?;
-    let l = tonality_core::mask::brush_layers(&edit.masks, p.full_width, p.full_height);
-    let mut out = Vec::with_capacity(12 + l.data.len());
-    for v in [l.width, l.height, l.layers] {
+    let (_, hash, _) = catalog.with(|c| c.image_file(id))?;
+    let l = ai::layers(&store, &hash, &edit, p.full_width, p.full_height, p.lens.as_ref());
+    let mut out = Vec::with_capacity(16 + 4 * l.missing.len() + l.data.len());
+    for v in [l.width, l.height, l.layers, l.missing.len() as u32] {
         out.extend_from_slice(&v.to_le_bytes());
+    }
+    for &i in &l.missing {
+        out.extend_from_slice(&(i as u32).to_le_bytes());
     }
     out.extend_from_slice(&l.data);
     Ok(Response::new(out))
@@ -175,6 +187,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .manage(Images::default())
+        .manage(ai::Detector::default())
         .register_asynchronous_uri_scheme_protocol(thumbs::SCHEME, thumbs::handle)
         .setup(|app| {
             let root = Store::resolve(app.path().picture_dir().ok(), app.path().home_dir().ok());
@@ -203,6 +216,9 @@ pub fn run() {
             develop_params,
             develop_curve,
             mask_layers,
+            ai::ai_models,
+            ai::ai_model_for,
+            ai::ai_detect,
             history::history_open,
             history::history_commit,
             history::history_undo,

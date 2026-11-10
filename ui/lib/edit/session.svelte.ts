@@ -1,5 +1,9 @@
 // The image currently open in Edit. Module-level so it survives switching to Library and back.
+import { listen } from "@tauri-apps/api/event";
+import { ask } from "@tauri-apps/plugin-dialog";
+import { SvelteMap } from "svelte/reactivity";
 import { api } from "$lib/api";
+import type { AiTarget } from "$lib/bindings/AiTarget";
 import type { Checkout } from "$lib/bindings/Checkout";
 import type { Crop } from "$lib/bindings/Crop";
 import type { EditState } from "$lib/bindings/EditState";
@@ -8,7 +12,22 @@ import type { ImageInfo } from "$lib/bindings/ImageInfo";
 import type { Panel } from "$lib/bindings/Panel";
 import type { Mask } from "$lib/bindings/Mask";
 import { scheduleLibraryThumb } from "./versions";
-import { MAX_MASKS, masksOf, newMask, type BrushTool, type MaskKind } from "./masks";
+import { MAX_MASKS, aiKey, masksOf, newAiMask, newMask, type AiPreset, type BrushTool, type MaskKind } from "./masks";
+
+/** Where an AI mask's detection stands (keyed by `aiKey`). */
+export type AiStatus =
+  | { state: "working" }
+  | { state: "found" }
+  | { state: "empty" }
+  | { state: "error"; message: string };
+
+/** The latest `ai-progress` event: a model download, or a detection running. */
+export interface AiProgress {
+  stage: "download" | "detect";
+  model: string;
+  done: number;
+  total: number;
+}
 import type { Framing } from "./renderer";
 
 class EditSession {
@@ -32,6 +51,23 @@ class EditSession {
   /** Tint the selected mask's area (O). */
   maskOverlay = $state(false);
   brush = $state<BrushTool>({ size: 0.04, feather: 0.6, strength: 1, erase: false });
+  /** Detections, by `aiKey`. */
+  aiStatus = new SvelteMap<string, AiStatus>();
+  aiProgress = $state<AiProgress | null>(null);
+  /** Bumped when a detection finishes, so the raster layers are fetched again. */
+  aiEpoch = $state(0);
+  /** Drawing a loop for Select Object: a new mask, or re-selecting mask `replace`. */
+  lassoing = $state<{ replace: number | null } | null>(null);
+  /** Models the user agreed to download this session. */
+  private approved = new Set<string>();
+
+  constructor() {
+    listen<AiProgress>("ai-progress", (e) => {
+      const p = e.payload;
+      this.aiProgress = p.stage === "detect" && p.done >= p.total ? null : p;
+    }).catch(() => {});
+  }
+
   /** The main view's framing, for placing new masks (set by Canvas). */
   framing = $state.raw<Framing | null>(null);
 
@@ -54,6 +90,7 @@ class EditSession {
 
   stopMasks() {
     this.masking = false;
+    this.lassoing = null;
   }
 
   addMask(kind: MaskKind) {
@@ -64,6 +101,107 @@ class EditSession {
     this.edit.masks = [...this.masks, m];
     this.maskIndex = this.edit.masks.length - 1;
     return this.commit(null);
+  }
+
+  /** Ask before a model's first download. Resolves false if declined. */
+  private async confirmModel(model: string): Promise<boolean> {
+    if (this.approved.has(model)) return true;
+    const info = (await api.ai.models()).find((m) => m.id === model);
+    if (!info || info.installed) {
+      this.approved.add(model);
+      return true;
+    }
+    const mb = Math.round(info.size / 1e6);
+    const ok = await ask(
+      `${info.label} masks need a one-time ${mb} MB download. The model runs on this computer: your photos never leave it.`,
+      { title: "Download AI model", okLabel: `Download ${mb} MB`, kind: "info" },
+    );
+    if (ok) this.approved.add(model);
+    return ok;
+  }
+
+  /** Add an AI mask and detect it. */
+  async addAiMask(preset: Exclude<AiPreset, "object">) {
+    if (!this.edit || this.masks.length >= MAX_MASKS) return;
+    const target: AiTarget = preset === "background" ? { kind: "subject" } : { kind: preset };
+    return this.addAi(preset, target);
+  }
+
+  private async addAi(preset: AiPreset, target: AiTarget) {
+    const model = await api.ai.modelFor(target);
+    if (!(await this.confirmModel(model)) || !this.edit) return;
+    const m = newAiMask(preset, target, model, this.masks);
+    this.edit.masks = [...this.masks, m];
+    this.maskIndex = this.edit.masks.length - 1;
+    this.commit(null);
+    await this.detect(m);
+  }
+
+  startLasso(replace: number | null = null) {
+    if (!this.edit || (replace === null && this.masks.length >= MAX_MASKS)) return;
+    this.lassoing = { replace };
+  }
+
+  cancelLasso() {
+    this.lassoing = null;
+  }
+
+  /** A loop was drawn (source uv): select the object in it. */
+  async finishLasso(lasso: [number, number][]) {
+    const job = this.lassoing;
+    this.lassoing = null;
+    if (!job || !this.edit || lasso.length < 3) return;
+    const target: AiTarget = { kind: "object", lasso };
+    const i = job.replace;
+    const old = i !== null ? this.edit.masks?.[i] : undefined;
+    if (old && old.shape.kind === "ai") {
+      old.shape.target = target;
+      old.shape.model = await api.ai.modelFor(target);
+      this.commit(null);
+      await this.detect(old);
+      return;
+    }
+    await this.addAi("object", target);
+  }
+
+  /** Run the model for an AI mask, unless it's already running. */
+  async detect(m: Mask) {
+    const key = aiKey(m);
+    const id = this.image?.id;
+    if (!key || id === undefined || m.shape.kind !== "ai" || this.aiStatus.get(key)?.state === "working") return;
+    const { target, model } = $state.snapshot(m.shape);
+    this.aiStatus.set(key, { state: "working" });
+    try {
+      const found = await api.ai.detect(id, target, model, this.edit?.lens ?? null);
+      this.aiStatus.set(key, { state: found ? "found" : "empty" });
+      // A scene pass also caches its sibling (sky ↔ people).
+      if (target.kind === "sky" || target.kind === "people") {
+        const other = target.kind === "sky" ? "people" : "sky";
+        const k = `${model}:${JSON.stringify({ kind: other })}`;
+        if (!this.aiStatus.has(k)) this.aiStatus.set(k, { state: "found" });
+      }
+    } catch (e) {
+      this.aiStatus.set(key, { state: "error", message: String(e) });
+    } finally {
+      this.aiProgress = null;
+      if (this.image?.id === id) this.aiEpoch++;
+    }
+  }
+
+  /** The layers came back without some AI rasters (new library, cleared cache): detect them. */
+  detectMissing(indices: number[]) {
+    for (const i of indices) {
+      const m = this.masks[i];
+      const key = m && aiKey(m);
+      const st = key ? this.aiStatus.get(key)?.state : undefined;
+      // Don't retry failures automatically, or loop on a model that found nothing.
+      if (m && st !== "working" && st !== "error" && st !== "empty") {
+        if (st === "found") this.aiStatus.delete(key!); // cache was cleared under us
+        this.confirmModel((m.shape as { model: string }).model).then((ok) => {
+          if (ok) this.detect(m);
+        });
+      }
+    }
   }
 
   deleteMask(i: number) {
@@ -123,6 +261,8 @@ class EditSession {
       this.cropEntry = null;
       this.masking = false;
       this.maskIndex = null;
+      this.lassoing = null;
+      this.aiStatus.clear();
       this.edit = checkout.state;
       this.history = checkout.view;
       this.image = info;

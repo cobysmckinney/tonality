@@ -5,10 +5,9 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 use tonality_core::{EditState, ImageId};
 use tonality_raw::FullImage;
-use tonality_core::mask::brush_layers;
 use tonality_render::{curve_lut_rgba16f, DevelopParams, Gpu, Rendered, Source};
 use ts_rs::TS;
 
@@ -89,6 +88,8 @@ fn gpu() -> Result<std::sync::MutexGuard<'static, Gpu>, String> {
 struct Job {
     image: ImageId,
     path: PathBuf,
+    /// Contents hash (keys the AI mask cache).
+    hash: String,
     stem: String,
     versions: Vec<(Option<String>, EditState)>,
 }
@@ -108,7 +109,7 @@ pub async fn export_images(
     // Gather what to render while holding the catalog briefly.
     let mut jobs = Vec::new();
     for &id in &ids {
-        let (rel, _, name) = catalog.with(|c| c.image_file(id))?;
+        let (rel, hash, name) = catalog.with(|c| c.image_file(id))?;
         let versions = catalog.with(|c| {
             let co = c.history_open(id)?;
             let view = &co.view;
@@ -126,7 +127,7 @@ pub async fn export_images(
             Ok(out)
         })?;
         let stem = Path::new(&name).file_stem().map_or(name.clone(), |s| s.to_string_lossy().into_owned());
-        jobs.push(Job { image: id, path: store.abs(&rel), stem, versions });
+        jobs.push(Job { image: id, path: store.abs(&rel), hash, stem, versions });
     }
 
     let images = images.inner().clone();
@@ -194,7 +195,30 @@ fn run(
                     let (_, (w, h, px)) = scaled.iter().find(|(l, _)| *l == src_long).unwrap();
                     Source { width: *w, height: *h, pixels: px, frame: [full.width, full.height] }
                 };
-                let rendered = gpu()?.render(&src, &params, &curve_lut_rgba16f(edit), &brush_layers(&edit.masks, full.width, full.height), |f| emit(done as f32 + f * 0.9, &label))?;
+                let store = app.state::<crate::store::Store>();
+                let mut layers = crate::ai::layers(&store, &job.hash, edit, full.width, full.height, full.lens.as_ref());
+                if !layers.missing.is_empty() {
+                    // AI masks whose raster isn't cached (another library, a cleared cache):
+                    // detect them now from this decode.
+                    let (sw, sh, px) = full.scaled(2048);
+                    let photo = crate::ai::Photo {
+                        hash: &job.hash,
+                        pixels: &px,
+                        width: sw,
+                        height: sh,
+                        color: &full.color,
+                        profile: full.lens.as_ref(),
+                        full_width: full.width,
+                        full_height: full.height,
+                    };
+                    for &i in &layers.missing {
+                        if let tonality_core::mask::MaskShape::Ai { target, model, .. } = &edit.masks[i].shape {
+                            crate::ai::detect(&app, &app.state::<crate::ai::Detector>(), &store, &photo, &edit.lens, target, model)?;
+                        }
+                    }
+                    layers = crate::ai::layers(&store, &job.hash, edit, full.width, full.height, full.lens.as_ref());
+                }
+                let rendered = gpu()?.render(&src, &params, &curve_lut_rgba16f(edit), &layers, |f| emit(done as f32 + f * 0.9, &label))?;
                 let target = unique_path(&folder, &sanitize(&label), settings.format.extension());
                 write(&rendered, &target, &settings)?;
                 Ok(target)

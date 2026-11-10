@@ -2,9 +2,11 @@
 import type { EditState } from "$lib/bindings/EditState";
 import type { Mask } from "$lib/bindings/Mask";
 import type { MaskShape } from "$lib/bindings/MaskShape";
+import type { AiTarget } from "$lib/bindings/AiTarget";
 import type { Framing } from "./renderer";
 
-export type MaskKind = MaskShape["kind"];
+/** Masks drawn by hand (AI masks are created by detection instead). */
+export type MaskKind = Exclude<MaskShape["kind"], "ai">;
 /** Mirrors `MAX_MASKS` in tonality-render. */
 export const MAX_MASKS = 16;
 
@@ -36,9 +38,19 @@ export function masksOf(edit: EditState): Mask[] {
   return edit.masks ?? [];
 }
 
-/** A new mask's name: "Radial 2" etc. */
-export function nextName(masks: Mask[], kind: MaskKind): string {
-  const label = KIND_LABEL[kind];
+/** The AI presets offered in the mask panel. Background is Subject, inverted. */
+export type AiPreset = "subject" | "background" | "sky" | "people" | "object";
+export const AI_LABEL: Record<AiPreset, string> = {
+  subject: "Subject",
+  background: "Background",
+  sky: "Sky",
+  people: "People",
+  object: "Object",
+};
+
+/** A new mask's name: "Radial 2", "Sky 1" etc. */
+export function nextName(masks: Mask[], kind: MaskKind | AiPreset): string {
+  const label = kind in KIND_LABEL ? KIND_LABEL[kind as MaskKind] : AI_LABEL[kind as AiPreset];
   let n = 0;
   for (const m of masks) {
     const k = m.name.match(new RegExp(`^${label} (\\d+)$`));
@@ -83,11 +95,32 @@ export function newMask(kind: MaskKind, masks: Mask[], fr: Framing, fullW: numbe
   };
 }
 
-/** Index of mask `i`'s raster among the brush layers (every brush mask has one). */
+/** Brush and AI masks are raster layers; the others are formulas. */
+export const isRaster = (m: Mask) => m.shape.kind === "brush" || m.shape.kind === "ai";
+
+/** Index of mask `i`'s raster among the raster layers (every brush and AI mask has one). */
 export function brushLayer(masks: Mask[], i: number): number {
   let n = 0;
-  for (let k = 0; k < i; k++) if (masks[k].shape.kind === "brush") n++;
+  for (let k = 0; k < i; k++) if (isRaster(masks[k])) n++;
   return n;
+}
+
+/** A new AI mask (its raster is detected separately). */
+export function newAiMask(preset: AiPreset, target: AiTarget, model: string, masks: Mask[]): Mask {
+  return {
+    name: nextName(masks, preset),
+    enabled: true,
+    shape: { kind: "ai", target, model, refine: [] },
+    invert: preset === "background",
+    amount: 100,
+    range: { low: 0, high: 100, smoothness: 20 },
+    adjust: { exposure: 0, contrast: 0, highlights: 0, shadows: 0, whites: 0, blacks: 0, temperature: 0, tint: 0, saturation: 0 },
+  };
+}
+
+/** Identifies one AI detection (a model's answer for a target), for tracking its status. */
+export function aiKey(m: Mask): string | null {
+  return m.shape.kind === "ai" ? `${m.shape.model}:${JSON.stringify(m.shape.target)}` : null;
 }
 
 /** Index of mask `i` in the shader (hidden masks are skipped), or null if it isn't drawn. */
@@ -98,10 +131,17 @@ export function shaderIndex(masks: Mask[], i: number): number | null {
   return n < MAX_MASKS ? n : null;
 }
 
-/** Identifies the brush rasters a state needs (so they're only refetched when strokes change). */
-export function brushKey(edit: EditState): string {
-  const strokes = masksOf(edit).flatMap((m) => (m.shape.kind === "brush" ? [m.shape.strokes] : []));
-  return strokes.length ? JSON.stringify(strokes) : "";
+/**
+ * Identifies the raster layers a state needs, so they're only refetched when they change:
+ * brush strokes, AI masks (and, with any, the lens settings they're warped by), and `epoch`,
+ * bumped whenever a detection finishes.
+ */
+export function brushKey(edit: EditState, epoch = 0): string {
+  const masks = masksOf(edit);
+  const layers = masks.flatMap((m): unknown[] => (m.shape.kind === "brush" ? [m.shape.strokes] : m.shape.kind === "ai" ? [m.shape] : []));
+  if (!layers.length) return "";
+  const ai = masks.some((m) => m.shape.kind === "ai");
+  return JSON.stringify(ai ? [layers, edit.lens ?? null, epoch] : layers);
 }
 
 /** Mirrors `MASK_EDGE` / `mask_size` in tonality-core: the brush raster size. */
@@ -111,12 +151,14 @@ export function maskSize(fullW: number, fullH: number): [number, number] {
   return [Math.max(1, Math.round(Math.fround(fullW * s))), Math.max(1, Math.round(Math.fround(fullH * s)))];
 }
 
-/** Brush rasters, as sent by `mask_layers`. */
+/** Raster layers, as sent by `mask_layers`. */
 export interface BrushLayers {
   width: number;
   height: number;
   layers: number;
   data: Uint8Array;
+  /** AI masks whose raster hasn't been detected yet (indices into the masks). */
+  missing?: number[];
 }
 
 /** Brush settings (not part of the edit: they shape new strokes). */

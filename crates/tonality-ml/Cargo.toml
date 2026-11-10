@@ -1,0 +1,18 @@
+[package]
+name = "tonality-ml"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+half.workspace = true
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+rayon.workspace = true
+thiserror.workspace = true
+ort = { version = "=2.0.0-rc.15", default-features = false, features = ["std", "download-binaries", "tls-native", "copy-dylibs", "api-31"] }
+ureq = "3"
+sha2 = "0.10"
+tonality-core.workspace = true
+
+[dev-dependencies]
+tonality-raw.workspace = true

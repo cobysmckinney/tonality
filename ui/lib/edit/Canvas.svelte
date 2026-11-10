@@ -9,6 +9,7 @@
   import CropOverlay from "./CropOverlay.svelte";
   import { FULL, turnedSize } from "./crop";
   import MaskOverlay from "./MaskOverlay.svelte";
+  import LassoOverlay from "./LassoOverlay.svelte";
   import { brushKey, brushLayer, maskSize, masksOf, shaderIndex, type BrushLayers } from "./masks";
   import { session } from "./session.svelte";
   import type { Mask } from "$lib/bindings/Mask";
@@ -203,7 +204,7 @@
           pending = null;
           const key = JSON.stringify(next.curve);
           // Brush rasters only when strokes change (undefined: unchanged; null: none).
-          const bk = `${id}:${brushKey(next)}`;
+          const bk = `${id}:${brushKey(next, session.aiEpoch)}`;
           const [params, curve, brush] = await Promise.all([
             api.developParams(id, next),
             key !== curveKey ? api.developCurve(next) : null,
@@ -227,6 +228,7 @@
   const main = pipeline((r, params, curve, brush) => {
     if (curve) r.setCurve(curve);
     if (brush !== undefined) r.setBrush("main", brush);
+    if (brush?.missing?.length) session.detectMissing(brush.missing);
     r.setParams(params);
     session.framing = r.framing;
   });
@@ -263,8 +265,9 @@
   function endStroke(i: number, stroke: Stroke) {
     renderer?.endLive();
     const m = edit.masks?.[i];
-    if (!m || m.shape.kind !== "brush") return;
-    m.shape.strokes.push(stroke);
+    if (m?.shape.kind === "brush") m.shape.strokes.push(stroke);
+    else if (m?.shape.kind === "ai") m.shape.refine.push(stroke);
+    else return;
     session.commit(null);
   }
 
@@ -280,6 +283,7 @@
     // While cropping, show the whole (straightened) frame; the overlay shows the crop.
     if (cropping && !before) state.crop = { ...state.crop, rect: [...FULL] };
     const r = renderer;
+    void session.aiEpoch; // a finished detection means new layers
     if (r) main(r, image.id, state);
   });
 
@@ -323,7 +327,14 @@
   {#if cropping && oncrop && frameRect.w > 0}
     <CropOverlay crop={edit.crop} frame={frameRect} tw={turned[0]} th={turned[1]} aspect={cropAspect} {level} onchange={oncrop} {onlevel} />
   {/if}
-  {#if selected !== null && masks[selected] && renderer && frameRect.w > 0}
+  {#if session.lassoing && renderer && frameRect.w > 0}
+    <LassoOverlay
+      frame={frameRect}
+      framing={session.framing ?? renderer.framing}
+      ondone={(lasso) => session.finishLasso(lasso)}
+      oncancel={() => session.cancelLasso()}
+    />
+  {:else if selected !== null && masks[selected] && renderer && frameRect.w > 0}
     {@const i = selected}
     <MaskOverlay
       mask={masks[i]}

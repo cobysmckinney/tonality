@@ -52,6 +52,54 @@ pub enum MaskShape {
     Radial { center: [f32; 2], radius: [f32; 2], angle: f32, feather: f32 },
     /// Painted strokes, applied in order.
     Brush { strokes: Vec<Stroke> },
+    /// Found by an on-device model. The raster itself is cached outside the edit (it is
+    /// regenerated from the photo when missing); `refine` strokes are painted over it.
+    Ai {
+        target: AiTarget,
+        /// Model that produced it (`"subject@1"`), so a model update never changes an edit.
+        model: String,
+        #[serde(default)]
+        refine: Vec<Stroke>,
+    },
+}
+
+/// What an AI mask selects.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+#[ts(export)]
+pub enum AiTarget {
+    /// The photo's main subject (inverted, the background).
+    Subject,
+    Sky,
+    People,
+    /// Whatever was circled: `lasso` is a closed loop in source uv.
+    Object { lasso: Vec<[f32; 2]> },
+}
+
+impl AiTarget {
+    pub fn label(&self) -> &'static str {
+        match self {
+            AiTarget::Subject => "Subject",
+            AiTarget::Sky => "Sky",
+            AiTarget::People => "People",
+            AiTarget::Object { .. } => "Object",
+        }
+    }
+
+    /// Stable name for the cached raster: the target, plus a hash of the lasso for objects.
+    pub fn cache_key(&self) -> String {
+        match self {
+            AiTarget::Object { lasso } => {
+                let mut h = blake3::Hasher::new();
+                for p in lasso {
+                    h.update(&p[0].to_le_bytes());
+                    h.update(&p[1].to_le_bytes());
+                }
+                format!("object-{}", &h.finalize().to_hex()[..16])
+            }
+            t => t.label().to_ascii_lowercase(),
+        }
+    }
 }
 
 impl Default for MaskShape {
@@ -66,7 +114,13 @@ impl MaskShape {
             MaskShape::Linear { .. } => "Linear",
             MaskShape::Radial { .. } => "Radial",
             MaskShape::Brush { .. } => "Brush",
+            MaskShape::Ai { target, .. } => target.label(),
         }
+    }
+
+    /// Whether the mask is a raster layer (brush or AI) rather than a formula.
+    pub fn is_raster(&self) -> bool {
+        matches!(self, MaskShape::Brush { .. } | MaskShape::Ai { .. })
     }
 }
 
@@ -151,30 +205,56 @@ pub fn mask_size(src_w: u32, src_h: u32) -> (u32, u32) {
     (((src_w as f32 * s).round() as u32).max(1), ((src_h as f32 * s).round() as u32).max(1))
 }
 
-/// The rasters of every brush mask in `masks` (in order), as layers of one `width × height`
-/// 8-bit image. Hidden masks are included, so a mask's layer is its index among brush masks.
+/// The rasters of every raster mask in `masks` (brush and AI, in order), as layers of one
+/// `width × height` 8-bit image. Hidden masks are included, so a mask's layer is its index
+/// among raster masks.
 pub struct BrushLayers {
     pub width: u32,
     pub height: u32,
     pub layers: u32,
     pub data: Vec<u8>,
+    /// Indices (into `masks`) of AI masks whose model raster wasn't available: their layer
+    /// holds only the refine strokes until the raster is generated.
+    pub missing: Vec<usize>,
 }
 
+/// Brush layers only (AI masks get empty layers and are reported missing).
 pub fn brush_layers(masks: &[Mask], src_w: u32, src_h: u32) -> BrushLayers {
+    mask_layers(masks, src_w, src_h, |_, _| None)
+}
+
+/// Every raster layer. `ai(index, mask)` supplies an AI mask's model raster, already
+/// [`mask_size`] and in the masks' uv space (see [`crate::lens::warp_to_uv`]).
+pub fn mask_layers(
+    masks: &[Mask],
+    src_w: u32,
+    src_h: u32,
+    mut ai: impl FnMut(usize, &Mask) -> Option<Vec<u8>>,
+) -> BrushLayers {
     let (width, height) = mask_size(src_w, src_h);
+    let len = (width * height) as usize;
     let mut data = Vec::new();
     let mut layers = 0;
-    for m in masks {
-        if let MaskShape::Brush { strokes } = &m.shape {
-            let mut layer = vec![0u8; (width * height) as usize];
-            for s in strokes {
-                paint(&mut layer, width, height, s);
+    let mut missing = Vec::new();
+    for (i, m) in masks.iter().enumerate() {
+        let (mut layer, strokes) = match &m.shape {
+            MaskShape::Brush { strokes } => (vec![0u8; len], strokes),
+            MaskShape::Ai { refine, .. } => {
+                let base = ai(i, m).filter(|r| r.len() == len);
+                if base.is_none() {
+                    missing.push(i);
+                }
+                (base.unwrap_or_else(|| vec![0u8; len]), refine)
             }
-            data.extend_from_slice(&layer);
-            layers += 1;
+            _ => continue,
+        };
+        for s in strokes {
+            paint(&mut layer, width, height, s);
         }
+        data.extend_from_slice(&layer);
+        layers += 1;
     }
-    BrushLayers { width, height, layers, data }
+    BrushLayers { width, height, layers, data, missing }
 }
 
 /// Paint one stroke into `layer`.
@@ -261,9 +341,13 @@ fn describe_mask(a: &Mask, b: &Mask) -> String {
     let mut what: Vec<String> = Vec::new();
     if a.shape != b.shape {
         what.push(match (&a.shape, &b.shape) {
-            (MaskShape::Brush { strokes: sa }, MaskShape::Brush { strokes: sb }) if sb.len() > sa.len() => {
+            (MaskShape::Brush { strokes: sa }, MaskShape::Brush { strokes: sb })
+            | (MaskShape::Ai { refine: sa, .. }, MaskShape::Ai { refine: sb, .. })
+                if sb.len() > sa.len() =>
+            {
                 if sb.last().is_some_and(|s| s.erase) { "Erase".into() } else { "Paint".into() }
             }
+            (MaskShape::Ai { target: ta, .. }, MaskShape::Ai { target: tb, .. }) if ta != tb => "Reselect".into(),
             _ => "Shape".into(),
         });
     }
@@ -295,7 +379,9 @@ fn describe_mask(a: &Mask, b: &Mask) -> String {
         }
     }
     match what.as_slice() {
-        [w] if w == "Paint" || w == "Erase" || w == "Invert" || w == "Uninvert" => format!("{w} {name}"),
+        [w] if w == "Paint" || w == "Erase" || w == "Invert" || w == "Uninvert" || w == "Reselect" => {
+            format!("{w} {name}")
+        }
         [w] => format!("{name} {w}"),
         ws => format!("{name}: {} adjustments", ws.len()),
     }
@@ -409,5 +495,50 @@ mod tests {
         assert!(j.contains(r#""shape":{"kind":"linear","from":[0.5,0.0],"to":[0.5,0.5]}"#), "{j}");
         let back: Mask = serde_json::from_str(&j).unwrap();
         assert_eq!(back, m);
+    }
+
+    fn ai(target: AiTarget) -> Mask {
+        Mask { shape: MaskShape::Ai { target, model: "subject@1".into(), refine: vec![] }, ..Mask::default() }
+    }
+
+    #[test]
+    fn ai_json_shape() {
+        let m = ai(AiTarget::Sky);
+        let j = serde_json::to_string(&m.shape).unwrap();
+        assert_eq!(j, r#"{"kind":"ai","target":{"kind":"sky"},"model":"subject@1","refine":[]}"#);
+        // `refine` may be absent.
+        let back: MaskShape = serde_json::from_str(r#"{"kind":"ai","target":{"kind":"object","lasso":[[0.1,0.2]]},"model":"sam@1"}"#).unwrap();
+        assert!(matches!(back, MaskShape::Ai { ref refine, .. } if refine.is_empty()));
+    }
+
+    #[test]
+    fn cache_keys_are_stable_and_lasso_specific() {
+        assert_eq!(AiTarget::Sky.cache_key(), "sky");
+        let a = AiTarget::Object { lasso: vec![[0.1, 0.2], [0.3, 0.4]] };
+        let b = AiTarget::Object { lasso: vec![[0.1, 0.2], [0.3, 0.41]] };
+        assert_eq!(a.cache_key(), a.clone().cache_key());
+        assert_ne!(a.cache_key(), b.cache_key());
+        assert!(a.cache_key().starts_with("object-"));
+    }
+
+    #[test]
+    fn ai_layers_sit_between_brush_layers_and_report_missing() {
+        let masks = vec![brush(vec![stroke(vec![[0.5, 0.5]])]), Mask::default(), ai(AiTarget::Subject), ai(AiTarget::Sky)];
+        let (w, h) = mask_size(64, 32);
+        let len = (w * h) as usize;
+        let l = mask_layers(&masks, 64, 32, |i, _| (i == 2).then(|| vec![200u8; len]));
+        assert_eq!(l.layers, 3, "brush, subject, sky; the radial has no layer");
+        assert_eq!(l.missing, [3]);
+        assert!(l.data[len..2 * len].iter().all(|&v| v == 200), "subject raster");
+        assert!(l.data[2 * len..].iter().all(|&v| v == 0), "missing sky is empty");
+        // Refine strokes paint over the model raster.
+        let mut refined = ai(AiTarget::Subject);
+        if let MaskShape::Ai { refine, .. } = &mut refined.shape {
+            refine.push(Stroke { erase: true, ..stroke(vec![[0.5, 0.5]]) });
+        }
+        let l = mask_layers(&[refined], 64, 32, |_, _| Some(vec![255u8; len]));
+        let centre = (h / 2 * w + w / 2) as usize;
+        assert_eq!(l.data[centre], 0, "erased");
+        assert_eq!(l.data[0], 255, "untouched corner");
     }
 }

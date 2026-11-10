@@ -195,9 +195,86 @@ pub fn lens_table(profile: Option<&LensProfile>, s: &LensCorrection, w: f32, h: 
     out
 }
 
+/// The shader's lens mapping (`fs_main`): the corrected position `uv` shows the source at
+/// `0.5 + k(r)·(uv − 0.5)`, with `r` the radius in half-diagonals and `k` the green distortion
+/// ratio. `src_w × src_h` is the photo's size.
+pub struct UvToSource {
+    green: Radial,
+    ax: f32,
+    ay: f32,
+    active: bool,
+}
+
+impl UvToSource {
+    pub fn new(table: &LensTable, src_w: u32, src_h: u32) -> Self {
+        let diag = ((src_w as f32).powi(2) + (src_h as f32).powi(2)).sqrt().max(1e-6);
+        Self {
+            green: std::array::from_fn(|i| table.knots[i][1]),
+            ax: src_w as f32 / diag,
+            ay: src_h as f32 / diag,
+            active: table.active,
+        }
+    }
+
+    pub fn map(&self, uv: [f32; 2]) -> [f32; 2] {
+        if !self.active {
+            return uv;
+        }
+        let (dx, dy) = (uv[0] - 0.5, uv[1] - 0.5);
+        let r = ((dx * 2.0 * self.ax).powi(2) + (dy * 2.0 * self.ay).powi(2)).sqrt();
+        let k = sample(&self.green, r);
+        [(0.5 + k * dx).clamp(0.0, 1.0), (0.5 + k * dy).clamp(0.0, 1.0)]
+    }
+}
+
+/// Resample a mask raster made on the *uncorrected* source (as models see the photo) into the
+/// corrected uv space masks live in (see [`UvToSource`]).
+pub fn warp_to_uv(raster: &[u8], w: u32, h: u32, table: &LensTable, src_w: u32, src_h: u32) -> Vec<u8> {
+    if !table.active {
+        return raster.to_vec();
+    }
+    let map = UvToSource::new(table, src_w, src_h);
+    let at = |x: f32, y: f32| -> f32 {
+        let x = (x * w as f32 - 0.5).clamp(0.0, (w - 1) as f32);
+        let y = (y * h as f32 - 0.5).clamp(0.0, (h - 1) as f32);
+        let (x0, y0) = (x as u32, y as u32);
+        let (x1, y1) = ((x0 + 1).min(w - 1), (y0 + 1).min(h - 1));
+        let (tx, ty) = (x - x0 as f32, y - y0 as f32);
+        let p = |x: u32, y: u32| raster[(y * w + x) as usize] as f32;
+        let a = p(x0, y0) * (1.0 - tx) + p(x1, y0) * tx;
+        let b = p(x0, y1) * (1.0 - tx) + p(x1, y1) * tx;
+        a * (1.0 - ty) + b * ty
+    };
+    let mut out = vec![0u8; (w * h) as usize];
+    for y in 0..h {
+        for x in 0..w {
+            let s = map.map([(x as f32 + 0.5) / w as f32, (y as f32 + 0.5) / h as f32]);
+            out[(y * w + x) as usize] = at(s[0], s[1]).round() as u8;
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn warp_is_identity_without_correction_and_follows_the_ratio_with_it() {
+        let (w, h) = (40u32, 20u32);
+        let raster: Vec<u8> = (0..w * h).map(|i| ((i % w) * 6) as u8).collect();
+        assert_eq!(warp_to_uv(&raster, w, h, &LensTable::identity(), 400, 200), raster);
+
+        // Constant ratio 0.5: corrected uv shows the source at half the distance from the centre.
+        let table = LensTable { knots: [[0.5, 0.5, 0.5, 1.0]; LENS_KNOTS], active: true, margin: 0.0 };
+        let out = warp_to_uv(&raster, w, h, &table, 400, 200);
+        let row = (h / 2 * w) as usize;
+        // Leftmost corrected pixel (u ≈ 0.0125) reads source u ≈ 0.256 → value ≈ 0.256·40·6.
+        let expect = ((0.5 + 0.5 * (0.5 / w as f32 - 0.5)) * w as f32 - 0.5) * 6.0;
+        assert!((out[row] as f32 - expect).abs() <= 1.0, "{} vs {expect}", out[row]);
+        let c = row + w as usize / 2;
+        assert!(out[c].abs_diff(raster[c]) <= 2, "near the centre barely moves");
+    }
 
     fn barrel() -> LensProfile {
         // A lens whose image is squeezed towards the edges: correcting reads closer to the centre.

@@ -2,9 +2,10 @@
   // Masks: the list, and the selected mask's settings. Shown in place of the adjustments (M).
   import type { LocalAdjust } from "$lib/bindings/LocalAdjust";
   import type { Mask } from "$lib/bindings/Mask";
+  import type { MaskShape } from "$lib/bindings/MaskShape";
   import Slider from "$lib/design/Slider.svelte";
   import HistogramView from "./Histogram.svelte";
-  import { KIND_LABEL, MAX_MASKS, type MaskKind } from "./masks";
+  import { AI_LABEL, KIND_LABEL, MAX_MASKS, aiKey, type AiPreset, type MaskKind } from "./masks";
   import type { Histogram } from "./renderer";
   import { session } from "./session.svelte";
 
@@ -81,12 +82,36 @@
   }
 
   const kinds: MaskKind[] = ["linear", "radial", "brush"];
-  const icons: Record<MaskKind, string> = {
+  const detects: { id: AiPreset; title: string }[] = [
+    { id: "subject", title: "The photo's main subject" },
+    { id: "background", title: "Everything but the main subject" },
+    { id: "sky", title: "The sky" },
+    { id: "people", title: "Every person in the photo" },
+    { id: "object", title: "Circle something to select it" },
+  ];
+  const aiIcons: Record<AiPreset, string> = {
+    subject: "M8 2.5a2.6 2.6 0 1 0 .01 0ZM3 14c0-3 2.2-5 5-5s5 2 5 5",
+    background: "M2 2h12v12H2ZM8 5a2 2 0 1 0 .01 0ZM4.5 14c.4-2.2 1.8-3.5 3.5-3.5s3.1 1.3 3.5 3.5",
+    sky: "M4 11a3 3 0 0 1 .4-6A4 4 0 0 1 12 6a2.5 2.5 0 0 1 0 5ZM2 14h12",
+    people: "M5.5 3a2 2 0 1 0 .01 0ZM11 4a1.7 1.7 0 1 0 .01 0ZM1.5 13c0-2.5 1.8-4 4-4s4 1.5 4 4M9.5 9.3c.5-.2 1-.3 1.5-.3 2 0 3.5 1.3 3.5 3.5",
+    object: "M8 2c3.6 0 6 2.4 6 5.5S11.4 13 8 13s-6-2.5-6-5.5c0-1 .3-2 .9-2.8M8 6v3M6.5 7.5h3",
+  };
+  const pick = (p: AiPreset) => (p === "object" ? session.startLasso() : session.addAiMask(p));
+
+  function status(m: Mask) {
+    const k = aiKey(m);
+    return k ? session.aiStatus.get(k) : undefined;
+  }
+  const progress = $derived(session.aiProgress);
+  const pct = (p: { done: number; total: number }) => Math.round((100 * p.done) / Math.max(p.total, 1));
+  const icons: Record<MaskShape["kind"], string> = {
+    ai: "M8 1.5l1.6 4.9 4.9 1.6-4.9 1.6L8 14.5l-1.6-4.9L1.5 8l4.9-1.6Z",
     linear: "M2 4h12M2 8h12M2 12h12",
     radial: "M8 2.5a5.5 4.5 0 1 0 0.01 0Z",
     brush: "M3 13c2 0 3-1 3-3l6-6.5a1.4 1.4 0 0 0-2-2L4 7.5c-2 0-3 1-3 3",
   };
-  const hints: Record<MaskKind, string> = {
+  const hints: Record<MaskShape["kind"], string> = {
+    ai: "Found automatically. Paint to add to it, hold Alt to erase.",
     linear: "Full effect beyond the solid line, fading to nothing at the faint one. Drag either end, or the pin to move it.",
     radial: "Drag inside to move, the edge handles to resize, the blue knob to rotate (Shift: 15° steps).",
     brush: "Paint over the image. Hold Alt to erase, Alt+wheel or [ ] to change size, Space to pan.",
@@ -111,6 +136,23 @@
       {/each}
     </div>
 
+    <div class="detect">
+      <span class="eyebrow">Detect</span>
+      <div class="detect-grid">
+        {#each detects as d (d.id)}
+          <button
+            class:on={d.id === "object" && session.lassoing !== null}
+            onclick={() => pick(d.id)}
+            disabled={masks.length >= MAX_MASKS}
+            title={d.title}
+          >
+            <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d={aiIcons[d.id]} /></svg>
+            {d.id === "object" ? "Select Object" : AI_LABEL[d.id]}
+          </button>
+        {/each}
+      </div>
+    </div>
+
     {#if masks.length}
       <ul class="list">
         {#each masks as m, i (i)}
@@ -130,6 +172,16 @@
                 />
               {:else}
                 <span class="name">{m.name}</span>
+                {@const st = status(m)}
+                {#if st?.state === "working"}
+                  <span class="ai-state working" title="Detecting…">
+                    {#if progress?.stage === "download"}{pct(progress)}%{:else}<span class="spinner"></span>{/if}
+                  </span>
+                {:else if st?.state === "empty"}
+                  <span class="ai-state warn" title="The model didn't find anything">Not found</span>
+                {:else if st?.state === "error"}
+                  <span class="ai-state warn" title={st.message}>Failed</span>
+                {/if}
               {/if}
             </button>
             <button class="icon" onclick={() => toggle(i, "enabled")} title={m.enabled ? "Hide" : "Show"}>
@@ -162,6 +214,43 @@
             bipolar={false}
             oninput={(v) => (shape.feather = v / 100)}
             oncommit={() => commit(key("feather"))}
+          />
+        {:else if mask.shape.kind === "ai"}
+          {@const st = status(mask)}
+          {#if st?.state === "working"}
+            <p class="ai-note">
+              {#if progress?.stage === "download"}
+                Downloading the model… {pct(progress)}%
+                <span class="bar"><span style:width="{pct(progress)}%"></span></span>
+              {:else}
+                Finding {mask.shape.target.kind === "object" ? "the object" : AI_LABEL[mask.shape.target.kind].toLowerCase()}…
+              {/if}
+            </p>
+          {:else if st?.state === "empty"}
+            <p class="ai-note warn">
+              No {mask.shape.target.kind === "people" ? "people" : mask.shape.target.kind} found in this photo. Paint to add areas by hand.
+            </p>
+          {:else if st?.state === "error"}
+            <p class="ai-note warn">Detection failed: {st.message}</p>
+            <button class="ghost" onclick={() => session.detect(mask)}>Try again</button>
+          {/if}
+          {#if mask.shape.target.kind === "object"}
+            <button class="ghost" onclick={() => session.startLasso(sel)}>Circle again…</button>
+          {/if}
+          <div class="modes">
+            <button class:active={!session.brush.erase} onclick={() => (session.brush.erase = false)}>Add</button>
+            <button class:active={session.brush.erase} onclick={() => (session.brush.erase = true)}>Erase</button>
+          </div>
+          <Slider
+            label="Brush Size"
+            value={Math.round(session.brush.size * 1000) / 10}
+            min={0.3}
+            max={30}
+            step={0.1}
+            decimals={1}
+            defaultValue={4}
+            bipolar={false}
+            oninput={(v) => (session.brush.size = v / 100)}
           />
         {:else if mask.shape.kind === "brush"}
           <div class="modes">
@@ -301,6 +390,95 @@
     stroke-width: 1.4;
     stroke-linecap: round;
     stroke-linejoin: round;
+  }
+  .detect {
+    display: grid;
+    gap: var(--space-2);
+  }
+  .detect-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: var(--space-1);
+  }
+  .detect-grid button {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    height: 32px;
+    padding: 0 10px;
+    border-radius: var(--radius-s);
+    background: var(--bg-2);
+    color: var(--text-1);
+    font-size: var(--fs-s);
+  }
+  .detect-grid button:last-child {
+    grid-column: span 2;
+  }
+  .detect-grid button:hover:not(:disabled),
+  .detect-grid button.on {
+    background: var(--bg-3);
+    color: var(--text-0);
+  }
+  .detect-grid button:disabled {
+    opacity: 0.4;
+  }
+  .ai-state {
+    margin-left: auto;
+    font-size: var(--fs-xs);
+    color: var(--text-2);
+    font-variant-numeric: tabular-nums;
+  }
+  .ai-state.warn,
+  .ai-note.warn {
+    color: #e0a060;
+  }
+  .spinner {
+    display: inline-block;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    border: 1.5px solid var(--text-2);
+    border-top-color: transparent;
+    animation: spin 0.8s linear infinite;
+    vertical-align: middle;
+  }
+  @keyframes spin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+  .ai-note {
+    display: grid;
+    gap: 6px;
+    margin: 0;
+    font-size: var(--fs-xs);
+    line-height: 1.45;
+    color: var(--text-1);
+  }
+  .bar {
+    display: block;
+    height: 3px;
+    border-radius: 2px;
+    background: var(--bg-3);
+    overflow: hidden;
+  }
+  .bar span {
+    display: block;
+    height: 100%;
+    background: var(--text-1);
+    transition: width 120ms linear;
+  }
+  .ghost {
+    justify-self: start;
+    padding: 4px 10px;
+    border-radius: var(--radius-s);
+    background: var(--bg-2);
+    color: var(--text-1);
+    font-size: var(--fs-xs);
+  }
+  .ghost:hover {
+    background: var(--bg-3);
+    color: var(--text-0);
   }
   .add {
     display: grid;

@@ -101,7 +101,7 @@ impl DevelopParams {
         let mut layer = 0.0;
         for m in masks {
             let brush_layer = layer;
-            if matches!(m.shape, MaskShape::Brush { .. }) {
+            if m.shape.is_raster() {
                 layer += 1.0;
             }
             if !m.enabled || count == MAX_MASKS {
@@ -117,7 +117,7 @@ impl DevelopParams {
                     let (s, co) = angle.to_radians().sin_cos();
                     (2.0, [c[0], c[1], radius[0].max(1e-4), radius[1].max(1e-4)], [co, s, feather.clamp(0.0, 1.0), 0.0])
                 }
-                MaskShape::Brush { .. } => (3.0, [0.0; 4], [0.0; 4]),
+                MaskShape::Brush { .. } | MaskShape::Ai { .. } => (3.0, [0.0; 4], [0.0; 4]),
             };
             let r = &m.range;
             let a = &m.adjust;
@@ -224,6 +224,16 @@ mod tests {
         assert_eq!(p.masks[0][2][0], 2.0); // radial
         assert_eq!(p.masks[0][4][0], 1.0);
         assert_eq!(p.masks[1][2], [3.0, 0.0, 1.0, 1.0]); // second brush mask: layer 1
+
+        // AI masks are raster layers too, counted in order with brush masks.
+        let ai = Mask {
+            shape: MaskShape::Ai { target: tonality_core::mask::AiTarget::Sky, model: "scene@1".into(), refine: vec![] },
+            ..Mask::default()
+        };
+        e.masks = vec![ai.clone(), brush(), Mask { invert: true, ..ai }];
+        let p = DevelopParams::new(&e, &color(), None, 600, 400);
+        assert_eq!(p.masks[0][2], [3.0, 0.0, 1.0, 0.0]);
+        assert_eq!(p.masks[2][2], [3.0, 1.0, 1.0, 2.0]);
     }
 
     #[test]

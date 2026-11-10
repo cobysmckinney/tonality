@@ -5,7 +5,7 @@
   import type { Mask } from "$lib/bindings/Mask";
   import type { Stroke } from "$lib/bindings/Stroke";
   import type { Framing } from "./renderer";
-  import { norm, toFrame, toUv, type BrushTool, type Vec2 } from "./masks";
+  import { isRaster, norm, toFrame, toUv, type BrushTool, type Vec2 } from "./masks";
 
   interface Props {
     mask: Mask;
@@ -111,7 +111,7 @@
 
   function hit(x: number, y: number): Drag["kind"] | null {
     const p: Vec2 = [x, y];
-    if (mask.shape.kind === "brush") return "paint";
+    if (isRaster(mask)) return "paint";
     if (linear) {
       if (near(p, linear.a)) return "from";
       if (near(p, linear.b)) return "to";
@@ -133,7 +133,7 @@
   }
 
   const cursor = $derived.by(() => {
-    const k = drag?.kind ?? (mask.shape.kind === "brush" ? "paint" : null);
+    const k = drag?.kind ?? (isRaster(mask) ? "paint" : null);
     if (k === "paint") return "none";
     if (k === "rotate") return "alias";
     if (k === "move-linear" || k === "move-radial") return "move";
@@ -234,7 +234,7 @@
   bind:this={el}
   class="overlay"
   class:through={passthrough}
-  class:paint={mask.shape.kind === "brush"}
+  class:paint={isRaster(mask)}
   class:dragging={drag !== null}
   style:cursor
   onpointerdown={onDown}

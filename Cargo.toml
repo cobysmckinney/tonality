@@ -21,6 +21,7 @@ bytemuck = "1"
 tonality-core = { path = "crates/tonality-core" }
 tonality-raw = { path = "crates/tonality-raw" }
 tonality-render = { path = "crates/tonality-render" }
+tonality-ml = { path = "crates/tonality-ml" }
 
 [profile.dev.package."*"]
 opt-level = 3
@@ -30,4 +31,7 @@ opt-level = 3
 opt-level = 3
 
 [profile.dev.package.tonality-render]
+opt-level = 3
+
+[profile.dev.package.tonality-ml]
 opt-level = 3

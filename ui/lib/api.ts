@@ -12,6 +12,9 @@ import type { GlslProgram } from "$lib/bindings/GlslProgram";
 import type { ImageInfo } from "$lib/bindings/ImageInfo";
 import type { ExportSettings } from "$lib/bindings/ExportSettings";
 import type { ExportSummary } from "$lib/bindings/ExportSummary";
+import type { AiTarget } from "$lib/bindings/AiTarget";
+import type { AiModelInfo } from "$lib/bindings/AiModelInfo";
+import type { LensCorrection } from "$lib/bindings/LensCorrection";
 
 export const api = {
   defaultEditState: () => invoke<EditState>("default_edit_state"),
@@ -35,11 +38,15 @@ export const api = {
   },
   exportImages: (ids: number[], settings: ExportSettings) =>
     invoke<ExportSummary>("export_images", { ids, settings }),
-  /** Brush mask rasters: `layers` 8-bit `width × height` images, one per brush mask. */
+  /**
+   * Raster mask layers: `layers` 8-bit `width × height` images, one per brush or AI mask.
+   * `missing`: indices of AI masks whose raster hasn't been generated yet.
+   */
   maskLayers: async (id: number, edit: EditState) => {
     const buf = await invoke<ArrayBuffer>("mask_layers", { id, edit });
-    const [width, height, layers] = new Uint32Array(buf, 0, 3);
-    return { width, height, layers, data: new Uint8Array(buf, 12) };
+    const [width, height, layers, nMissing] = new Uint32Array(buf, 0, 4);
+    const missing = Array.from(new Uint32Array(buf, 16, nMissing));
+    return { width, height, layers, missing, data: new Uint8Array(buf, 16 + 4 * nMissing) };
   },
   /** Tone-curve LUT as RGBA half floats (1024 × 1). */
   developCurve: async (edit: EditState) => new Uint16Array(await invoke<ArrayBuffer>("develop_curve", { edit })),
@@ -70,6 +77,14 @@ export const api = {
     images: (query: ImageQuery) => invoke<ImageRow[]>("library_images", { query }),
     setRating: (ids: number[], rating: number) => invoke<void>("library_set_rating", { ids, rating }),
     setFlag: (ids: number[], flag: number) => invoke<void>("library_set_flag", { ids, flag }),
+  },
+
+  ai: {
+    models: () => invoke<AiModelInfo[]>("ai_models"),
+    modelFor: (target: AiTarget) => invoke<string>("ai_model_for", { target }),
+    /** Detect `target` (downloading the model if needed); resolves to whether anything was found. */
+    detect: (imageId: number, target: AiTarget, model: string, lens: LensCorrection | null) =>
+      invoke<boolean>("ai_detect", { imageId, target, model, lens }),
   },
 
   albums: {
