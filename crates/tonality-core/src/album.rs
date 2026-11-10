@@ -67,6 +67,13 @@ impl Catalog {
         Ok(out)
     }
 
+    /// The photos in an album.
+    pub fn album_members(&self, id: AlbumId) -> Result<Vec<ImageId>> {
+        let mut stmt = self.conn.prepare("SELECT image_id FROM album_images WHERE album_id = ?1 ORDER BY image_id")?;
+        let rows = stmt.query_map([id], |r| r.get(0))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
     pub fn create_album(&mut self, name: &str) -> Result<AlbumId> {
         self.conn.execute(
             "INSERT INTO albums (name, created_at) VALUES (?1, ?2)",

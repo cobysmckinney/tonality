@@ -5,6 +5,7 @@
   import ApplyDialog from "$lib/history/ApplyDialog.svelte";
   import CropPanel from "./CropPanel.svelte";
   import MaskPanel from "./MaskPanel.svelte";
+  import Filmstrip from "./Filmstrip.svelte";
   import { turn } from "./crop";
   import { library } from "$lib/library/library.svelte";
   import { session } from "./session.svelte";
@@ -17,6 +18,22 @@
   let histogram = $state.raw<Histogram | null>(null);
   let canvas = $state<ReturnType<typeof Canvas> | null>(null);
   let level = $state(false);
+
+  const STRIP_KEY = "tonality.edit.filmstrip";
+  let stripOpen = $state(true);
+  try {
+    stripOpen = localStorage.getItem(STRIP_KEY) !== "0";
+  } catch {
+    /* per-viewer convenience only */
+  }
+  function toggleStrip() {
+    stripOpen = !stripOpen;
+    try {
+      localStorage.setItem(STRIP_KEY, stripOpen ? "1" : "0");
+    } catch {
+      /* ignore */
+    }
+  }
   $effect(() => {
     session.defaultEdit().then((d) => (beforeEdit = d));
   });
@@ -73,6 +90,14 @@
         return;
       }
     }
+    // ← / → switch photos (unless a slider has focus: there they nudge its value).
+    if ((e.key === "ArrowLeft" || e.key === "ArrowRight") && plain && !e.shiftKey) {
+      if (!(e.target instanceof Element && e.target.closest("[role=slider]"))) {
+        e.preventDefault();
+        library.step(e.key === "ArrowLeft" ? -1 : 1);
+        return;
+      }
+    }
     if (e.key === "\\" && !e.repeat) before = true;
     if (e.key === "Escape" && session.compare) {
       session.stopCompare();
@@ -108,7 +133,6 @@
   function onKeyUp(e: KeyboardEvent) {
     if (e.key === "\\") before = false;
   }
-
 </script>
 
 <svelte:window onkeydown={onKeyDown} onkeyup={onKeyUp} onblur={() => (before = false)} />
@@ -123,57 +147,90 @@
       <div class="panel-head">
         <span class="eyebrow">Versions</span>
         <button class="icon-btn" onclick={() => (historyOpen = false)} title="Hide panel">
-          <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M10 3 5 8l5 5" /></svg>
+          <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"
+            ><path d="M10 3 5 8l5 5" /></svg
+          >
         </button>
       </div>
       <p class="hint">Open a photo to see its versions and history.</p>
     {/if}
   </aside>
 
-  <section class="canvas-area">
-    {#if session.image && session.pixels && session.edit && beforeEdit}
-      <Canvas
-        bind:this={canvas}
-        image={session.image}
-        pixels={session.pixels}
-        edit={session.edit}
-        {before}
-        {beforeEdit}
-        compare={session.compare && session.history
-          ? { label: session.compare.branch, current: session.history.head.branch, state: session.compare.state }
-          : null}
-        oncloseCompare={() => session.stopCompare()}
-        cropping={session.cropping}
-        cropAspect={session.cropAspect}
-        {level}
-        oncrop={(c) => session.edit && (session.edit.crop = c)}
-        onlevel={() => (level = false)}
-        onhistogram={(h) => (histogram = h)}
-      />
-      <div class="caption">
-        <span>{session.image.name}</span>
-        <span class="dim">{session.image.make} {session.image.model}</span>
-      </div>
-    {:else if !session.loading}
-      <div class="empty">
-        <button class="btn primary" onclick={() => library.importFiles({ open: true })}>Import Photos…</button>
-        <p class="hint">Ctrl+O, or drop RAW files here. They’re copied into your library.</p>
-      </div>
-    {/if}
+  <div class="center">
+    <section class="canvas-area">
+      {#if session.image && session.pixels && session.edit && beforeEdit}
+        <Canvas
+          bind:this={canvas}
+          image={session.image}
+          pixels={session.pixels}
+          edit={session.edit}
+          {before}
+          {beforeEdit}
+          compare={session.compare && session.history
+            ? {
+                label: session.compare.branch,
+                current: session.history.head.branch,
+                state: session.compare.state,
+              }
+            : null}
+          oncloseCompare={() => session.stopCompare()}
+          cropping={session.cropping}
+          cropAspect={session.cropAspect}
+          {level}
+          oncrop={(c) => session.edit && (session.edit.crop = c)}
+          onlevel={() => (level = false)}
+          onhistogram={(h) => (histogram = h)}
+        />
+        <div class="caption">
+          <span>{session.image.name}</span>
+          <span class="dim">{session.image.make} {session.image.model}</span>
+        </div>
+      {:else if !session.loading}
+        <div class="empty">
+          <button class="btn primary" onclick={() => library.importFiles({ open: true })}
+            >Import Photos…</button
+          >
+          <p class="hint">Ctrl+O, or drop RAW files here. They’re copied into your library.</p>
+        </div>
+      {/if}
 
-    {#if session.loading}
-      <div class="status">{session.loading}</div>
-    {/if}
-    {#if session.error}
-      <div class="status error">{session.error}</div>
-    {/if}
+      {#if session.loading}
+        <div class="status">{session.loading}</div>
+      {/if}
+      {#if session.error}
+        <div class="status error">{session.error}</div>
+      {/if}
 
-    {#if !historyOpen}
-      <button class="reveal icon-btn" onclick={() => (historyOpen = true)} title="Show versions &amp; history">
-        <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="m6 3 5 5-5 5" /></svg>
+      {#if !historyOpen}
+        <button
+          class="reveal icon-btn"
+          onclick={() => (historyOpen = true)}
+          title="Show versions &amp; history"
+        >
+          <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"
+            ><path d="m6 3 5 5-5 5" /></svg
+          >
+        </button>
+      {/if}
+    </section>
+
+    <div class="filmstrip surface" class:closed={!stripOpen}>
+      {#if stripOpen}
+        <Filmstrip />
+      {:else}
+        <span class="strip-label">Filmstrip</span>
+      {/if}
+      <button
+        class="icon-btn strip-toggle"
+        onclick={toggleStrip}
+        title={stripOpen ? "Hide filmstrip" : "Show filmstrip"}
+      >
+        <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"
+          ><path d={stripOpen ? "m4 6 4 4 4-4" : "m4 10 4-4 4 4"} /></svg
+        >
       </button>
-    {/if}
-  </section>
+    </div>
+  </div>
 
   <aside class="adjust surface">
     {#if session.image && session.edit && session.cropping}
@@ -222,11 +279,45 @@
     background: var(--bg-1);
     z-index: 2;
   }
+  .center {
+    display: flex;
+    flex-direction: column;
+    gap: var(--gutter);
+    min-width: 0;
+    min-height: 0;
+    margin: 0 var(--gutter);
+  }
+  .filmstrip {
+    position: relative;
+    flex: none;
+    height: 116px;
+    transition: height 160ms var(--ease);
+  }
+  .filmstrip.closed {
+    height: 30px;
+  }
+  .strip-label {
+    display: block;
+    padding: 7px var(--space-3);
+    font-size: var(--fs-xs);
+    color: var(--text-2);
+  }
+  .strip-toggle {
+    position: absolute;
+    top: 3px;
+    right: 4px;
+    width: 24px;
+    height: 24px;
+  }
+  .filmstrip :global(.keys) {
+    margin-right: 28px;
+  }
   .canvas-area {
     position: relative;
+    flex: 1;
+    min-height: 0;
     display: grid;
     place-items: center;
-    margin: 0 var(--gutter);
     border-radius: var(--radius-l);
     background: var(--bg-0);
     min-width: 0;

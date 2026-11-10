@@ -355,6 +355,17 @@ class LibraryState {
     window.addEventListener("keydown", cancel, true);
   }
 
+  /** In Edit: open the photo `delta` places from the open one, within the current view. */
+  step(delta: number) {
+    if (!this.images.length) return;
+    const cur = this.images.findIndex((i) => i.id === session.image?.id);
+    const i = cur < 0 ? 0 : Math.max(0, Math.min(this.images.length - 1, cur + delta));
+    const id = this.images[i].id;
+    if (id === session.image?.id) return;
+    this.select(id);
+    session.open(id);
+  }
+
   /** Open a photo (default: the focused one) in Edit. */
   open(id = this.focus) {
     if (id === null) return;

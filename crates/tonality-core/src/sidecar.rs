@@ -5,7 +5,8 @@
 //! library can be rebuilt without its catalog and a RAW + sidecar pair carries its edits to
 //! another library. Reading one back *merges* it, git-style: commits are matched by
 //! (parent, state), branches that moved ahead fast-forward, and branches that diverged arrive
-//! under a new name. Nothing already in the catalog is ever lost or rewritten.
+//! under a new name. Album membership is recorded by album name and merged as a union (missing
+//! albums are created). Nothing already in the catalog is ever lost or rewritten.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
@@ -56,6 +57,9 @@ pub struct SidecarImage {
     pub rating: u8,
     #[serde(default)]
     pub flag: i8,
+    /// Names of the albums the photo is in.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub albums: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -83,7 +87,7 @@ pub struct SidecarCommit {
 impl Sidecar {
     /// Nothing worth keeping: never edited, unrated, unflagged.
     pub fn is_empty(&self) -> bool {
-        self.head.is_none() && self.image.rating == 0 && self.image.flag == 0
+        self.head.is_none() && self.image.rating == 0 && self.image.flag == 0 && self.image.albums.is_empty()
     }
 
     pub fn to_json(&self) -> String {
@@ -153,11 +157,13 @@ pub struct MergeSummary {
     pub advanced: u32,
     /// Rating or flag adopted from the sidecar.
     pub labels: bool,
+    /// Albums the photo was added to.
+    pub albums: u32,
 }
 
 impl MergeSummary {
     pub fn changed(&self) -> bool {
-        self.commits + self.branches + self.advanced > 0 || self.labels
+        self.commits + self.branches + self.advanced + self.albums > 0 || self.labels
     }
 }
 
@@ -171,9 +177,19 @@ impl Catalog {
             })
             .optional()?
             .ok_or_else(|| CatalogError::NotFound(format!("image {image}")))?;
+        let albums = {
+            let mut stmt = c.prepare(
+                "SELECT a.name FROM albums a JOIN album_images ai ON ai.album_id = a.id
+                 WHERE ai.image_id = ?1 ORDER BY a.name COLLATE NOCASE, a.id",
+            )?;
+            let rows = stmt.query_map([image], |r| r.get::<_, String>(0))?;
+            let mut names: Vec<String> = rows.collect::<rusqlite::Result<_>>()?;
+            names.dedup();
+            names
+        };
         let mut sc = Sidecar {
             tonality: SIDECAR_VERSION,
-            image: SidecarImage { name, hash, rating, flag },
+            image: SidecarImage { name, hash, rating, flag, albums },
             head: None,
             branches: vec![],
             commits: vec![],
@@ -334,6 +350,29 @@ impl Catalog {
             tx.execute("UPDATE images SET flag = ?2 WHERE id = ?1", params![image, sc.image.flag.clamp(-1, 1)])?;
             out.labels = true;
         }
+
+        // Albums: join each named album, creating it if this library has none by that name.
+        let now = (self.clock)();
+        for name in &sc.image.albums {
+            let name = name.trim();
+            if name.is_empty() {
+                continue;
+            }
+            let album: i64 = match tx
+                .query_row("SELECT id FROM albums WHERE name = ?1 ORDER BY id LIMIT 1", [name], |r| r.get(0))
+                .optional()?
+            {
+                Some(id) => id,
+                None => {
+                    tx.execute("INSERT INTO albums (name, created_at) VALUES (?1, ?2)", params![name, now])?;
+                    tx.last_insert_rowid()
+                }
+            };
+            out.albums += tx.execute(
+                "INSERT INTO album_images (album_id, image_id, added_at) VALUES (?1, ?2, ?3) ON CONFLICT DO NOTHING",
+                params![album, image, now],
+            )? as u32;
+        }
         tx.commit()?;
         Ok(out)
     }
@@ -460,6 +499,34 @@ mod tests {
         assert!(b.history_view(ib).is_err(), "failed merges leave nothing behind");
         assert!(Sidecar::from_json(r#"{"tonality": 99}"#).is_err());
         assert!(Sidecar::from_json(r#"{"hello": 1}"#).is_err());
+    }
+
+    #[test]
+    fn albums_travel_by_name() {
+        let ((mut a, ia), (mut b, ib)) = pair();
+        let trips = a.create_album("Trips").unwrap();
+        let best = a.create_album("Best of").unwrap();
+        a.add_to_album(trips, &[ia]).unwrap();
+        a.add_to_album(best, &[ia]).unwrap();
+        let sc = a.sidecar(ia).unwrap();
+        assert_eq!(sc.image.albums, ["Best of", "Trips"]);
+        assert!(!sc.is_empty(), "album membership alone is worth a sidecar");
+
+        // b already has a "Trips"; "Best of" is created.
+        let local = b.create_album("Trips").unwrap();
+        let m = b.merge_sidecar(ib, &sc).unwrap();
+        assert_eq!(m.albums, 2);
+        let albums = b.albums().unwrap();
+        assert_eq!(albums.iter().map(|x| (x.name.as_str(), x.count)).collect::<Vec<_>>(), [("Best of", 1), ("Trips", 1)]);
+        assert_eq!(albums[1].id, local);
+        assert!(!b.merge_sidecar(ib, &sc).unwrap().changed(), "idempotent");
+
+        // Old sidecars without the field still read; empty lists aren't written.
+        let plain = Sidecar::from_json(&b.sidecar(ib).unwrap().to_json().replace(r#","albums":["Best of","Trips"]"#, "")).unwrap();
+        assert!(plain.image.albums.is_empty());
+        b.remove_from_album(local, &[ib]).unwrap();
+        b.delete_album(albums[0].id).unwrap();
+        assert!(!b.sidecar(ib).unwrap().to_json().contains("albums"));
     }
 
     #[test]

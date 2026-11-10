@@ -58,12 +58,13 @@ pub fn library_set_flag(ids: Vec<ImageId>, flag: i8, catalog: State<'_, CatalogS
 }
 
 // ---------------------------------------------------------------------------------------------
-// Albums (catalog-only: they organise the library and don't travel in sidecars)
+// Albums. Membership is recorded in each photo's sidecar (by album name), so every change
+// marks the photos it touches dirty.
 // ---------------------------------------------------------------------------------------------
 
 #[tauri::command]
 pub fn album_create(name: String, images: Vec<ImageId>, catalog: State<'_, CatalogState>) -> CmdResult<AlbumId> {
-    catalog.with(|c| {
+    catalog.edit(&images, |c| {
         let id = c.create_album(&name)?;
         c.add_to_album(id, &images)?;
         Ok(id)
@@ -72,22 +73,24 @@ pub fn album_create(name: String, images: Vec<ImageId>, catalog: State<'_, Catal
 
 #[tauri::command]
 pub fn album_rename(id: AlbumId, name: String, catalog: State<'_, CatalogState>) -> CmdResult<()> {
-    catalog.with(|c| c.rename_album(id, &name))
+    let members = catalog.with(|c| c.album_members(id))?;
+    catalog.edit(&members, |c| c.rename_album(id, &name))
 }
 
 #[tauri::command]
 pub fn album_delete(id: AlbumId, catalog: State<'_, CatalogState>) -> CmdResult<()> {
-    catalog.with(|c| c.delete_album(id))
+    let members = catalog.with(|c| c.album_members(id))?;
+    catalog.edit(&members, |c| c.delete_album(id))
 }
 
 #[tauri::command]
 pub fn album_add(id: AlbumId, images: Vec<ImageId>, catalog: State<'_, CatalogState>) -> CmdResult<u32> {
-    catalog.with(|c| c.add_to_album(id, &images))
+    catalog.edit(&images, |c| c.add_to_album(id, &images))
 }
 
 #[tauri::command]
 pub fn album_remove(id: AlbumId, images: Vec<ImageId>, catalog: State<'_, CatalogState>) -> CmdResult<()> {
-    catalog.with(|c| c.remove_from_album(id, &images))
+    catalog.edit(&images, |c| c.remove_from_album(id, &images))
 }
 
 // ---------------------------------------------------------------------------------------------
