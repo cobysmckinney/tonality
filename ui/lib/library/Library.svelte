@@ -8,7 +8,7 @@
   let cols = $state(1);
 
   onMount(() => {
-    library.refresh();
+    library.refresh().then(() => library.recover());
   });
 
   function onKey(e: KeyboardEvent) {
@@ -123,6 +123,13 @@
             ? `Copying ${library.importing.done} of ${library.importing.total}`
             : "Looking for photos…"}
         </span>
+      </div>
+    {:else if library.restoring?.total}
+      <div class="progress">
+        <div class="bar">
+          <div style:width="{(100 * library.restoring.done) / library.restoring.total}%"></div>
+        </div>
+        <span>Restoring {library.restoring.done} of {library.restoring.total}</span>
       </div>
     {/if}
 

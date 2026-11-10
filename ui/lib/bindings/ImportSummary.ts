@@ -14,6 +14,10 @@ import: ImportInfo | null, added: number,
  */
 duplicates: number, failed: number, 
 /**
+ * Photos whose edits, rating or flag came from a `.tonality` sidecar.
+ */
+restored: number, 
+/**
  * Ids of every photo in this import, new or duplicate, in import order.
  */
 images: number[], 

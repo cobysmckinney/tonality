@@ -119,7 +119,7 @@ fn load_state(c: &Connection, hash: &str) -> Result<EditState> {
     Ok(serde_json::from_str(&json)?)
 }
 
-fn store_state(c: &Connection, state: &EditState) -> Result<String> {
+pub(crate) fn store_state(c: &Connection, state: &EditState) -> Result<String> {
     let hash = state.hash();
     c.execute(
         "INSERT OR IGNORE INTO edit_states (hash, json) VALUES (?1, ?2)",
@@ -128,14 +128,14 @@ fn store_state(c: &Connection, state: &EditState) -> Result<String> {
     Ok(hash)
 }
 
-fn head(c: &Connection, image: ImageId) -> Result<Option<Head>> {
+pub(crate) fn head(c: &Connection, image: ImageId) -> Result<Option<Head>> {
     Ok(c.query_row("SELECT branch, commit_id FROM heads WHERE image_id = ?1", [image], |r| {
         Ok(Head { branch: r.get(0)?, commit: r.get(1)? })
     })
     .optional()?)
 }
 
-fn set_head(c: &Connection, image: ImageId, branch: &str, commit: CommitId) -> Result<()> {
+pub(crate) fn set_head(c: &Connection, image: ImageId, branch: &str, commit: CommitId) -> Result<()> {
     c.execute(
         "INSERT INTO heads (image_id, branch, commit_id) VALUES (?1, ?2, ?3)
          ON CONFLICT(image_id) DO UPDATE SET branch = excluded.branch, commit_id = excluded.commit_id",
@@ -144,7 +144,7 @@ fn set_head(c: &Connection, image: ImageId, branch: &str, commit: CommitId) -> R
     Ok(())
 }
 
-fn branches(c: &Connection, image: ImageId) -> Result<Vec<BranchInfo>> {
+pub(crate) fn branches(c: &Connection, image: ImageId) -> Result<Vec<BranchInfo>> {
     let mut stmt = c.prepare("SELECT name, commit_id FROM refs WHERE image_id = ?1 ORDER BY id")?;
     let rows = stmt.query_map([image], |r| Ok(BranchInfo { name: r.get(0)?, tip: r.get(1)? }))?;
     Ok(rows.collect::<rusqlite::Result<_>>()?)
@@ -158,7 +158,7 @@ fn branch_tip(c: &Connection, image: ImageId, name: &str) -> Result<CommitId> {
     .ok_or_else(|| CatalogError::NotFound(format!("branch “{name}”")))
 }
 
-fn set_branch(c: &Connection, image: ImageId, name: &str, commit: CommitId) -> Result<()> {
+pub(crate) fn set_branch(c: &Connection, image: ImageId, name: &str, commit: CommitId) -> Result<()> {
     c.execute(
         "INSERT INTO refs (image_id, name, commit_id) VALUES (?1, ?2, ?3)
          ON CONFLICT(image_id, name) DO UPDATE SET commit_id = excluded.commit_id",
@@ -167,14 +167,14 @@ fn set_branch(c: &Connection, image: ImageId, name: &str, commit: CommitId) -> R
     Ok(())
 }
 
-fn parents(c: &Connection, image: ImageId) -> Result<HashMap<CommitId, Option<CommitId>>> {
+pub(crate) fn parents(c: &Connection, image: ImageId) -> Result<HashMap<CommitId, Option<CommitId>>> {
     let mut stmt = c.prepare("SELECT id, parent FROM commits WHERE image_id = ?1")?;
     let rows = stmt.query_map([image], |r| Ok((r.get(0)?, r.get(1)?)))?;
     Ok(rows.collect::<rusqlite::Result<_>>()?)
 }
 
 /// `tip` and all its ancestors, tip first.
-fn lineage(parents: &HashMap<CommitId, Option<CommitId>>, tip: CommitId) -> Vec<CommitId> {
+pub(crate) fn lineage(parents: &HashMap<CommitId, Option<CommitId>>, tip: CommitId) -> Vec<CommitId> {
     let mut out = vec![tip];
     let mut cur = tip;
     while let Some(Some(p)) = parents.get(&cur) {
@@ -205,7 +205,7 @@ fn insert_commit(
     Ok(c.last_insert_rowid())
 }
 
-fn validate_name(name: &str) -> Result<String> {
+pub(crate) fn validate_name(name: &str) -> Result<String> {
     let name = name.trim();
     if name.is_empty() {
         return Err(CatalogError::Invalid("Branch name can’t be empty".into()));
@@ -217,7 +217,7 @@ fn validate_name(name: &str) -> Result<String> {
 }
 
 /// Next free `base-N` name, where `base` is `from` without any existing `-N` suffix.
-fn auto_branch_name(existing: &[BranchInfo], from: &str) -> String {
+pub(crate) fn auto_branch_name(existing: &[BranchInfo], from: &str) -> String {
     let base = match from.rsplit_once('-') {
         Some((b, n)) if !b.is_empty() && !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()) => b,
         _ => from,

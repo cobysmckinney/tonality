@@ -1,29 +1,53 @@
 //! History commands: thin wrappers over `tonality_core::history` on the shared catalog.
 
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 
 use tauri::State;
 use tonality_core::{Catalog, Checkout, CommitId, EditState, ImageId, Panel};
 
 use crate::CmdResult;
 
-pub struct CatalogState(Mutex<Catalog>);
+type ChangeHook = Box<dyn Fn(&[ImageId]) + Send + Sync>;
+
+pub struct CatalogState {
+    catalog: Mutex<Catalog>,
+    /// Told which images changed after every `edit` (keeps sidecars in step).
+    on_change: OnceLock<ChangeHook>,
+}
 
 impl CatalogState {
     pub fn new(catalog: Catalog) -> Self {
-        Self(Mutex::new(catalog))
+        Self { catalog: Mutex::new(catalog), on_change: OnceLock::new() }
     }
 
+    pub fn on_change(&self, hook: ChangeHook) {
+        let _ = self.on_change.set(hook);
+    }
+
+    /// Read (or change something that sidecars don't record).
     pub(crate) fn with<T>(&self, f: impl FnOnce(&mut Catalog) -> tonality_core::catalog::Result<T>) -> CmdResult<T> {
-        let mut cat = self.0.lock().map_err(|_| "catalog lock poisoned")?;
+        let mut cat = self.catalog.lock().map_err(|_| "catalog lock poisoned")?;
         f(&mut cat).map_err(|e| e.to_string())
+    }
+
+    /// Change the history, rating or flag of `ids`.
+    pub(crate) fn edit<T>(
+        &self,
+        ids: &[ImageId],
+        f: impl FnOnce(&mut Catalog) -> tonality_core::catalog::Result<T>,
+    ) -> CmdResult<T> {
+        let out = self.with(f)?;
+        if let Some(hook) = self.on_change.get() {
+            hook(ids);
+        }
+        Ok(out)
     }
 }
 
 /// An image's history, created with an "Original" commit on first open.
 #[tauri::command]
 pub fn history_open(image_id: ImageId, catalog: State<'_, CatalogState>) -> CmdResult<Checkout> {
-    catalog.with(|c| c.history_open(image_id))
+    catalog.edit(&[image_id], |c| c.history_open(image_id))
 }
 
 #[tauri::command]
@@ -33,17 +57,17 @@ pub fn history_commit(
     key: Option<String>,
     catalog: State<'_, CatalogState>,
 ) -> CmdResult<Checkout> {
-    catalog.with(|c| c.commit(image_id, &state, key.as_deref()))
+    catalog.edit(&[image_id], |c| c.commit(image_id, &state, key.as_deref()))
 }
 
 #[tauri::command]
 pub fn history_undo(image_id: ImageId, catalog: State<'_, CatalogState>) -> CmdResult<Checkout> {
-    catalog.with(|c| c.undo(image_id))
+    catalog.edit(&[image_id], |c| c.undo(image_id))
 }
 
 #[tauri::command]
 pub fn history_redo(image_id: ImageId, catalog: State<'_, CatalogState>) -> CmdResult<Checkout> {
-    catalog.with(|c| c.redo(image_id))
+    catalog.edit(&[image_id], |c| c.redo(image_id))
 }
 
 #[tauri::command]
@@ -52,12 +76,12 @@ pub fn history_checkout(
     commit: CommitId,
     catalog: State<'_, CatalogState>,
 ) -> CmdResult<Checkout> {
-    catalog.with(|c| c.checkout(image_id, commit))
+    catalog.edit(&[image_id], |c| c.checkout(image_id, commit))
 }
 
 #[tauri::command]
 pub fn history_switch(image_id: ImageId, name: String, catalog: State<'_, CatalogState>) -> CmdResult<Checkout> {
-    catalog.with(|c| c.switch_branch(image_id, &name))
+    catalog.edit(&[image_id], |c| c.switch_branch(image_id, &name))
 }
 
 #[tauri::command]
@@ -67,7 +91,7 @@ pub fn history_branch(
     name: Option<String>,
     catalog: State<'_, CatalogState>,
 ) -> CmdResult<Checkout> {
-    catalog.with(|c| c.create_branch(image_id, at, name.as_deref()))
+    catalog.edit(&[image_id], |c| c.create_branch(image_id, at, name.as_deref()))
 }
 
 #[tauri::command]
@@ -77,12 +101,12 @@ pub fn history_rename(
     new: String,
     catalog: State<'_, CatalogState>,
 ) -> CmdResult<Checkout> {
-    catalog.with(|c| c.rename_branch(image_id, &old, &new))
+    catalog.edit(&[image_id], |c| c.rename_branch(image_id, &old, &new))
 }
 
 #[tauri::command]
 pub fn history_delete(image_id: ImageId, name: String, catalog: State<'_, CatalogState>) -> CmdResult<Checkout> {
-    catalog.with(|c| c.delete_branch(image_id, &name))
+    catalog.edit(&[image_id], |c| c.delete_branch(image_id, &name))
 }
 
 /// Copy `panels` from the tip of `source` onto the current version, as one commit.
@@ -93,7 +117,7 @@ pub fn history_apply_from(
     panels: Vec<Panel>,
     catalog: State<'_, CatalogState>,
 ) -> CmdResult<Checkout> {
-    catalog.with(|c| c.apply_from_branch(image_id, &source, &panels))
+    catalog.edit(&[image_id], |c| c.apply_from_branch(image_id, &source, &panels))
 }
 
 /// The edit recorded at `commit` (e.g. a branch tip, for its thumbnail or for compare).

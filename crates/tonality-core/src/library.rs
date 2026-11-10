@@ -111,6 +111,8 @@ pub struct ImportSummary {
     /// Already in the library (same file contents).
     pub duplicates: u32,
     pub failed: u32,
+    /// Photos whose edits, rating or flag came from a `.tonality` sidecar.
+    pub restored: u32,
     /// Ids of every photo in this import, new or duplicate, in import order.
     #[ts(type = "number[]")]
     pub images: Vec<ImageId>,
@@ -242,6 +244,13 @@ impl Catalog {
             })
             .optional()?
             .ok_or_else(|| CatalogError::NotFound(format!("image {id}")))
+    }
+
+    /// Every image id, oldest first.
+    pub fn image_ids(&self) -> Result<Vec<ImageId>> {
+        let mut stmt = self.conn.prepare("SELECT id FROM images ORDER BY id")?;
+        let rows = stmt.query_map([], |r| r.get(0))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
     /// Whether a library-relative path is already taken (used when choosing a name for a copy).

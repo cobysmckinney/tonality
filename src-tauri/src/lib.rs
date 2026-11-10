@@ -2,6 +2,7 @@ mod export;
 mod history;
 mod images;
 mod library;
+mod sidecar;
 mod store;
 mod thumbs;
 
@@ -182,6 +183,7 @@ pub fn run() {
             eprintln!("[tonality] library: {}", store.root().display());
             app.manage(store);
             app.manage(history::CatalogState::new(catalog));
+            app.manage(sidecar::Sidecars::start(app.handle().clone()));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -215,10 +217,16 @@ pub fn run() {
             thumbs::library_save_edited,
             library::library_overview,
             library::library_import,
+            library::library_recover,
             library::library_images,
             library::library_set_rating,
             library::library_set_flag,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tonality");
+        .build(tauri::generate_context!())
+        .expect("error while building tonality")
+        .run(|app, event| {
+            if let tauri::RunEvent::Exit = event {
+                app.state::<sidecar::Sidecars>().flush();
+            }
+        });
 }

@@ -14,6 +14,7 @@ use tonality_core::ImageId;
 use ts_rs::TS;
 
 use crate::history::CatalogState;
+use crate::sidecar;
 use crate::store::Store;
 use crate::CmdResult;
 
@@ -46,12 +47,12 @@ pub fn library_images(query: ImageQuery, catalog: State<'_, CatalogState>) -> Cm
 
 #[tauri::command]
 pub fn library_set_rating(ids: Vec<ImageId>, rating: u8, catalog: State<'_, CatalogState>) -> CmdResult<()> {
-    catalog.with(|c| c.set_rating(&ids, rating))
+    catalog.edit(&ids, |c| c.set_rating(&ids, rating))
 }
 
 #[tauri::command]
 pub fn library_set_flag(ids: Vec<ImageId>, flag: i8, catalog: State<'_, CatalogState>) -> CmdResult<()> {
-    catalog.with(|c| c.set_flag(&ids, flag))
+    catalog.edit(&ids, |c| c.set_flag(&ids, flag))
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -211,10 +212,15 @@ fn remove_readonly(path: &Path) {
     let _ = std::fs::remove_file(path);
 }
 
+/// Held by import and recovery: recovery must never see an original that an import has copied
+/// but not yet catalogued.
+static LIBRARY_WRITE: Mutex<()> = Mutex::new(());
+
 /// Copy photos (files and/or folders) into the library. Emits `import-progress` events.
 #[tauri::command]
 pub async fn library_import(paths: Vec<String>, app: AppHandle) -> CmdResult<ImportSummary> {
     tauri::async_runtime::spawn_blocking(move || {
+        let _guard = LIBRARY_WRITE.lock().unwrap_or_else(|e| e.into_inner());
         let store = app.state::<Store>();
         let catalog = app.state::<CatalogState>();
         let paths: Vec<PathBuf> = paths.into_iter().map(PathBuf::from).collect();
@@ -275,18 +281,25 @@ pub async fn library_import(paths: Vec<String>, app: AppHandle) -> CmdResult<Imp
         for (i, o) in copied {
             outcomes[i] = Some(o);
         }
-        let outcomes = outcomes.into_iter().flatten();
-
         let mut s = ImportSummary::default();
-        for o in outcomes {
-            match o {
+        for (src, o) in files.iter().zip(outcomes) {
+            // Edits travelling with the photo (written by another tonality library) come along,
+            // merged into any history the library already has for it.
+            let mut adopt = |id| {
+                if sidecar::adopt(&catalog, id, src) {
+                    s.restored += 1;
+                }
+            };
+            match o.expect("every file has an outcome") {
                 Outcome::Added(id) => {
+                    adopt(id);
                     s.added += 1;
                     s.images.push(id);
                 }
                 Outcome::Duplicate(hash) => {
                     s.duplicates += 1;
                     if let Some(id) = catalog.with(|c| c.image_by_hash(&hash))? {
+                        adopt(id);
                         s.images.push(id);
                     }
                 }
@@ -296,6 +309,79 @@ pub async fn library_import(paths: Vec<String>, app: AppHandle) -> CmdResult<Imp
                     s.error.get_or_insert(e);
                 }
             }
+        }
+        s.import = catalog.with(|c| c.finish_import(import))?;
+        Ok(s)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+// ---------------------------------------------------------------------------------------------
+// Recovery
+// ---------------------------------------------------------------------------------------------
+
+/// Catalogue originals that are in the library folder but not in the catalog (a lost or
+/// replaced catalog, or files put there by hand), restoring their edits from sidecars.
+/// Nothing is copied or moved. Emits `import-progress` while hashing.
+#[tauri::command]
+pub async fn library_recover(app: AppHandle) -> CmdResult<ImportSummary> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let _guard = LIBRARY_WRITE.lock().unwrap_or_else(|e| e.into_inner());
+        let store = app.state::<Store>();
+        let catalog = app.state::<CatalogState>();
+        let root = store.root().to_path_buf();
+        let rel = |p: &Path| -> Option<String> {
+            let r = p.strip_prefix(&root).ok()?;
+            Some(r.components().map(|c| c.as_os_str().to_string_lossy()).collect::<Vec<_>>().join("/"))
+        };
+        let mut untracked = Vec::new();
+        for f in collect(&[root.join("originals")]) {
+            if let Some(r) = rel(&f) {
+                if !catalog.with(|c| c.file_taken(&r))? {
+                    untracked.push((f, r));
+                }
+            }
+        }
+        let mut s = ImportSummary::default();
+        if untracked.is_empty() {
+            return Ok(s);
+        }
+        let total = untracked.len() as u32;
+        let _ = app.emit("import-progress", ImportProgress { done: 0, total });
+        let import = catalog.with(|c| c.begin_import("Recovered", &root.join("originals").to_string_lossy()))?;
+        for (i, (path, file)) in untracked.into_iter().enumerate() {
+            let added = (|| -> CmdResult<Option<ImageId>> {
+                let hash = hash_file(&path).map_err(|e| e.to_string())?;
+                let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                let new = NewImage {
+                    hash,
+                    file,
+                    name,
+                    file_size: std::fs::metadata(&path).map_err(|e| e.to_string())?.len() as i64,
+                    source_path: path.to_string_lossy().into_owned(),
+                    meta: tonality_raw::read_meta(&path).ok(),
+                };
+                // Same contents as a photo already catalogued: leave the stray copy alone.
+                catalog.with(|c| c.add_image(import, &new))
+            })();
+            match added {
+                Ok(Some(id)) => {
+                    if sidecar::adopt(&catalog, id, &path) {
+                        s.restored += 1;
+                    }
+                    s.added += 1;
+                    s.images.push(id);
+                }
+                Ok(None) => s.duplicates += 1,
+                Err(e) => {
+                    let e = format!("{}: {e}", path.display());
+                    eprintln!("[recover] {e}");
+                    s.failed += 1;
+                    s.error.get_or_insert(e);
+                }
+            }
+            let _ = app.emit("import-progress", ImportProgress { done: i as u32 + 1, total });
         }
         s.import = catalog.with(|c| c.finish_import(import))?;
         Ok(s)

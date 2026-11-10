@@ -35,6 +35,8 @@ class LibraryState {
   focus = $state<number | null>(null);
   thumbSize = $state(storedSize());
   importing = $state<{ done: number; total: number } | null>(null);
+  /** The launch-time scan for untracked originals (shown only once it finds some). */
+  restoring = $state<{ done: number; total: number } | null>(null);
   /** Files are being dragged over the window. */
   dropping = $state(false);
   message = $state<string | null>(null);
@@ -44,6 +46,7 @@ class LibraryState {
   constructor() {
     listen<{ done: number; total: number }>("import-progress", (e) => {
       if (this.importing) this.importing = e.payload;
+      else if (this.restoring) this.restoring = e.payload;
     });
     getCurrentWebview()
       .onDragDropEvent((e) => {
@@ -115,6 +118,7 @@ class LibraryState {
       const parts: string[] = [];
       if (s.added) parts.push(`${s.added} imported`);
       if (s.duplicates) parts.push(`${s.duplicates} already in library`);
+      if (s.restored) parts.push(`edits restored for ${s.restored}`);
       if (s.failed) parts.push(`${s.failed} failed`);
       this.message = parts.length ? parts.join(" · ") : (s.error ?? "Nothing to import");
       if (s.failed && s.error) console.warn("[import]", s.error);
@@ -132,6 +136,30 @@ class LibraryState {
       this.message = String(e);
     } finally {
       this.importing = null;
+    }
+  }
+
+  #recovered = false;
+
+  /**
+   * Once per launch: pick up originals in the library folder that the catalog doesn't know
+   * (e.g. after the catalog was lost), with their edits from sidecars.
+   */
+  async recover() {
+    if (this.#recovered) return;
+    this.#recovered = true;
+    this.restoring = { done: 0, total: 0 };
+    try {
+      const s = await api.library.recover();
+      if (!s.added) return;
+      this.message =
+        `Restored ${s.added} photo${s.added === 1 ? "" : "s"} from the library folder` +
+        (s.restored ? `, ${s.restored} with edits` : "");
+      await this.refresh();
+    } catch (e) {
+      this.message = String(e);
+    } finally {
+      this.restoring = null;
     }
   }
 

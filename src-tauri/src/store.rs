@@ -4,10 +4,12 @@
 //! tonality Library/
 //!   catalog.sqlite            edits, history, ratings, metadata
 //!   originals/2026/2026-11-02/DSC00084.ARW
+//!   originals/2026/2026-11-02/DSC00084.ARW.tonality   its history, rating and flag (sidecar)
 //!   cache/thumbs/…            regenerable
 //! ```
 //! Moving or backing up this folder moves everything. Originals stay ordinary files laid out by
-//! capture date, so they are never locked inside tonality.
+//! capture date, so they are never locked inside tonality; with their sidecars, the library can
+//! be rebuilt even without `catalog.sqlite`.
 
 use std::path::{Path, PathBuf};
 

@@ -65,6 +65,8 @@ export const api = {
   library: {
     overview: () => invoke<LibraryOverview>("library_overview"),
     import: (paths: string[]) => invoke<ImportSummary>("library_import", { paths }),
+    /** Catalogue originals in the library folder the catalog doesn't know (restoring sidecar edits). */
+    recover: () => invoke<ImportSummary>("library_recover"),
     images: (query: ImageQuery) => invoke<ImageRow[]>("library_images", { query }),
     setRating: (ids: number[], rating: number) => invoke<void>("library_set_rating", { ids, rating }),
     setFlag: (ids: number[], flag: number) => invoke<void>("library_set_flag", { ids, flag }),
