@@ -61,49 +61,72 @@
 
   onMount(() => {
     let disposed = false;
+    let detailSeq = 0;
     const ro = new ResizeObserver(() => {
       if (!renderer) return;
       renderer.setZoom(renderer.isFit ? null : renderer.scale); // re-clamp and refresh the readout
     });
     ro.observe(canvas);
-    api
-      .previewShaders()
-      .then(async (src) => {
-        if (disposed) return;
-        const r = new PreviewRenderer(canvas, src);
-        devZoom = await api.devZoom();
-        if (await api.devSnapshotPath()) {
-          r.onDrawn = (c) => {
-            if (devZoom && !r.hasDetail) return; // wait for the full-res pixels
-            r.onDrawn = null;
-            api.devSaveSnapshot(c.toDataURL("image/png"));
-          };
+
+    async function init() {
+      const src = await api.previewShaders();
+      if (disposed) return;
+      const r = new PreviewRenderer(canvas, src);
+      devZoom = await api.devZoom();
+      const snapshot = await api.devSnapshotPath();
+      // Unmounted while we waited: nobody else will dispose it.
+      if (disposed) return r.dispose();
+      if (snapshot) {
+        r.onDrawn = (c) => {
+          if (devZoom && !r.hasDetail) return; // wait for the full-res pixels
+          r.onDrawn = null;
+          api.devSaveSnapshot(c.toDataURL("image/png"));
+        };
+      }
+      r.onHistogram = (h) => onhistogram?.(h);
+      r.onLayout = (rect) => (frameRect = rect);
+      r.onView = (s, f) => {
+        scale = s;
+        fit = f;
+      };
+      r.onNeedDetail = async (req) => {
+        const id = image.id;
+        // Latest wins: an older region coming back late must not replace a newer one.
+        const seq = ++detailSeq;
+        loadingDetail = true;
+        try {
+          const d = await api.detailRegion(id, req);
+          if (seq === detailSeq && renderer === r && image.id === id) r.setDetail(d.region, req.level, d.width, d.height, d.pixels);
+        } catch (e) {
+          console.warn("[detail]", e);
+        } finally {
+          if (seq === detailSeq) loadingDetail = false;
         }
-        r.onHistogram = (h) => onhistogram?.(h);
-        r.onLayout = (rect) => (frameRect = rect);
-        r.onView = (s, f) => {
-          scale = s;
-          fit = f;
-        };
-        r.onNeedDetail = async (req) => {
-          const id = image.id;
-          loadingDetail = true;
-          try {
-            const d = await api.detailRegion(id, req);
-            if (renderer === r && image.id === id) r.setDetail(d.region, req.level, d.width, d.height, d.pixels);
-          } catch (e) {
-            console.warn("[detail]", e);
-          } finally {
-            loadingDetail = false;
-          }
-        };
-        renderer = r;
-      })
-      .catch((e) => (error = String(e)));
+      };
+      renderer = r;
+    }
+    init().catch((e) => (error = String(e)));
+
+    // The GPU can drop the context (driver reset, suspend/resume): build a new renderer once
+    // it's back; the effects below re-upload the photo and its params.
+    const lost = (e: Event) => {
+      e.preventDefault(); // allows the restore
+      renderer?.dispose();
+      renderer = null;
+    };
+    const restored = () => {
+      if (!disposed) init().catch((e) => (error = String(e)));
+    };
+    canvas.addEventListener("webglcontextlost", lost);
+    canvas.addEventListener("webglcontextrestored", restored);
     return () => {
       disposed = true;
       ro.disconnect();
-      renderer?.dispose();
+      canvas.removeEventListener("webglcontextlost", lost);
+      canvas.removeEventListener("webglcontextrestored", restored);
+      // Let the library thumbnail render first (cleanup order between effects isn't ours).
+      attachRenderer(null, null);
+      renderer?.dispose({ releaseContext: true });
     };
   });
 
@@ -198,6 +221,7 @@
     let pending: Job | null = null;
     let curveKey = "";
     let brushK: string | null = null;
+    let lastR: PreviewRenderer | null = null;
     async function pump() {
       if (inflight) return;
       inflight = true;
@@ -205,6 +229,12 @@
         while (pending) {
           const { r, id, state: next } = pending;
           pending = null;
+          // A new renderer (context restored) has none of the cached inputs.
+          if (r !== lastR) {
+            lastR = r;
+            curveKey = "";
+            brushK = null;
+          }
           const key = JSON.stringify(next.curve);
           // Brush rasters only when strokes change (undefined: unchanged; null: none).
           const bk = `${id}:${brushKey(next, session.aiEpoch)}`;

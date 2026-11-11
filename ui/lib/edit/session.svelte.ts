@@ -228,6 +228,7 @@ class EditSession {
     if (!this.edit || this.cropping) return;
     this.compare = null;
     this.masking = false;
+    this.cropAspect = null; // the panel opens on "Free"
     this.cropEntry = $state.snapshot(this.edit.crop);
   }
 
@@ -286,6 +287,7 @@ class EditSession {
           this.compare = null;
           this.applying = null;
           this.cropEntry = null;
+          this.cropAspect = null;
           this.masking = false;
           this.maskIndex = null;
           this.lassoing = null;

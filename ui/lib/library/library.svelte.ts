@@ -106,9 +106,15 @@ class LibraryState {
     }
   }
 
+  /** Bumped per refresh: only the newest one's results are shown (filters can change faster
+   *  than queries come back). */
+  private refreshSeq = 0;
+
   async refresh(): Promise<void> {
+    const seq = ++this.refreshSeq;
     try {
       const [overview, images] = await Promise.all([api.library.overview(), api.library.images(this.query)]);
+      if (seq !== this.refreshSeq) return;
       this.imports = overview.imports;
       this.albums = overview.albums;
       // The album being shown was deleted.
@@ -124,9 +130,9 @@ class LibraryState {
       for (const id of this.selected) if (!ids.has(id)) this.selected.delete(id);
       if (this.focus !== null && !ids.has(this.focus)) this.focus = null;
     } catch (e) {
-      this.message = String(e);
+      if (seq === this.refreshSeq) this.message = String(e);
     } finally {
-      this.loaded = true;
+      if (seq === this.refreshSeq) this.loaded = true;
     }
   }
 

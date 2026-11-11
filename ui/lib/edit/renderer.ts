@@ -297,6 +297,9 @@ export class PreviewRenderer {
     const gl = this.gl;
     if (this.texture) gl.deleteTexture(this.texture);
     this.dropDetail();
+    // Wait for this photo's params: drawing it with the previous photo's look (and histogram)
+    // flashes the wrong edit for a frame.
+    this.hasParams = false;
     this.fullW = fullW;
     this.fullH = fullH;
     this.out = this.compareOut = { w: fullW, h: fullH, m: [1, 0, 0, 0, 1, 0] };
@@ -653,7 +656,9 @@ export class PreviewRenderer {
     // The main canvas was not touched; no redraw needed.
   }
 
-  dispose() {
+  /** Free GPU resources. With `releaseContext` the canvas is going away: give its context back
+   *  now rather than whenever it's garbage-collected (browsers cap live contexts). */
+  dispose({ releaseContext = false } = {}) {
     cancelAnimationFrame(this.frame);
     clearTimeout(this.histTimer);
     this.dropDetail();
@@ -671,6 +676,8 @@ export class PreviewRenderer {
     gl.deleteBuffer(this.viewUbo);
     gl.deleteVertexArray(this.vao);
     gl.deleteProgram(this.program);
+    this.texture = null;
+    if (releaseContext) gl.getExtension("WEBGL_lose_context")?.loseContext();
   }
 }
 

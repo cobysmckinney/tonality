@@ -1,7 +1,7 @@
 <script lang="ts">
   // Virtualised thumbnail grid: only cells near the viewport are in the DOM.
   // With `grouped`, photos are laid out under a header per capture day.
-  import { onMount } from "svelte";
+  import { onMount, untrack } from "svelte";
   import { thumbKey, thumbnail } from "./thumbs";
   import type { ImageRow } from "$lib/bindings/ImageRow";
   import { dayKey, dayLabel } from "./dates";
@@ -144,14 +144,20 @@
     scroll = el.scrollTop;
   });
 
-  // Keep the focused cell in view during keyboard navigation.
+  // Keep the focused cell in view during keyboard navigation: when focus moves, not whenever
+  // the layout does (a rating change, a resize), which would yank the scroll back to it.
   $effect(() => {
-    const i = focus === null ? undefined : layout.index.get(focus);
-    if (i === undefined || !el) return;
-    const top = layout.cells[i].top;
-    const bottom = top + rowH;
-    if (top < el.scrollTop + (grouped ? HEADER : 0)) el.scrollTop = top - PAD - (grouped ? HEADER : 0);
-    else if (bottom > el.scrollTop + el.clientHeight) el.scrollTop = bottom - el.clientHeight + PAD;
+    const f = focus;
+    if (f === null) return;
+    untrack(() => {
+      const i = layout.index.get(f);
+      if (i === undefined || !el) return;
+      const head = grouped ? HEADER : 0;
+      const top = layout.cells[i].top;
+      const bottom = top + rowH;
+      if (top < el.scrollTop + head) el.scrollTop = top - PAD - head;
+      else if (bottom > el.scrollTop + el.clientHeight) el.scrollTop = bottom - el.clientHeight + PAD;
+    });
   });
 
   function onScroll() {
