@@ -156,6 +156,12 @@ pub fn lens_table(profile: Option<&LensProfile>, s: &LensCorrection, w: f32, h: 
     };
     let zoom = if has_dist {
         let (mut lo, mut hi) = (0.6_f32, 1.6_f32);
+        // Strong distortion (a profile plus a manual push) can need more than 1.6: widen the
+        // bracket rather than return a zoom that still shows smeared edges.
+        while !inside(hi) && hi < 8.0 {
+            lo = hi;
+            hi *= 1.5;
+        }
         if inside(lo) {
             lo
         } else {
