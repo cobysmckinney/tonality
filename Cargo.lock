@@ -5357,6 +5357,7 @@ dependencies = [
  "image",
  "naga",
  "pollster",
+ "rayon",
  "serde",
  "serde_json",
  "tonality-core",

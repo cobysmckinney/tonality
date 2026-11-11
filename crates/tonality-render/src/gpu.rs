@@ -6,6 +6,8 @@
 
 use std::sync::mpsc;
 
+use rayon::prelude::*;
+
 use tonality_core::geometry::Geometry;
 use tonality_core::mask::BrushLayers;
 
@@ -147,6 +149,7 @@ impl Gpu {
         let mut out = vec![0u16; (w * h * 3) as usize];
         let tiles: Vec<(u32, u32)> =
             (0..h.div_ceil(TILE)).flat_map(|ty| (0..w.div_ceil(TILE)).map(move |tx| (tx * TILE, ty * TILE))).collect();
+        let mut inflight: Option<InFlight> = None;
         for (n, &(x, y)) in tiles.iter().enumerate() {
             let tw = TILE.min(w - x);
             let th = TILE.min(h - y);
@@ -164,16 +167,21 @@ impl Gpu {
             let sh = ((px(b[3], sh_all).ceil() as u32 + APRON).min(sh_all) - sy).max(1);
 
             let image = self.texture("image", sw, sh);
-            let mut rgba = Vec::with_capacity((sw * sh * 4) as usize);
-            for row in sy..sy + sh {
-                let start = ((row * sw_all + sx) * 3) as usize;
-                for p in src.pixels[start..start + (sw * 3) as usize].as_chunks::<3>().0 {
-                    rgba.extend_from_slice(&[p[0], p[1], p[2], HALF_ONE]);
+            // RGB halves → RGBA half bytes, a row per task.
+            let mut rgba = vec![0u8; (sw * sh * 8) as usize];
+            rgba.par_chunks_mut((sw * 8) as usize).enumerate().for_each(|(r, dst)| {
+                let start = (((sy + r as u32) * sw_all + sx) * 3) as usize;
+                let row = &src.pixels[start..start + (sw * 3) as usize];
+                for (p, o) in row.as_chunks::<3>().0.iter().zip(dst.as_chunks_mut::<8>().0) {
+                    o[0..2].copy_from_slice(&p[0].to_le_bytes());
+                    o[2..4].copy_from_slice(&p[1].to_le_bytes());
+                    o[4..6].copy_from_slice(&p[2].to_le_bytes());
+                    o[6..8].copy_from_slice(&HALF_ONE.to_le_bytes());
                 }
-            }
+            });
             self.queue.write_texture(
                 image.as_image_copy(),
-                &bytes_u16(&rgba),
+                &rgba,
                 wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(sw * 8), rows_per_image: None },
                 image.size(),
             );
@@ -249,32 +257,48 @@ impl Gpu {
                 },
                 target.size(),
             );
-            self.queue.submit([enc.finish()]);
-
-            let slice = readback.slice(..);
+            let index = self.queue.submit([enc.finish()]);
             let (tx, rx) = mpsc::channel();
-            slice.map_async(wgpu::MapMode::Read, move |r| {
+            readback.slice(..).map_async(wgpu::MapMode::Read, move |r| {
                 let _ = tx.send(r);
             });
-            d.poll(wgpu::PollType::Wait { submission_index: None, timeout: None }).map_err(|e| e.to_string())?;
-            rx.recv().map_err(|e| e.to_string())?.map_err(|e| e.to_string())?;
-            {
-                let data = slice.get_mapped_range().map_err(|e| e.to_string())?;
-                for row in 0..th {
-                    let line = &data[(row * row_bytes) as usize..][..(tw * 16) as usize];
-                    let dst = (((y + row) * w + x) * 3) as usize;
-                    for (i, px) in line.as_chunks::<16>().0.iter().enumerate() {
-                        for c in 0..3 {
-                            let v = f32::from_le_bytes(px[c * 4..c * 4 + 4].try_into().unwrap());
-                            out[dst + i * 3 + c] = (v.clamp(0.0, 1.0) * 65535.0 + 0.5) as u16;
-                        }
+            // While the GPU renders this tile, copy out the previous one.
+            let this = InFlight { readback, rx, index, x, y, tw, th, row_bytes, _target: target };
+            if let Some(prev) = inflight.replace(this) {
+                self.finish(prev, &mut out, w)?;
+                progress(n as f32 / tiles.len() as f32);
+            }
+        }
+        if let Some(last) = inflight.take() {
+            self.finish(last, &mut out, w)?;
+        }
+        progress(1.0);
+        Ok(Rendered { width: w, height: h, pixels: out })
+    }
+
+    /// Wait for a tile's readback and convert it into `out` (`w` pixels wide, RGB u16).
+    fn finish(&self, t: InFlight, out: &mut [u16], w: u32) -> Result<(), String> {
+        self.device
+            .poll(wgpu::PollType::Wait { submission_index: Some(t.index), timeout: None })
+            .map_err(|e| e.to_string())?;
+        t.rx.recv().map_err(|e| e.to_string())?.map_err(|e| e.to_string())?;
+        {
+            let slice = t.readback.slice(..);
+            let data = slice.get_mapped_range().map_err(|e| e.to_string())?;
+            let rows = out.par_chunks_mut((w * 3) as usize).skip(t.y as usize).take(t.th as usize);
+            rows.enumerate().for_each(|(row, dst)| {
+                let line = &data[row * t.row_bytes as usize..][..(t.tw * 16) as usize];
+                let dst = &mut dst[(t.x * 3) as usize..((t.x + t.tw) * 3) as usize];
+                for (px, o) in line.as_chunks::<16>().0.iter().zip(dst.as_chunks_mut::<3>().0) {
+                    for c in 0..3 {
+                        let v = f32::from_le_bytes(px[c * 4..c * 4 + 4].try_into().unwrap());
+                        o[c] = (v.clamp(0.0, 1.0) * 65535.0 + 0.5) as u16;
                     }
                 }
-            }
-            readback.unmap();
-            progress((n + 1) as f32 / tiles.len() as f32);
+            });
         }
-        Ok(Rendered { width: w, height: h, pixels: out })
+        t.readback.unmap();
+        Ok(())
     }
 
     /// The brush layers as a texture array (one empty layer when there are none).
@@ -331,6 +355,16 @@ fn bytes_f32(v: &[f32]) -> Vec<u8> {
     v.iter().flat_map(|f| f.to_le_bytes()).collect()
 }
 
-fn bytes_u16(v: &[u16]) -> Vec<u8> {
-    v.iter().flat_map(|f| f.to_le_bytes()).collect()
+/// A tile submitted to the GPU whose pixels haven't been read back yet.
+struct InFlight {
+    readback: wgpu::Buffer,
+    rx: mpsc::Receiver<Result<(), wgpu::BufferAsyncError>>,
+    index: wgpu::SubmissionIndex,
+    x: u32,
+    y: u32,
+    tw: u32,
+    th: u32,
+    row_bytes: u32,
+    /// Kept alive until its copy has run.
+    _target: wgpu::Texture,
 }

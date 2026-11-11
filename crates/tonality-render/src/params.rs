@@ -203,13 +203,11 @@ mod tests {
 
     #[test]
     fn mask_adjustments_are_clamped_and_finite() {
-        let mut m = tonality_core::mask::Mask::default();
-        m.shape = tonality_core::mask::MaskShape::Brush { strokes: vec![] };
+        let mut m = tonality_core::mask::Mask { shape: tonality_core::mask::MaskShape::Brush { strokes: vec![] }, ..Default::default() };
         m.adjust.contrast = 1e5;
         m.adjust.shadows = f32::NAN;
         m.adjust.exposure = f32::INFINITY;
-        let mut e = EditState::default();
-        e.masks = vec![m];
+        let e = EditState { masks: vec![m], ..Default::default() };
         let p = DevelopParams::new(&e, &color(), None, 600, 400);
         assert_eq!(p.masks[0][4], [0.0, 1.0, 0.0, 0.0]);
         assert!(p.to_vec().iter().all(|v| v.is_finite()));
