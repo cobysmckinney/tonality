@@ -100,17 +100,31 @@ pub async fn export_images(
     settings: ExportSettings,
     app: AppHandle,
     images: State<'_, Images>,
-    store: State<'_, Store>,
-    catalog: State<'_, CatalogState>,
 ) -> CmdResult<ExportSummary> {
     let folder = PathBuf::from(&settings.folder);
-    std::fs::create_dir_all(&folder).map_err(|e| format!("cannot create {}: {e}", folder.display()))?;
+    let images = images.inner().clone();
+    // Off the async runtime: gathering reads the catalog (every version of every photo), and
+    // rendering is long.
+    tauri::async_runtime::spawn_blocking(move || {
+        std::fs::create_dir_all(&folder).map_err(|e| format!("cannot create {}: {e}", folder.display()))?;
+        let jobs = gather(&app, &ids, &settings)?;
+        run(jobs, settings, folder, images, app)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
 
-    // Gather what to render while holding the catalog briefly.
+/// What to render, read from the catalog one photo at a time (so the UI's own catalog calls
+/// aren't held up behind a big export).
+fn gather(app: &AppHandle, ids: &[ImageId], settings: &ExportSettings) -> CmdResult<Vec<Job>> {
+    let catalog = app.state::<CatalogState>();
+    let store = app.state::<Store>();
     let mut jobs = Vec::new();
-    for &id in &ids {
+    for &id in ids {
         let (rel, hash, name) = catalog.with(|c| c.image_file(id))?;
-        let versions = catalog.with(|c| {
+        // `edit`, not `with`: opening a never-edited photo's history creates its first commit,
+        // which its sidecar should record.
+        let versions = catalog.edit(&[id], |c| {
             let co = c.history_open(id)?;
             let view = &co.view;
             let mut out = Vec::new();
@@ -129,11 +143,7 @@ pub async fn export_images(
         let stem = Path::new(&name).file_stem().map_or(name.clone(), |s| s.to_string_lossy().into_owned());
         jobs.push(Job { image: id, path: store.abs(&rel), hash, stem, versions });
     }
-
-    let images = images.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || run(jobs, settings, folder, images, app))
-        .await
-        .map_err(|e| e.to_string())?
+    Ok(jobs)
 }
 
 /// A downscaled source: width, height, RGB halves.
