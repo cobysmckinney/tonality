@@ -38,23 +38,23 @@ pub struct LibraryOverview {
 
 #[tauri::command]
 pub async fn library_overview(store: State<'_, Store>, catalog: State<'_, CatalogState>) -> CmdResult<LibraryOverview> {
-    let (total, imports, albums) = catalog.with(|c| Ok((c.image_count()?, c.imports()?, c.albums()?)))?;
+    let (total, imports, albums) = catalog.read(|c| Ok((c.image_count()?, c.imports()?, c.albums()?))).await?;
     Ok(LibraryOverview { root: store.root().to_string_lossy().into_owned(), total, imports, albums })
 }
 
 #[tauri::command]
 pub async fn library_images(query: ImageQuery, catalog: State<'_, CatalogState>) -> CmdResult<Vec<ImageRow>> {
-    catalog.with(|c| c.images(&query))
+    catalog.read(move |c| c.images(&query)).await
 }
 
 #[tauri::command]
 pub async fn library_set_rating(ids: Vec<ImageId>, rating: u8, catalog: State<'_, CatalogState>) -> CmdResult<()> {
-    catalog.edit(&ids, |c| c.set_rating(&ids, rating))
+    catalog.change(ids.clone(), move |c| c.set_rating(&ids, rating)).await
 }
 
 #[tauri::command]
 pub async fn library_set_flag(ids: Vec<ImageId>, flag: i8, catalog: State<'_, CatalogState>) -> CmdResult<()> {
-    catalog.edit(&ids, |c| c.set_flag(&ids, flag))
+    catalog.change(ids.clone(), move |c| c.set_flag(&ids, flag)).await
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -64,33 +64,35 @@ pub async fn library_set_flag(ids: Vec<ImageId>, flag: i8, catalog: State<'_, Ca
 
 #[tauri::command]
 pub async fn album_create(name: String, images: Vec<ImageId>, catalog: State<'_, CatalogState>) -> CmdResult<AlbumId> {
-    catalog.edit(&images, |c| {
-        let id = c.create_album(&name)?;
-        c.add_to_album(id, &images)?;
-        Ok(id)
-    })
+    catalog
+        .change(images.clone(), move |c| {
+            let id = c.create_album(&name)?;
+            c.add_to_album(id, &images)?;
+            Ok(id)
+        })
+        .await
 }
 
 #[tauri::command]
 pub async fn album_rename(id: AlbumId, name: String, catalog: State<'_, CatalogState>) -> CmdResult<()> {
-    let members = catalog.with(|c| c.album_members(id))?;
-    catalog.edit(&members, |c| c.rename_album(id, &name))
+    let members = catalog.read(move |c| c.album_members(id)).await?;
+    catalog.change(members, move |c| c.rename_album(id, &name)).await
 }
 
 #[tauri::command]
 pub async fn album_delete(id: AlbumId, catalog: State<'_, CatalogState>) -> CmdResult<()> {
-    let members = catalog.with(|c| c.album_members(id))?;
-    catalog.edit(&members, |c| c.delete_album(id))
+    let members = catalog.read(move |c| c.album_members(id)).await?;
+    catalog.change(members, move |c| c.delete_album(id)).await
 }
 
 #[tauri::command]
 pub async fn album_add(id: AlbumId, images: Vec<ImageId>, catalog: State<'_, CatalogState>) -> CmdResult<u32> {
-    catalog.edit(&images, |c| c.add_to_album(id, &images))
+    catalog.change(images.clone(), move |c| c.add_to_album(id, &images)).await
 }
 
 #[tauri::command]
 pub async fn album_remove(id: AlbumId, images: Vec<ImageId>, catalog: State<'_, CatalogState>) -> CmdResult<()> {
-    catalog.edit(&images, |c| c.remove_from_album(id, &images))
+    catalog.change(images.clone(), move |c| c.remove_from_album(id, &images)).await
 }
 
 // ---------------------------------------------------------------------------------------------

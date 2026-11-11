@@ -95,7 +95,7 @@ async fn open_image(
     store: State<'_, Store>,
     catalog: State<'_, history::CatalogState>,
 ) -> CmdResult<ImageInfo> {
-    let (rel, _, name) = catalog.with(|c| c.image_file(id))?;
+    let (rel, _, name) = catalog.read(move |c| c.image_file(id)).await?;
     let path = store.abs(&rel);
     let images = images.inner().clone();
     tauri::async_runtime::spawn_blocking(move || images.open(id, &path, name, PREVIEW_EDGE))
@@ -126,7 +126,7 @@ async fn detail_region(
     store: State<'_, Store>,
     catalog: State<'_, history::CatalogState>,
 ) -> CmdResult<Response> {
-    let (rel, _, _) = catalog.with(|c| c.image_file(id))?;
+    let (rel, _, _) = catalog.read(move |c| c.image_file(id)).await?;
     let path = store.abs(&rel);
     let images = images.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {

@@ -80,16 +80,20 @@ pub async fn library_save_edited(
     if !bytes.starts_with(&[0xFF, 0xD8]) {
         return Err("not a JPEG".into());
     }
-    let (_, hash, _) = catalog.with(|c| c.image_file(id))?;
+    let bytes = bytes.clone();
+    let (_, hash, _) = catalog.read(move |c| c.image_file(id)).await?;
     let dest = store.edited_thumb_path(&hash);
-    if let Some(dir) = dest.parent() {
-        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-    }
-    let tmp = crate::store::temp_path(&dest);
-    std::fs::write(&tmp, bytes).and_then(|_| std::fs::rename(&tmp, &dest)).map_err(|e| {
-        let _ = std::fs::remove_file(&tmp);
-        e.to_string()
+    crate::blocking(move || {
+        if let Some(dir) = dest.parent() {
+            std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+        }
+        let tmp = crate::store::temp_path(&dest);
+        std::fs::write(&tmp, bytes).and_then(|_| std::fs::rename(&tmp, &dest)).map_err(|e| {
+            let _ = std::fs::remove_file(&tmp);
+            e.to_string()
+        })
     })
+    .await
 }
 
 pub fn handle<R: Runtime>(ctx: UriSchemeContext<'_, R>, request: Request<Vec<u8>>, responder: UriSchemeResponder) {
