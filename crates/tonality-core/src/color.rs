@@ -105,10 +105,15 @@ const TINT_SCALE: f32 = 0.0003;
 
 /// White point (xy) for a temperature/tint pair.
 pub fn white_xy(temperature: f32, tint: f32) -> (f32, f32) {
+    // Within the locus fit's range, so the finite difference below never collapses to a point.
+    let temperature = temperature.clamp(1667.0, 25000.0);
     let (x, y) = planckian_xy(temperature);
     let (u, v) = xy_to_uv(x, y);
-    // Locus normal from a finite difference in mired space.
-    let (x2, y2) = planckian_xy(1e6 / (1e6 / temperature - 1.0));
+    // Locus normal from a finite difference in mired space (one mired hotter, or cooler at the
+    // hot end; the sign is fixed below).
+    let mired = 1e6 / temperature;
+    let other = if 1e6 / (mired - 1.0) <= 25000.0 { mired - 1.0 } else { mired + 1.0 };
+    let (x2, y2) = planckian_xy(1e6 / other);
     let (u2, v2) = xy_to_uv(x2, y2);
     let (du, dv) = (u2 - u, v2 - v);
     let len = (du * du + dv * dv).sqrt().max(1e-12);
@@ -216,6 +221,18 @@ fn normalize_min(v: Vec3) -> Vec3 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tint_moves_the_white_point_across_the_whole_range() {
+        for t in [1000.0, 1667.0, 6500.0, 24_500.0, 25_000.0, 40_000.0] {
+            let (x0, y0) = white_xy(t, 0.0);
+            let (x1, y1) = white_xy(t, 50.0);
+            let d = ((x1 - x0).powi(2) + (y1 - y0).powi(2)).sqrt();
+            assert!(d > 1e-3, "tint ignored at {t} K ({d})");
+            // Positive tint is magenta: below the locus, i.e. lower y here.
+            assert!(y1 < y0, "{t} K");
+        }
+    }
 
     /// Sony ILCE-7M3 D65 matrix (Adobe DNG converter), scaled by 1/10000.
     fn a7m3() -> CameraColor {
