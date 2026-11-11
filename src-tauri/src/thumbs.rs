@@ -98,17 +98,19 @@ pub fn handle<R: Runtime>(ctx: UriSchemeContext<'_, R>, request: Request<Vec<u8>
     let Some(id) = id else {
         return respond(responder, StatusCode::BAD_REQUEST, b"bad thumbnail id".to_vec());
     };
-    let file = app.state::<CatalogState>().with(|c| c.image_file(id));
-    let (rel, hash, _) = match file {
-        Ok(f) => f,
-        Err(e) => return respond(responder, StatusCode::NOT_FOUND, e.into_bytes()),
-    };
-    let store = app.state::<Store>();
-    let path = store.abs(&rel);
-    // Originals never change (they are content-addressed), so the hash is a stable cache key.
-    let cache = store.thumb_path(&hash, EDGE);
-    let edited = store.edited_thumb_path(&hash);
+    // Everything below (even the catalog lookup, which can wait on the catalog lock behind an
+    // import) runs on the pool: this handler is called on the UI thread.
     pool().spawn(move || {
+        let file = app.state::<CatalogState>().with(|c| c.image_file(id));
+        let (rel, hash, _) = match file {
+            Ok(f) => f,
+            Err(e) => return respond(responder, StatusCode::NOT_FOUND, e.into_bytes()),
+        };
+        let store = app.state::<Store>();
+        let path = store.abs(&rel);
+        // Originals never change (they are content-addressed), so the hash is a stable cache key.
+        let cache = store.thumb_path(&hash, EDGE);
+        let edited = store.edited_thumb_path(&hash);
         if let Ok(bytes) = std::fs::read(&edited) {
             return respond(responder, StatusCode::OK, bytes);
         }
