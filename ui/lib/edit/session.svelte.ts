@@ -59,7 +59,8 @@ class EditSession {
   /** Bumped when a detection finishes, so the raster layers are fetched again. */
   aiEpoch = $state(0);
   /** Drawing a loop for Select Object: a new mask, or re-selecting mask `replace`. */
-  lassoing = $state<{ replace: number | null } | null>(null);
+  lassoing = $state<{ replace: number | null; busy?: number } | null>(null);
+  private lassoSeq = 0;
   /** Models the user agreed to download this session. */
   private approved = new Set<string>();
 
@@ -152,19 +153,30 @@ class EditSession {
   /** A loop was drawn (source uv): select the object in it. */
   async finishLasso(lasso: [number, number][]) {
     const job = this.lassoing;
-    this.lassoing = null;
-    if (!job || !this.edit || lasso.length < 3) return;
-    const target: AiTarget = { kind: "object", lasso };
-    const i = job.replace;
-    const old = i !== null ? this.edit.masks?.[i] : undefined;
-    if (old && old.shape.kind === "ai") {
-      old.shape.target = target;
-      old.shape.model = await api.ai.modelFor(target);
-      this.commit(null);
-      await this.detect(old);
+    if (!job || job.busy) return;
+    if (!this.edit || lasso.length < 3) {
+      this.lassoing = null;
       return;
     }
-    await this.addAi("object", target);
+    // The loop stays on screen while the object is detected.
+    // (`busy` numbers the detection: `lassoing` is a proxy, so compare by value.)
+    const busy = ++this.lassoSeq;
+    this.lassoing = { ...job, busy };
+    try {
+      const target: AiTarget = { kind: "object", lasso };
+      const i = job.replace;
+      const old = i !== null ? this.edit.masks?.[i] : undefined;
+      if (old && old.shape.kind === "ai") {
+        old.shape.target = target;
+        old.shape.model = await api.ai.modelFor(target);
+        this.commit(null);
+        await this.detect(old);
+        return;
+      }
+      await this.addAi("object", target);
+    } finally {
+      if (this.lassoing?.busy === busy) this.lassoing = null;
+    }
   }
 
   /** Run the model for an AI mask, unless it's already running. */

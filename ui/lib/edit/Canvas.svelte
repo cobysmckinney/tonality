@@ -372,6 +372,7 @@
     <LassoOverlay
       frame={frameRect}
       framing={session.framing ?? renderer.framing}
+      busy={!!session.lassoing.busy}
       ondone={(lasso) => session.finishLasso(lasso)}
       oncancel={() => session.cancelLasso()}
     />

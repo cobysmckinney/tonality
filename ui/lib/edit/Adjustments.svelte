@@ -120,6 +120,13 @@
     edit.color.saturation = 0;
     oncommit?.(null);
   }
+  /** Switch to an explicit balance, starting where As Shot is (the sliders then own it). */
+  function customWb() {
+    if (!isAsShot) return;
+    edit.whiteBalance.temperature = image.asShotTemperature;
+    edit.whiteBalance.tint = image.asShotTint;
+    oncommit?.(null);
+  }
   function resetLens() {
     edit.lens = { ...LENS_DEFAULT };
     oncommit?.(null);
@@ -147,7 +154,7 @@
     <Section title="White Balance" edited={edited.wb} onreset={resetWb}>
       <div class="seg wb-mode">
         <button class:active={isAsShot} onclick={resetWb}>As Shot</button>
-        <button class:active={!isAsShot} disabled={isAsShot} title="Move a slider to set a custom balance">Custom</button>
+        <button class:active={!isAsShot} onclick={customWb} title="Set your own balance, starting from the as-shot values">Custom</button>
       </div>
       <Slider
         label="Temperature"

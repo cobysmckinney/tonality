@@ -62,6 +62,12 @@
   // ---- rename ----
   let renaming = $state<number | null>(null);
   let draft = $state("");
+  // Renames are by position: if the list changes under one (a delete, undo), drop it rather
+  // than rename whichever mask moved into that slot.
+  $effect(() => {
+    void masks.length;
+    renaming = null;
+  });
   function startRename(i: number, m: Mask) {
     renaming = i;
     draft = m.name;
@@ -157,9 +163,10 @@
       <ul class="list">
         {#each masks as m, i (i)}
           <li class:selected={sel === i} class:hidden={!m.enabled}>
-            <button class="pick" onclick={() => (session.maskIndex = i)} ondblclick={() => startRename(i, m)}>
-              <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path d={icons[m.shape.kind]} /></svg>
-              {#if renaming === i}
+            {#if renaming === i}
+              <!-- Not inside the button: an <input> in a <button> is invalid and edits unreliably. -->
+              <div class="pick">
+                <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path d={icons[m.shape.kind]} /></svg>
                 <input
                   use:focus
                   bind:value={draft}
@@ -170,9 +177,12 @@
                     if (e.key === "Escape") renaming = null;
                   }}
                 />
-              {:else}
+              </div>
+            {:else}
+              {@const st = status(m)}
+              <button class="pick" onclick={() => (session.maskIndex = i)} ondblclick={() => startRename(i, m)}>
+                <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path d={icons[m.shape.kind]} /></svg>
                 <span class="name">{m.name}</span>
-                {@const st = status(m)}
                 {#if st?.state === "working"}
                   <span class="ai-state working" title="Detecting…">
                     {#if progress?.stage === "download"}{pct(progress)}%{:else}<span class="spinner"></span>{/if}
@@ -182,8 +192,8 @@
                 {:else if st?.state === "error"}
                   <span class="ai-state warn" title={st.message}>Failed</span>
                 {/if}
-              {/if}
-            </button>
+              </button>
+            {/if}
             <button class="icon" onclick={() => toggle(i, "enabled")} title={m.enabled ? "Hide" : "Show"}>
               {#if m.enabled}
                 <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path d="M1 8s2.5-4.5 7-4.5S15 8 15 8s-2.5 4.5-7 4.5S1 8 1 8Z" /><circle cx="8" cy="8" r="2" /></svg>
@@ -307,7 +317,7 @@
         {#each groups as g (g.title)}
           <div class="sub">
             <span>{g.title}</span>
-            {#if g.title === "Light" && adjusted}<button class="link" onclick={resetAdjust}>Reset</button>{/if}
+            {#if g === groups[0] && adjusted}<button class="link" onclick={resetAdjust} title="Reset this mask's Light and Color">Reset all</button>{/if}
           </div>
           {#each g.controls as c (c.key)}
             <Slider
