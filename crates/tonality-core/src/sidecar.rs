@@ -284,6 +284,20 @@ impl Catalog {
                     |r| r.get(0),
                 )
                 .optional()?;
+            // Or the same commit, rewritten here since that sidecar was written (a slider gesture
+            // coalesces into its commit in place): same parent and creation time, updated later.
+            // Without this, a sidecar left stale by a crash comes back as a diverged branch.
+            let found = match found {
+                Some(id) => Some(id),
+                None => tx
+                    .query_row(
+                        "SELECT id FROM commits WHERE image_id = ?1 AND parent IS ?2 AND created_at = ?3
+                         AND key IS NOT NULL AND updated_at > ?4 ORDER BY id LIMIT 1",
+                        params![image, parent, c.created, c.time],
+                        |r| r.get(0),
+                    )
+                    .optional()?,
+            };
             let id = match found {
                 Some(id) => id,
                 None => {
@@ -498,6 +512,28 @@ mod tests {
         assert!(names.contains(&"main") && names.contains(&"HDR"), "{names:?}");
         assert_eq!(v.head.branch, "HDR");
         b.commit(ib, &exp(2.0), None).expect("HEAD names a real branch");
+    }
+
+    #[test]
+    fn a_sidecar_from_before_a_coalesced_edit_is_not_a_new_branch() {
+        use std::sync::atomic::{AtomicI64, Ordering};
+        use std::sync::Arc;
+        let t = Arc::new(AtomicI64::new(1_000));
+        let tc = t.clone();
+        let mut a = Catalog::open_in_memory().unwrap().with_clock(Box::new(move || tc.load(Ordering::SeqCst)));
+        let ia = a.test_image("x");
+        a.history_open(ia).unwrap();
+        t.store(2_000, Ordering::SeqCst);
+        a.commit(ia, &exp(1.0), Some("exposure")).unwrap();
+        let stale = a.sidecar(ia).unwrap();
+        // The same drag goes on: coalesced into that commit, and the app exits before the
+        // sidecar is rewritten.
+        t.store(2_100, Ordering::SeqCst);
+        a.commit(ia, &exp(1.5), Some("exposure")).unwrap();
+        let before = graph(&a, ia);
+        let m = a.merge_sidecar(ia, &stale).unwrap();
+        assert!(!m.changed(), "{m:?}");
+        assert_eq!(graph(&a, ia), before);
     }
 
     #[test]
