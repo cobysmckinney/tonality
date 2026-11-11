@@ -36,7 +36,8 @@ fn respond(responder: UriSchemeResponder, status: StatusCode, body: Vec<u8>) {
     let resp = Response::builder()
         .status(status)
         .header(header::CONTENT_TYPE, if status.is_success() { "image/jpeg" } else { "text/plain" })
-        .header(header::CACHE_CONTROL, "max-age=31536000, immutable")
+        // Errors aren't cached: a thumbnail that failed (still importing, say) is retried.
+        .header(header::CACHE_CONTROL, if status.is_success() { "max-age=31536000, immutable" } else { "no-store" })
         .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
         .body(body)
         .unwrap();

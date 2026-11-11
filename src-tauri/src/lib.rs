@@ -47,6 +47,10 @@ fn dev_log(level: String, message: String) {
 /// Dev/test hook: where the frontend should write a PNG of the first rendered frame.
 #[tauri::command]
 fn dev_snapshot_path() -> Option<String> {
+    // Debug builds only: in a release build the page can't write files through this.
+    if !cfg!(debug_assertions) {
+        return None;
+    }
     std::env::var("TONALITY_SNAPSHOT").ok().filter(|p| !p.is_empty())
 }
 

@@ -20,7 +20,29 @@
         "backgroundColor": "#121212"
       }
     ],
-    "security": { "csp": null }
+    "security": {
+      "csp": {
+        "default-src": "'self'",
+        "script-src": "'self'",
+        "style-src": "'self' 'unsafe-inline'",
+        "img-src": "'self' blob: data:",
+        "connect-src": "'self' ipc: http://ipc.localhost thumb: http://thumb.localhost",
+        "font-src": "'self'",
+        "object-src": "'none'",
+        "base-uri": "'none'"
+      },
+      "devCsp": {
+        "default-src": "'self'",
+        "script-src": "'self' 'unsafe-eval'",
+        "style-src": "'self' 'unsafe-inline'",
+        "img-src": "'self' blob: data:",
+        "connect-src": "'self' ipc: http://ipc.localhost thumb: http://thumb.localhost ws://localhost:1420",
+        "font-src": "'self'",
+        "object-src": "'none'",
+        "base-uri": "'none'"
+      },
+      "dangerousDisableAssetCspModification": ["style-src"]
+    }
   },
   "bundle": {
     "active": true,
