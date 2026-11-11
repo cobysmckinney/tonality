@@ -8,7 +8,7 @@ import { api } from "$lib/api";
 import type { EditState } from "$lib/bindings/EditState";
 import { invalidateThumb } from "$lib/library/thumbs";
 import type { PreviewRenderer } from "./renderer";
-import { brushKey } from "./masks";
+import { brushKey, withoutStrokes } from "./masks";
 
 const BRANCH_EDGE = 200;
 const LIBRARY_EDGE = 640;
@@ -30,7 +30,7 @@ function serial<T>(f: () => Promise<T>): Promise<T> {
 /** Everything needed to render `state`: params, curve and brush rasters. */
 function inputs(imageId: number, state: EditState) {
   return Promise.all([
-    api.developParams(imageId, state),
+    api.developParams(imageId, withoutStrokes(state)),
     api.developCurve(state),
     brushKey(state) ? api.maskLayers(imageId, state) : null,
   ]);

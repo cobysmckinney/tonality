@@ -10,7 +10,7 @@
   import { FULL, turnedSize } from "./crop";
   import MaskOverlay from "./MaskOverlay.svelte";
   import LassoOverlay from "./LassoOverlay.svelte";
-  import { brushKey, brushLayer, maskSize, masksOf, shaderIndex, type BrushLayers } from "./masks";
+  import { brushKey, brushLayer, maskSize, masksOf, shaderIndex, withoutStrokes, type BrushLayers } from "./masks";
   import { session } from "./session.svelte";
   import type { Mask } from "$lib/bindings/Mask";
   import type { Stroke } from "$lib/bindings/Stroke";
@@ -237,11 +237,13 @@
           }
           const key = JSON.stringify(next.curve);
           // Brush rasters only when strokes change (undefined: unchanged; null: none).
-          const bk = `${id}:${brushKey(next, session.aiEpoch)}`;
+          const layersKey = brushKey(next, session.aiEpoch);
+          const bk = `${id}:${layersKey}`;
           const [params, curve, brush] = await Promise.all([
-            api.developParams(id, next),
+            // Params don't depend on stroke points: don't serialise them on every tick.
+            api.developParams(id, withoutStrokes(next)),
             key !== curveKey ? api.developCurve(next) : null,
-            bk === brushK ? undefined : brushKey(next) ? api.maskLayers(id, next) : null,
+            bk === brushK ? undefined : layersKey ? api.maskLayers(id, next) : null,
           ]);
           // Superseded by another photo (or renderer) meanwhile: its own request follows.
           const later = pending as Job | null; // (set by calls made during the await)

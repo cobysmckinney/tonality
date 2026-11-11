@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { EditState } from "$lib/bindings/EditState";
 import type { Mask } from "$lib/bindings/Mask";
-import { aiKey, brushKey, brushLayer, newAiMask, nextName } from "./masks";
+import { aiKey, brushKey, brushLayer, newAiMask, nextName, strokesHash, withoutStrokes } from "./masks";
 
 const brush = (): Mask => ({ ...newAiMask("subject", { kind: "subject" }, "subject@1", []), name: "Brush 1", shape: { kind: "brush", strokes: [] } });
 
@@ -37,5 +37,30 @@ describe("AI masks", () => {
     const o = newAiMask("object", { kind: "object", lasso: [[0.1, 0.2]] }, "sam@1", []);
     expect(aiKey(o)).toBe('sam@1:{"kind":"object","lasso":[[0.1,0.2]]}');
     expect(aiKey(brush())).toBeNull();
+  });
+});
+
+describe("stroke keys", () => {
+  const st = (x: number, erase = false) => ({ points: [[x, 0.5]] as [number, number][], radius: 0.05, feather: 0.5, strength: 1, erase });
+  it("change with any stroke detail and stay put otherwise", () => {
+    const a = strokesHash([st(0.1), st(0.2)]);
+    expect(strokesHash([st(0.1), st(0.2)])).toBe(a);
+    expect(strokesHash([st(0.1), st(0.3)])).not.toBe(a);
+    expect(strokesHash([st(0.1), st(0.2, true)])).not.toBe(a);
+    expect(strokesHash([st(0.1)])).not.toBe(a);
+  });
+  it("brush keys follow the strokes", () => {
+    const m = brush();
+    const k0 = brushKey({ masks: [m] } as unknown as EditState);
+    if (m.shape.kind === "brush") m.shape.strokes.push(st(0.4));
+    expect(brushKey({ masks: [m] } as unknown as EditState)).not.toBe(k0);
+  });
+  it("withoutStrokes drops points only", () => {
+    const m = brush();
+    if (m.shape.kind === "brush") m.shape.strokes.push(st(0.4));
+    const s = withoutStrokes({ masks: [m] } as unknown as EditState);
+    expect(s.masks![0].shape).toEqual({ kind: "brush", strokes: [] });
+    expect(s.masks![0].name).toBe(m.name);
+    expect(m.shape.kind === "brush" && m.shape.strokes.length).toBe(1);
   });
 });

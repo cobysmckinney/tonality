@@ -2,6 +2,7 @@
 import type { EditState } from "$lib/bindings/EditState";
 import type { Mask } from "$lib/bindings/Mask";
 import type { MaskShape } from "$lib/bindings/MaskShape";
+import type { Stroke } from "$lib/bindings/Stroke";
 import type { AiTarget } from "$lib/bindings/AiTarget";
 import type { Framing } from "./renderer";
 
@@ -138,11 +139,57 @@ export function shaderIndex(masks: Mask[], i: number): number | null {
  */
 export function brushKey(edit: EditState, epoch = 0): string {
   const masks = masksOf(edit);
-  const layers = masks.flatMap((m): unknown[] => (m.shape.kind === "brush" ? [m.shape.strokes] : m.shape.kind === "ai" ? [m.shape] : []));
+  // Strokes are hashed rather than stringified: this runs on every slider tick, and a brush
+  // mask can hold many thousands of points.
+  const layers = masks.flatMap((m): unknown[] =>
+    m.shape.kind === "brush"
+      ? [strokesHash(m.shape.strokes)]
+      : m.shape.kind === "ai"
+        ? [[m.shape.model, m.shape.target, strokesHash(m.shape.refine)]]
+        : [],
+  );
   if (!layers.length) return "";
   const ai = masks.some((m) => m.shape.kind === "ai");
   const lens = edit.lens ? { ...edit.lens, vignetting: 0 } : null;
   return JSON.stringify(ai ? [layers, lens, epoch] : layers);
+}
+
+/** 32-bit FNV-1a over every number in `strokes`, plus their count. */
+export function strokesHash(strokes: readonly Stroke[]): string {
+  const f = new Float32Array(1);
+  const u = new Uint32Array(f.buffer);
+  let h = 0x811c9dc5;
+  const mix = (v: number) => {
+    f[0] = v;
+    h = Math.imul(h ^ u[0], 0x01000193);
+  };
+  for (const s of strokes) {
+    mix(s.points.length);
+    for (const [x, y] of s.points) {
+      mix(x);
+      mix(y);
+    }
+    mix(s.radius);
+    mix(s.feather);
+    mix(s.strength);
+    mix(s.erase ? 1 : 0);
+  }
+  return `${strokes.length}:${(h >>> 0).toString(36)}`;
+}
+
+/** `state` without stroke points, for calls that don't rasterise masks (develop params). */
+export function withoutStrokes(state: EditState): EditState {
+  if (!state.masks?.some((m) => m.shape.kind === "brush" || m.shape.kind === "ai")) return state;
+  return {
+    ...state,
+    masks: state.masks.map((m) =>
+      m.shape.kind === "brush"
+        ? { ...m, shape: { ...m.shape, strokes: [] } }
+        : m.shape.kind === "ai"
+          ? { ...m, shape: { ...m.shape, refine: [] } }
+          : m,
+    ),
+  };
 }
 
 /** Mirrors `MASK_EDGE` / `mask_size` in tonality-core: the brush raster size. */
