@@ -157,16 +157,84 @@ impl FullImage {
         let ratio = long as f32 / long_edge as f32;
         // Cheap power-of-two box reduction first, leaving at least 2× for the proper filter.
         let level = if ratio >= 4.0 { (ratio / 2.0).log2().floor() as u32 } else { 0 };
-        let r = self.region(0, 0, self.width, self.height, level);
-        let f32s: Vec<f32> = r.pixels.par_iter().map(|&v| f16::from_bits(v).to_f32()).collect();
-        let img = RgbF32::from_raw(r.width, r.height, f32s).expect("buffer size matches");
         let s = long_edge as f32 / long as f32;
         let w = ((self.width as f32 * s).round() as u32).max(1);
         let h = ((self.height as f32 * s).round() as u32).max(1);
-        let out = imageops::resize(&img, w, h, imageops::FilterType::CatmullRom);
-        let pixels = out.as_raw().par_iter().map(|&v| f16::from_f32(v.clamp(0.0, 65504.0)).to_bits()).collect();
+        let pixels = if level == 0 {
+            resample(&self.pixels, self.width as usize, self.height as usize, w as usize, h as usize)
+        } else {
+            let r = self.region(0, 0, self.width, self.height, level);
+            resample(&r.pixels, r.width as usize, r.height as usize, w as usize, h as usize)
+        };
         (w, h, pixels)
     }
+}
+
+/// Catmull-Rom weights for resampling `src` samples to `dst`: per output sample, the first
+/// source index and normalised weights (the kernel widened by the ratio when shrinking).
+fn weights(src: usize, dst: usize) -> Vec<(usize, Vec<f32>)> {
+    let ratio = src as f32 / dst as f32;
+    let scale = ratio.max(1.0);
+    let support = 2.0 * scale;
+    let cubic = |x: f32| {
+        let x = x.abs();
+        if x < 1.0 {
+            1.5 * x * x * x - 2.5 * x * x + 1.0
+        } else if x < 2.0 {
+            -0.5 * x * x * x + 2.5 * x * x - 4.0 * x + 2.0
+        } else {
+            0.0
+        }
+    };
+    (0..dst)
+        .map(|i| {
+            let center = (i as f32 + 0.5) * ratio;
+            let lo = ((center - support).floor().max(0.0)) as usize;
+            let hi = ((center + support).ceil() as usize).min(src);
+            let mut w: Vec<f32> = (lo..hi).map(|j| cubic((j as f32 + 0.5 - center) / scale)).collect();
+            let sum: f32 = w.iter().sum();
+            if sum.abs() > 1e-8 {
+                w.iter_mut().for_each(|v| *v /= sum);
+            }
+            (lo, w)
+        })
+        .collect()
+}
+
+/// Resize RGB halves `sw × sh` → `dw × dh` (separable Catmull-Rom, rows in parallel).
+fn resample(src: &[u16], sw: usize, sh: usize, dw: usize, dh: usize) -> Vec<u16> {
+    let (wx, wy) = (weights(sw, dw), weights(sh, dh));
+    // Horizontal: every source row to `dw` samples.
+    let mut tmp = vec![0f32; dw * sh * 3];
+    tmp.par_chunks_mut(dw * 3).enumerate().for_each(|(y, row)| {
+        let line = &src[y * sw * 3..(y + 1) * sw * 3];
+        for (o, (lo, w)) in row.as_chunks_mut::<3>().0.iter_mut().zip(&wx) {
+            let mut acc = [0f32; 3];
+            for (k, &wt) in w.iter().enumerate() {
+                let i = (lo + k) * 3;
+                for c in 0..3 {
+                    acc[c] += wt * f16::from_bits(line[i + c]).to_f32();
+                }
+            }
+            *o = acc;
+        }
+    });
+    // Vertical.
+    let mut out = vec![0u16; dw * dh * 3];
+    out.par_chunks_mut(dw * 3).enumerate().for_each(|(y, row)| {
+        let (lo, w) = &wy[y];
+        let mut acc = vec![0f32; dw * 3];
+        for (k, &wt) in w.iter().enumerate() {
+            let line = &tmp[(lo + k) * dw * 3..][..dw * 3];
+            for (a, &v) in acc.iter_mut().zip(line) {
+                *a += wt * v;
+            }
+        }
+        for (o, a) in row.iter_mut().zip(acc) {
+            *o = f16::from_f32(a.clamp(0.0, 65504.0)).to_bits();
+        }
+    });
+    out
 }
 
 /// A piece of a [`FullImage`]: `(x, y, w, h)` in full-resolution pixels, `width × height` samples.
@@ -377,6 +445,25 @@ fn camera_color(raw: &RawImage) -> CameraColor {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn resample_matches_image_crate_catmull_rom() {
+        let (sw, sh, dw, dh) = (97usize, 61usize, 40usize, 25usize);
+        let f: Vec<f32> = (0..sw * sh * 3).map(|i| ((i * 7919) % 1000) as f32 / 1000.0).collect();
+        let halves: Vec<u16> = f.iter().map(|&v| f16::from_f32(v).to_bits()).collect();
+        let ours = resample(&halves, sw, sh, dw, dh);
+        let img = RgbF32::from_raw(sw as u32, sh as u32, halves.iter().map(|&v| f16::from_bits(v).to_f32()).collect()).unwrap();
+        let theirs = imageops::resize(&img, dw as u32, dh as u32, imageops::FilterType::CatmullRom);
+        let max = ours
+            .iter()
+            .zip(theirs.as_raw())
+            .map(|(&a, &b)| (f16::from_bits(a).to_f32() - b.clamp(0.0, 65504.0)).abs())
+            .fold(0f32, f32::max);
+        assert!(max < 0.02, "max difference {max}");
+        // Flat stays flat.
+        let flat = vec![f16::from_f32(0.5).to_bits(); sw * sh * 3];
+        assert!(resample(&flat, sw, sh, dw, dh).iter().all(|&v| (f16::from_bits(v).to_f32() - 0.5).abs() < 1e-3));
+    }
 
     #[test]
     fn crop_rects_stay_inside_the_sensor() {

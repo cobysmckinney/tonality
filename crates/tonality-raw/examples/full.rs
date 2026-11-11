@@ -10,6 +10,11 @@ fn main() {
     let t = Instant::now();
     let r = full.region(1000, 1000, 1200, 800, 0);
     println!("region {}×{} in {:?}", r.width, r.height, t.elapsed());
+    for edge in [2048, 3000, 4500] {
+        let t = Instant::now();
+        let (w, h, _) = full.scaled(edge);
+        println!("scaled {w}×{h} in {:?}", t.elapsed());
+    }
     if let Some(out) = args.get(1) {
         // Crude gamma-only dump of a 1:1 crop, to eyeball demosaic quality.
         let mut img = image::RgbImage::new(r.width, r.height);
