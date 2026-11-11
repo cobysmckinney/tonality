@@ -33,5 +33,8 @@ opt-level = 3
 [profile.dev.package.tonality-render]
 opt-level = 3
 
+[profile.dev.package.tonality-core]
+opt-level = 3
+
 [profile.dev.package.tonality-ml]
 opt-level = 3

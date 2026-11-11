@@ -11,8 +11,8 @@ use std::sync::Mutex;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
 use tonality_core::color::CameraColor;
-use tonality_core::lens::{lens_table, warp_to_uv, LensCorrection, LensProfile, UvToSource};
-use tonality_core::mask::{mask_layers, mask_size, AiTarget, BrushLayers, Mask, MaskShape};
+use tonality_core::lens::{lens_table, LensCorrection, LensProfile, UvToSource};
+use tonality_core::mask::{mask_size, AiTarget, BrushLayers, Mask, MaskShape};
 use tonality_core::{EditState, ImageId};
 use tonality_ml::registry::{self, Model};
 use tonality_ml::session::Tensor32;
@@ -21,6 +21,7 @@ use ts_rs::TS;
 
 use crate::history::CatalogState;
 use crate::images::Images;
+use crate::layers::LayerCache;
 use crate::store::Store;
 use crate::CmdResult;
 
@@ -54,14 +55,12 @@ pub fn save_raster(path: &std::path::Path, data: Vec<u8>, w: u32, h: u32) -> Res
 
 /// Every raster layer of `edit` for a photo (`hash`, `w × h`, lens `profile`): brush strokes,
 /// and AI masks from the cache, warped into corrected uv when lens correction is on.
-/// `missing` lists AI masks with no cached raster yet.
-pub fn layers(store: &Store, hash: &str, edit: &EditState, w: u32, h: u32, profile: Option<&LensProfile>) -> BrushLayers {
+/// `missing` lists AI masks with no cached raster yet. Unchanged layers come from [`LayerCache`].
+pub fn layers(app: &AppHandle, hash: &str, edit: &EditState, w: u32, h: u32, profile: Option<&LensProfile>) -> BrushLayers {
+    let store = app.state::<Store>();
     let (lw, lh) = mask_size(w, h);
     let table = lens_table(profile, &edit.lens, w as f32, h as f32);
-    mask_layers(&edit.masks, w, h, |_, m| {
-        let raster = load_raster(&raster_of(store, hash, m)?, lw, lh)?;
-        Some(warp_to_uv(&raster, lw, lh, &table, w, h))
-    })
+    app.state::<LayerCache>().layers(hash, &edit.masks, (w, h), &table, |m| raster_of(&store, hash, m), |p| load_raster(p, lw, lh))
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -156,7 +155,9 @@ pub fn detect(
     let guide = input::guide(&img, w, h);
     let save = |key: &str, r: Vec<u8>| -> CmdResult<bool> {
         let found = r.iter().filter(|&&v| v > 128).count() > (w * h / 500) as usize;
-        save_raster(&raster_path(store, photo.hash, model.id, key), r, w, h)?;
+        let path = raster_path(store, photo.hash, model.id, key);
+        save_raster(&path, r, w, h)?;
+        app.state::<LayerCache>().forget(&path);
         Ok(found)
     };
     let err = |e: tonality_ml::MlError| e.to_string();
@@ -220,7 +221,7 @@ pub struct AiModelInfo {
 
 /// Every model, and whether it's downloaded.
 #[tauri::command]
-pub fn ai_models(app: AppHandle) -> Vec<AiModelInfo> {
+pub async fn ai_models(app: AppHandle) -> Vec<AiModelInfo> {
     registry::ALL
         .iter()
         .map(|m| AiModelInfo {
@@ -235,7 +236,7 @@ pub fn ai_models(app: AppHandle) -> Vec<AiModelInfo> {
 
 /// The model new masks of `target` should use.
 #[tauri::command]
-pub fn ai_model_for(target: AiTarget) -> String {
+pub async fn ai_model_for(target: AiTarget) -> String {
     model_for(&target).id.into()
 }
 

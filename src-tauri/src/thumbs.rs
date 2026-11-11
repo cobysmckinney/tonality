@@ -58,7 +58,7 @@ fn generate(src: &Path, dest: &Path) -> Result<Vec<u8>, String> {
 /// Save Edit's rendering of an image's current version (JPEG bytes in the request body,
 /// image id in the `x-image-id` header).
 #[tauri::command]
-pub fn library_save_edited(
+pub async fn library_save_edited(
     request: tauri::ipc::Request<'_>,
     store: tauri::State<'_, Store>,
     catalog: tauri::State<'_, CatalogState>,

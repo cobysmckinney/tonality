@@ -133,15 +133,16 @@ export function shaderIndex(masks: Mask[], i: number): number | null {
 
 /**
  * Identifies the raster layers a state needs, so they're only refetched when they change:
- * brush strokes, AI masks (and, with any, the lens settings they're warped by), and `epoch`,
- * bumped whenever a detection finishes.
+ * brush strokes, AI masks (and, with any, the lens settings they're warped by: vignetting
+ * doesn't move pixels), and `epoch`, bumped whenever a detection finishes.
  */
 export function brushKey(edit: EditState, epoch = 0): string {
   const masks = masksOf(edit);
   const layers = masks.flatMap((m): unknown[] => (m.shape.kind === "brush" ? [m.shape.strokes] : m.shape.kind === "ai" ? [m.shape] : []));
   if (!layers.length) return "";
   const ai = masks.some((m) => m.shape.kind === "ai");
-  return JSON.stringify(ai ? [layers, edit.lens ?? null, epoch] : layers);
+  const lens = edit.lens ? { ...edit.lens, vignetting: 0 } : null;
+  return JSON.stringify(ai ? [layers, lens, epoch] : layers);
 }
 
 /** Mirrors `MASK_EDGE` / `mask_size` in tonality-core: the brush raster size. */

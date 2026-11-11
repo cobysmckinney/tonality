@@ -196,7 +196,7 @@ fn run(
                     Source { width: *w, height: *h, pixels: px, frame: [full.width, full.height] }
                 };
                 let store = app.state::<crate::store::Store>();
-                let mut layers = crate::ai::layers(&store, &job.hash, edit, full.width, full.height, full.lens.as_ref());
+                let mut layers = crate::ai::layers(&app, &job.hash, edit, full.width, full.height, full.lens.as_ref());
                 if !layers.missing.is_empty() {
                     // AI masks whose raster isn't cached (another library, a cleared cache):
                     // detect them now from this decode.
@@ -216,7 +216,7 @@ fn run(
                             crate::ai::detect(&app, &app.state::<crate::ai::Detector>(), &store, &photo, &edit.lens, target, model)?;
                         }
                     }
-                    layers = crate::ai::layers(&store, &job.hash, edit, full.width, full.height, full.lens.as_ref());
+                    layers = crate::ai::layers(&app, &job.hash, edit, full.width, full.height, full.lens.as_ref());
                 }
                 let rendered = gpu()?.render(&src, &params, &curve_lut_rgba16f(edit), &layers, |f| emit(done as f32 + f * 0.9, &label))?;
                 let target = unique_path(&folder, &sanitize(&label), settings.format.extension());

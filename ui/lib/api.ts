@@ -16,6 +16,17 @@ import type { AiTarget } from "$lib/bindings/AiTarget";
 import type { AiModelInfo } from "$lib/bindings/AiModelInfo";
 import type { LensCorrection } from "$lib/bindings/LensCorrection";
 
+/**
+ * Commands run concurrently, so catalog writes that must land in the order they were made
+ * (rating twice quickly, album changes) go through one queue.
+ */
+let writes: Promise<unknown> = Promise.resolve();
+function inOrder<T>(f: () => Promise<T>): Promise<T> {
+  const next = writes.then(f, f);
+  writes = next.catch(() => {});
+  return next;
+}
+
 export const api = {
   defaultEditState: () => invoke<EditState>("default_edit_state"),
   startupPath: () => invoke<string | null>("startup_path"),
@@ -75,8 +86,8 @@ export const api = {
     /** Catalogue originals in the library folder the catalog doesn't know (restoring sidecar edits). */
     recover: () => invoke<ImportSummary>("library_recover"),
     images: (query: ImageQuery) => invoke<ImageRow[]>("library_images", { query }),
-    setRating: (ids: number[], rating: number) => invoke<void>("library_set_rating", { ids, rating }),
-    setFlag: (ids: number[], flag: number) => invoke<void>("library_set_flag", { ids, flag }),
+    setRating: (ids: number[], rating: number) => inOrder(() => invoke<void>("library_set_rating", { ids, rating })),
+    setFlag: (ids: number[], flag: number) => inOrder(() => invoke<void>("library_set_flag", { ids, flag })),
   },
 
   ai: {
@@ -88,11 +99,11 @@ export const api = {
   },
 
   albums: {
-    create: (name: string, images: number[] = []) => invoke<number>("album_create", { name, images }),
-    rename: (id: number, name: string) => invoke<void>("album_rename", { id, name }),
-    delete: (id: number) => invoke<void>("album_delete", { id }),
-    add: (id: number, images: number[]) => invoke<number>("album_add", { id, images }),
-    remove: (id: number, images: number[]) => invoke<void>("album_remove", { id, images }),
+    create: (name: string, images: number[] = []) => inOrder(() => invoke<number>("album_create", { name, images })),
+    rename: (id: number, name: string) => inOrder(() => invoke<void>("album_rename", { id, name })),
+    delete: (id: number) => inOrder(() => invoke<void>("album_delete", { id })),
+    add: (id: number, images: number[]) => inOrder(() => invoke<number>("album_add", { id, images })),
+    remove: (id: number, images: number[]) => inOrder(() => invoke<void>("album_remove", { id, images })),
   },
 };
 

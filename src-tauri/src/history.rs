@@ -46,12 +46,12 @@ impl CatalogState {
 
 /// An image's history, created with an "Original" commit on first open.
 #[tauri::command]
-pub fn history_open(image_id: ImageId, catalog: State<'_, CatalogState>) -> CmdResult<Checkout> {
+pub async fn history_open(image_id: ImageId, catalog: State<'_, CatalogState>) -> CmdResult<Checkout> {
     catalog.edit(&[image_id], |c| c.history_open(image_id))
 }
 
 #[tauri::command]
-pub fn history_commit(
+pub async fn history_commit(
     image_id: ImageId,
     state: EditState,
     key: Option<String>,
@@ -61,17 +61,17 @@ pub fn history_commit(
 }
 
 #[tauri::command]
-pub fn history_undo(image_id: ImageId, catalog: State<'_, CatalogState>) -> CmdResult<Checkout> {
+pub async fn history_undo(image_id: ImageId, catalog: State<'_, CatalogState>) -> CmdResult<Checkout> {
     catalog.edit(&[image_id], |c| c.undo(image_id))
 }
 
 #[tauri::command]
-pub fn history_redo(image_id: ImageId, catalog: State<'_, CatalogState>) -> CmdResult<Checkout> {
+pub async fn history_redo(image_id: ImageId, catalog: State<'_, CatalogState>) -> CmdResult<Checkout> {
     catalog.edit(&[image_id], |c| c.redo(image_id))
 }
 
 #[tauri::command]
-pub fn history_checkout(
+pub async fn history_checkout(
     image_id: ImageId,
     commit: CommitId,
     catalog: State<'_, CatalogState>,
@@ -80,12 +80,12 @@ pub fn history_checkout(
 }
 
 #[tauri::command]
-pub fn history_switch(image_id: ImageId, name: String, catalog: State<'_, CatalogState>) -> CmdResult<Checkout> {
+pub async fn history_switch(image_id: ImageId, name: String, catalog: State<'_, CatalogState>) -> CmdResult<Checkout> {
     catalog.edit(&[image_id], |c| c.switch_branch(image_id, &name))
 }
 
 #[tauri::command]
-pub fn history_branch(
+pub async fn history_branch(
     image_id: ImageId,
     at: CommitId,
     name: Option<String>,
@@ -95,7 +95,7 @@ pub fn history_branch(
 }
 
 #[tauri::command]
-pub fn history_rename(
+pub async fn history_rename(
     image_id: ImageId,
     old: String,
     new: String,
@@ -105,13 +105,13 @@ pub fn history_rename(
 }
 
 #[tauri::command]
-pub fn history_delete(image_id: ImageId, name: String, catalog: State<'_, CatalogState>) -> CmdResult<Checkout> {
+pub async fn history_delete(image_id: ImageId, name: String, catalog: State<'_, CatalogState>) -> CmdResult<Checkout> {
     catalog.edit(&[image_id], |c| c.delete_branch(image_id, &name))
 }
 
 /// Copy `panels` from the tip of `source` onto the current version, as one commit.
 #[tauri::command]
-pub fn history_apply_from(
+pub async fn history_apply_from(
     image_id: ImageId,
     source: String,
     panels: Vec<Panel>,
@@ -122,6 +122,6 @@ pub fn history_apply_from(
 
 /// The edit recorded at `commit` (e.g. a branch tip, for its thumbnail or for compare).
 #[tauri::command]
-pub fn history_state(commit: CommitId, catalog: State<'_, CatalogState>) -> CmdResult<EditState> {
+pub async fn history_state(commit: CommitId, catalog: State<'_, CatalogState>) -> CmdResult<EditState> {
     catalog.with(|c| c.state_at(commit))
 }
