@@ -307,8 +307,13 @@ impl Catalog {
             let name = b.name.trim();
             let tip = map[b.tip];
             let contains = |t: CommitId| lineage(&par, t).contains(&tip);
+            // A local branch at the same tip that the sidecar doesn't know by name is most
+            // likely this one renamed: don't add it twice. A branch the sidecar names itself
+            // is a genuine second branch at that commit (e.g. just created), so this one stays.
+            let renamed_here =
+                |h: &BranchInfo| h.tip == tip && !sc.branches.iter().any(|s| s.name.trim() == h.name);
             match have.iter().position(|h| h.name == name) {
-                None if have.iter().any(|h| h.tip == tip) => {}
+                None if !fresh && have.iter().any(renamed_here) => {}
                 None => {
                     set_branch(&tx, image, name, tip)?;
                     have.push(BranchInfo { name: name.into(), tip });
@@ -336,9 +341,16 @@ impl Catalog {
             if let Some(first) = sc.branches.first() {
                 let h = sc.head.as_ref().map_or((first.name.trim(), first.tip), |h| (h.branch.trim(), h.commit));
                 let name = renamed.get(h.0).cloned().unwrap_or_else(|| h.0.to_string());
-                let tip = have.iter().find(|b| b.name == name).map(|b| b.tip).unwrap_or(map[first.tip]);
-                let commit = if lineage(&par, tip).contains(&map[h.1]) { map[h.1] } else { tip };
-                set_head(&tx, image, &name, commit)?;
+                // HEAD must name a branch that exists, or every later commit fails.
+                let branch = have
+                    .iter()
+                    .find(|b| b.name == name)
+                    .or_else(|| have.iter().find(|b| lineage(&par, b.tip).contains(&map[h.1])))
+                    .or(have.first());
+                if let Some(b) = branch {
+                    let commit = if lineage(&par, b.tip).contains(&map[h.1]) { map[h.1] } else { b.tip };
+                    set_head(&tx, image, &b.name, commit)?;
+                }
             }
         }
 
@@ -467,6 +479,40 @@ mod tests {
         let m = b.merge_sidecar(ib, &a.sidecar(ia).unwrap()).unwrap();
         assert_eq!((m.commits, m.branches, m.advanced), (1, 0, 1));
         assert_eq!(graph(&b, ib)[2].1.last().unwrap(), "Exposure +4.00");
+    }
+
+    #[test]
+    fn two_branches_at_one_commit_both_arrive_and_head_is_valid() {
+        let ((mut a, ia), (mut b, ib)) = pair();
+        a.history_open(ia).unwrap();
+        a.commit(ia, &exp(1.0), None).unwrap();
+        let tip = a.history_view(ia).unwrap().head.commit;
+        // "HDR" created at main's tip and checked out, nothing committed to it yet.
+        a.create_branch(ia, tip, Some("HDR")).unwrap();
+        assert_eq!(a.history_view(ia).unwrap().head.branch, "HDR");
+
+        b.merge_sidecar(ib, &a.sidecar(ia).unwrap()).unwrap();
+        assert!(!b.merge_sidecar(ib, &a.sidecar(ia).unwrap()).unwrap().changed(), "idempotent");
+        let v = b.history_open(ib).unwrap().view;
+        let names: Vec<&str> = v.branches.iter().map(|x| x.name.as_str()).collect();
+        assert!(names.contains(&"main") && names.contains(&"HDR"), "{names:?}");
+        assert_eq!(v.head.branch, "HDR");
+        b.commit(ib, &exp(2.0), None).expect("HEAD names a real branch");
+    }
+
+    #[test]
+    fn a_renamed_branch_is_not_duplicated() {
+        let ((mut a, ia), (mut b, ib)) = pair();
+        a.history_open(ia).unwrap();
+        a.commit(ia, &exp(1.0), None).unwrap();
+        b.merge_sidecar(ib, &a.sidecar(ia).unwrap()).unwrap();
+        // b renames main; a's sidecar still says "main" at the same tip.
+        b.history_open(ib).unwrap();
+        b.rename_branch(ib, "main", "Final").unwrap();
+        let m = b.merge_sidecar(ib, &a.sidecar(ia).unwrap()).unwrap();
+        assert_eq!(m.branches, 0);
+        let names: Vec<String> = b.history_view(ib).unwrap().branches.into_iter().map(|x| x.name).collect();
+        assert_eq!(names, ["Final"]);
     }
 
     #[test]
