@@ -18,8 +18,13 @@ fn exif_date(s: &str) -> Option<String> {
     let s = s.trim_end_matches('\0').trim();
     let (date, time) = s.split_once([' ', 'T'])?;
     let date = date.replace(':', "-");
-    let ok = date.len() == 10 && time.len() >= 8 && !date.starts_with("0000");
-    ok.then(|| format!("{date}T{}", &time[..8]))
+    let time = time.get(..8)?;
+    // `YYYY-MM-DD` and `HH:MM:SS`, ASCII only (callers slice these by byte).
+    let shaped = |s: &str, seps: [usize; 2], sep: u8| {
+        s.bytes().enumerate().all(|(i, b)| if seps.contains(&i) { b == sep } else { b.is_ascii_digit() })
+    };
+    let ok = date.len() == 10 && shaped(&date, [4, 7], b'-') && shaped(time, [2, 5], b':') && !date.starts_with("0000");
+    ok.then(|| format!("{date}T{time}"))
 }
 
 fn non_empty(s: &str) -> Option<String> {
@@ -63,5 +68,10 @@ mod tests {
         assert_eq!(exif_date("2026:11:02 14:03:11\0").as_deref(), Some("2026-11-02T14:03:11"));
         assert_eq!(exif_date("0000:00:00 00:00:00"), None);
         assert_eq!(exif_date("garbage"), None);
+        // Multi-byte text across byte 8 of the time must not panic.
+        assert_eq!(exif_date("2026:11:02 14:03:1é"), None);
+        assert_eq!(exif_date("2026:11:02 1é:03:11"), None);
+        assert_eq!(exif_date("2026:1é:02 14:03:11"), None);
+        assert_eq!(exif_date("abcd:ef:gh 14:03:11"), None);
     }
 }

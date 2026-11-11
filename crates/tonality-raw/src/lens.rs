@@ -271,8 +271,9 @@ fn lensfun(meta: &ImageMeta) -> Option<LensProfile> {
     let focal = meta.focal_length?;
     let db = db();
     let maker_matches = |m: &str| {
-        let (a, b) = (m.to_lowercase(), meta.make.to_lowercase());
-        a.contains(&b) || b.contains(&a)
+        let (a, b) = (m.trim().to_lowercase(), meta.make.trim().to_lowercase());
+        // An empty make would "contain" in every maker: no match rather than any camera.
+        !a.is_empty() && !b.is_empty() && (a.contains(&b) || b.contains(&a))
     };
     let cam = db.cameras.iter().find(|c| maker_matches(&c.maker) && c.models.iter().any(|m| same(m, &meta.model)))?;
     let mut mounts = vec![cam.mount.as_str()];
@@ -421,6 +422,11 @@ pub fn lens_profiles(path: &Path, meta: &ImageMeta) -> (Option<LensProfile>, Opt
 mod tests {
     use super::*;
     use tonality_core::lens::sample;
+
+    #[test]
+    fn an_empty_make_matches_no_camera() {
+        assert!(lensfun(&meta("", "ILCE-7M3", "FE 28-70mm F3.5-5.6 OSS", 35.0, 5.6)).is_none());
+    }
 
     #[test]
     fn tokenises_lens_names_alike() {

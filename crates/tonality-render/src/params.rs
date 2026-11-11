@@ -96,7 +96,9 @@ impl DevelopParams {
         let long = src_w.max(src_h).max(1) as f32;
         let norm = [src_w as f32 / long, src_h as f32 / long];
         let q = |p: [f32; 2]| [p[0] * norm[0], p[1] * norm[1]];
-        let n = |v: f32| v / 100.0;
+        // Clamped like the global sliders: a sidecar from elsewhere can hold anything, and an
+        // out-of-range value overflows the shader's exp2 into NaN.
+        let n = |v: f32| if v.is_finite() { (v / 100.0).clamp(-1.0, 1.0) } else { 0.0 };
         let mut count = 0;
         let mut layer = 0.0;
         for m in masks {
@@ -126,7 +128,7 @@ impl DevelopParams {
                 shape1,
                 [kind, if m.invert { 1.0 } else { 0.0 }, (m.amount / 100.0).clamp(0.0, 1.0), brush_layer],
                 [n(r.low).clamp(0.0, 1.0), n(r.high).clamp(0.0, 1.0), n(r.smoothness).clamp(0.0, 1.0), if r.is_full() { 0.0 } else { 1.0 }],
-                [a.exposure.clamp(-5.0, 5.0), n(a.contrast), n(a.highlights), n(a.shadows)],
+                [if a.exposure.is_finite() { a.exposure.clamp(-5.0, 5.0) } else { 0.0 }, n(a.contrast), n(a.highlights), n(a.shadows)],
                 [n(a.whites), n(a.blacks), n(a.temperature), n(a.tint)],
                 [n(a.saturation), 0.0, 0.0, 0.0],
             ];
@@ -197,6 +199,20 @@ mod tests {
             xyz_to_cam: [[0.7657, -0.2847, -0.0607], [-0.4083, 1.1966, 0.2389], [-0.0684, 0.1418, 0.5844]],
             as_shot_wb: [1.6836, 1.0, 3.2539],
         }
+    }
+
+    #[test]
+    fn mask_adjustments_are_clamped_and_finite() {
+        let mut m = tonality_core::mask::Mask::default();
+        m.shape = tonality_core::mask::MaskShape::Brush { strokes: vec![] };
+        m.adjust.contrast = 1e5;
+        m.adjust.shadows = f32::NAN;
+        m.adjust.exposure = f32::INFINITY;
+        let mut e = EditState::default();
+        e.masks = vec![m];
+        let p = DevelopParams::new(&e, &color(), None, 600, 400);
+        assert_eq!(p.masks[0][4], [0.0, 1.0, 0.0, 0.0]);
+        assert!(p.to_vec().iter().all(|v| v.is_finite()));
     }
 
     #[test]
