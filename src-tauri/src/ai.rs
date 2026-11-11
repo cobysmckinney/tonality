@@ -84,6 +84,8 @@ fn installed(app: &AppHandle, m: &Model) -> bool {
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct Progress {
+    /// The photo this is for (Edit's detections), or none (export's).
+    image: Option<ImageId>,
     /// "download" or "detect".
     stage: &'static str,
     model: &'static str,
@@ -92,7 +94,7 @@ struct Progress {
 }
 
 /// Download `m`'s files if needed (emitting `ai-progress`) and return their paths.
-fn ensure(app: &AppHandle, m: &'static Model) -> CmdResult<Vec<PathBuf>> {
+fn ensure(app: &AppHandle, m: &'static Model, image: Option<ImageId>) -> CmdResult<Vec<PathBuf>> {
     let dir = models_dir(app);
     let total = m.size();
     let mut before = 0;
@@ -103,7 +105,7 @@ fn ensure(app: &AppHandle, m: &'static Model) -> CmdResult<Vec<PathBuf>> {
             let d = before + done;
             if d - last > total / 100 || d == total {
                 last = d;
-                let _ = app.emit("ai-progress", Progress { stage: "download", model: m.id, done: d, total });
+                let _ = app.emit("ai-progress", Progress { image, stage: "download", model: m.id, done: d, total });
             }
         };
         paths.push(download::ensure(&dir, f, &mut progress).map_err(|e| e.to_string())?);
@@ -122,6 +124,8 @@ pub struct Detector {
 
 /// What to detect in, and for, one photo.
 pub struct Photo<'a> {
+    /// The open photo Edit asked for (progress events name it), or none for export.
+    pub image: Option<ImageId>,
     pub hash: &'a str,
     /// Camera-space linear pixels (half-float bits) and their size: any resolution ≥ the mask.
     pub pixels: &'a [u16],
@@ -145,9 +149,9 @@ pub fn detect(
     model_id: &str,
 ) -> CmdResult<bool> {
     let model = registry::by_id(model_id).ok_or_else(|| format!("unknown model {model_id}"))?;
-    let files = ensure(app, model)?;
+    let files = ensure(app, model, photo.image)?;
     let _busy = det.lock.lock().map_err(|_| "detector lock poisoned")?;
-    let _ = app.emit("ai-progress", Progress { stage: "detect", model: model.id, done: 0, total: 1 });
+    let _ = app.emit("ai-progress", Progress { image: photo.image, stage: "detect", model: model.id, done: 0, total: 1 });
 
     // At background priority: the models' threads (created on first use, inheriting it) and
     // the refinement loops yield to the UI.
@@ -199,7 +203,7 @@ pub fn detect(
         };
         Ok(found)
     })?;
-    let _ = app.emit("ai-progress", Progress { stage: "detect", model: model.id, done: 1, total: 1 });
+    let _ = app.emit("ai-progress", Progress { image: photo.image, stage: "detect", model: model.id, done: 1, total: 1 });
     Ok(found)
 }
 
@@ -260,6 +264,7 @@ pub async fn ai_detect(
         let p = images.get(image_id).ok_or("image not open")?;
         let (_, hash, _) = app.state::<CatalogState>().with(|c| c.image_file(image_id))?;
         let photo = Photo {
+            image: Some(image_id),
             hash: &hash,
             pixels: &p.pixels,
             width: p.width,

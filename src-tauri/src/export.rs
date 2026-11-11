@@ -202,6 +202,7 @@ fn run(
                     // detect them now from this decode.
                     let (sw, sh, px) = full.scaled(2048);
                     let photo = crate::ai::Photo {
+                        image: None,
                         hash: &job.hash,
                         pixels: &px,
                         width: sw,
@@ -211,8 +212,15 @@ fn run(
                         full_width: full.width,
                         full_height: full.height,
                     };
+                    let mut ran: Vec<&str> = Vec::new();
                     for &i in &layers.missing {
                         if let tonality_core::mask::MaskShape::Ai { target, model, .. } = &edit.masks[i].shape {
+                            // One scene pass caches both sky and people.
+                            let scene = matches!(target, tonality_core::mask::AiTarget::Sky | tonality_core::mask::AiTarget::People);
+                            if scene && ran.contains(&model.as_str()) {
+                                continue;
+                            }
+                            ran.push(model);
                             crate::ai::detect(&app, &app.state::<crate::ai::Detector>(), &store, &photo, &edit.lens, target, model)?;
                         }
                     }

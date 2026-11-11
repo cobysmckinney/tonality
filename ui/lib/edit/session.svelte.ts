@@ -23,6 +23,8 @@ export type AiStatus =
 
 /** The latest `ai-progress` event: a model download, or a detection running. */
 export interface AiProgress {
+  /** The photo it's for (null: an export's detection). */
+  image: number | null;
   stage: "download" | "detect";
   model: string;
   done: number;
@@ -64,6 +66,7 @@ class EditSession {
   constructor() {
     listen<AiProgress>("ai-progress", (e) => {
       const p = e.payload;
+      if (p.image === null || p.image !== this.image?.id) return; // another photo's, or export's
       this.aiProgress = p.stage === "detect" && p.done >= p.total ? null : p;
     }).catch(() => {});
   }
@@ -171,8 +174,11 @@ class EditSession {
     if (!key || id === undefined || m.shape.kind !== "ai" || this.aiStatus.get(key)?.state === "working") return;
     const { target, model } = $state.snapshot(m.shape);
     this.aiStatus.set(key, { state: "working" });
+    // Statuses are per photo (cleared on open): a result for one we've left is dropped.
+    const here = () => this.image?.id === id;
     try {
       const found = await api.ai.detect(id, target, model, this.edit?.lens ?? null);
+      if (!here()) return;
       this.aiStatus.set(key, { state: found ? "found" : "empty" });
       // A scene pass also caches its sibling (sky ↔ people).
       if (target.kind === "sky" || target.kind === "people") {
@@ -181,10 +187,12 @@ class EditSession {
         if (!this.aiStatus.has(k)) this.aiStatus.set(k, { state: "found" });
       }
     } catch (e) {
-      this.aiStatus.set(key, { state: "error", message: String(e) });
+      if (here()) this.aiStatus.set(key, { state: "error", message: String(e) });
     } finally {
-      this.aiProgress = null;
-      if (this.image?.id === id) this.aiEpoch++;
+      if (here()) {
+        this.aiProgress = null;
+        this.aiEpoch++;
+      }
     }
   }
 
@@ -282,6 +290,7 @@ class EditSession {
           this.maskIndex = null;
           this.lassoing = null;
           this.aiStatus.clear();
+          this.aiProgress = null;
           this.edit = checkout.state;
           this.history = checkout.view;
           this.image = info;
@@ -297,10 +306,15 @@ class EditSession {
     }
   }
 
+  /** Queued operations that will replace `edit` with their result (undo, checkout, …). */
+  private restoring = 0;
+
   private run(op: (imageId: number) => Promise<Checkout>, applyState: boolean): Promise<void> {
+    // The photo is the one on screen when asked, even if another opens before this runs.
+    const id = this.history?.imageId;
+    if (id === undefined) return Promise.resolve();
+    if (applyState) this.restoring++;
     const next = this.queue.then(async () => {
-      const id = this.history?.imageId;
-      if (id === undefined) return;
       try {
         const r = await op(id);
         if (this.history?.imageId !== id) return; // another image was opened meanwhile
@@ -315,6 +329,8 @@ class EditSession {
       } catch (e) {
         this.flashError(String(e));
         throw e;
+      } finally {
+        if (applyState) this.restoring--;
       }
     });
     this.queue = next.catch(() => {});
@@ -330,9 +346,14 @@ class EditSession {
   /** Record the current edit as a commit. `key` names the control, so rapid nudges coalesce. */
   commit(key: string | null) {
     if (!this.edit) return Promise.resolve();
-    const state = $state.snapshot(this.edit);
+    // Behind an undo (or checkout) that hasn't landed, `edit` is about to be replaced: record
+    // what's on screen once it has, so HEAD and the screen agree.
+    const state = this.restoring ? null : $state.snapshot(this.edit);
     // Don't overwrite `edit` with the reply: the user may already be dragging again.
-    return this.run((id) => api.history.commit(id, state, key), false);
+    return this.run((id) => {
+      const s = state ?? (this.edit && this.history?.imageId === id ? $state.snapshot(this.edit) : null);
+      return s ? api.history.commit(id, s, key) : api.history.open(id);
+    }, false);
   }
 
   undo = () => this.run((id) => api.history.undo(id), true);
