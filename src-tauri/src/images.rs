@@ -2,7 +2,9 @@
 //! full-resolution decode of the current one (for 1:1 zoom and export).
 
 use std::path::Path;
+use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
+use std::time::Duration;
 
 use serde::Serialize;
 use tonality_core::lens::{LensProfile, LensSource};
@@ -58,6 +60,9 @@ impl From<&LensProfile> for LensInfo {
 
 /// Keeps the last few previews so flipping between photos is instant.
 const KEEP: usize = 4;
+/// The full-resolution decode starts once a photo has stayed open this long (stepping through
+/// photos shouldn't start a 1–3 s decode for each), or as soon as detail is asked for.
+const FULL_DELAY: Duration = Duration::from_millis(900);
 
 type Recent = Vec<(ImageId, Arc<Preview>)>;
 type FullSlot = Arc<OnceLock<Result<Arc<FullImage>, String>>>;
@@ -67,6 +72,8 @@ pub struct Images {
     previews: Arc<Mutex<Recent>>,
     /// Full-resolution decode of one image (they are large: ~150 MB for 24 MP).
     full: Arc<Mutex<Option<(ImageId, FullSlot)>>>,
+    /// The photo opened last.
+    latest: Arc<AtomicI64>,
 }
 
 impl Images {
@@ -84,10 +91,15 @@ impl Images {
                 p
             }
         };
-        // Start the full-resolution decode now, so zooming in is instant by the time it's needed.
+        // Decode full resolution ahead, so zooming in is instant by the time it's needed, unless
+        // another photo has been opened meanwhile.
+        self.latest.store(id, Ordering::Relaxed);
         let (me, path) = (self.clone(), path.to_path_buf());
         std::thread::spawn(move || {
-            let _ = me.full(id, &path);
+            std::thread::sleep(FULL_DELAY);
+            if me.latest.load(Ordering::Relaxed) == id {
+                let _ = me.full(id, &path);
+            }
         });
 
         let (t, tint) = preview.color.as_shot_temperature_tint();

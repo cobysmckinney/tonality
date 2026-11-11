@@ -358,10 +358,12 @@ class LibraryState {
   /** In Edit: open the photo `delta` places from the open one, within the current view. */
   step(delta: number) {
     if (!this.images.length) return;
-    const cur = this.images.findIndex((i) => i.id === session.image?.id);
+    // From the photo asked for last, so quick presses don't step from one still loading.
+    const from = session.opening ?? session.image?.id;
+    const cur = this.images.findIndex((i) => i.id === from);
     const i = cur < 0 ? 0 : Math.max(0, Math.min(this.images.length - 1, cur + delta));
     const id = this.images[i].id;
-    if (id === session.image?.id) return;
+    if (id === from) return;
     this.select(id);
     session.open(id);
   }
@@ -371,7 +373,7 @@ class LibraryState {
     if (id === null) return;
     this.focus = id;
     app.mode = "edit";
-    if (session.image?.id !== id) session.open(id);
+    if ((session.opening ?? session.image?.id) !== id) session.open(id);
   }
 }
 

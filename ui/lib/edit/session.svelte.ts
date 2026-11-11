@@ -246,29 +246,52 @@ class EditSession {
     return structuredClone(this.defaults);
   }
 
-  /** Open a library photo. */
-  async open(id: number) {
+  /** The photo asked for last (it may still be loading). Stepping counts from here. */
+  opening = $state<number | null>(null);
+  private openLoop: Promise<void> | null = null;
+
+  /**
+   * Open a library photo. Latest wins: while one photo loads, newer requests replace older
+   * ones, so stepping quickly through photos only develops the one you stop on.
+   */
+  open(id: number): Promise<void> {
+    if (id === this.opening && this.openLoop) return this.openLoop;
+    this.opening = id;
     this.loading = "Developing…";
     this.error = null;
+    this.openLoop ??= this.loadLatest().finally(() => (this.openLoop = null));
+    return this.openLoop;
+  }
+
+  private async loadLatest() {
     try {
-      const t0 = performance.now();
-      const [info, checkout] = await Promise.all([api.openImage(id), api.history.open(id)]);
-      const pixels = await api.previewPixels(info.id);
-      console.info(`[tonality] opened ${info.name} ${info.width}×${info.height} in ${Math.round(performance.now() - t0)}ms`);
-      this.pixels = pixels;
-      this.compare = null;
-      this.applying = null;
-      this.cropEntry = null;
-      this.masking = false;
-      this.maskIndex = null;
-      this.lassoing = null;
-      this.aiStatus.clear();
-      this.edit = checkout.state;
-      this.history = checkout.view;
-      this.image = info;
-      scheduleLibraryThumb(id, checkout.state);
-    } catch (e) {
-      this.error = String(e);
+      while (this.opening !== null && this.opening !== this.image?.id) {
+        const id = this.opening;
+        try {
+          const t0 = performance.now();
+          const [info, checkout] = await Promise.all([api.openImage(id), api.history.open(id)]);
+          if (this.opening !== id) continue;
+          const pixels = await api.previewPixels(info.id);
+          if (this.opening !== id) continue;
+          console.info(`[tonality] opened ${info.name} ${info.width}×${info.height} in ${Math.round(performance.now() - t0)}ms`);
+          this.pixels = pixels;
+          this.compare = null;
+          this.applying = null;
+          this.cropEntry = null;
+          this.masking = false;
+          this.maskIndex = null;
+          this.lassoing = null;
+          this.aiStatus.clear();
+          this.edit = checkout.state;
+          this.history = checkout.view;
+          this.image = info;
+          scheduleLibraryThumb(id, checkout.state);
+        } catch (e) {
+          if (this.opening !== id) continue;
+          this.error = String(e);
+          this.opening = this.image?.id ?? null;
+        }
+      }
     } finally {
       this.loading = null;
     }

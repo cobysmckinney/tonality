@@ -23,7 +23,8 @@
   });
 
   const images = $derived(library.images);
-  const currentId = $derived(session.image?.id ?? null);
+  // The photo asked for, so the strip follows presses before the photo finishes loading.
+  const currentId = $derived(session.opening ?? session.image?.id ?? null);
   const index = $derived(images.findIndex((i) => i.id === currentId));
   const first = $derived(Math.max(0, Math.floor((scroll - PAD) / STEP) - OVERSCAN));
   const last = $derived(Math.min(images.length, Math.ceil((scroll + width) / STEP) + OVERSCAN));
