@@ -151,8 +151,8 @@ pub fn detect(
     let _ = app.emit("ai-progress", Progress { stage: "detect", model: model.id, done: 0, total: 1 });
 
     let (w, h) = mask_size(photo.full_width, photo.full_height);
-    let img = input::neutral_srgb(photo.pixels, photo.width, photo.height, photo.color);
-    let img = image::imageops::resize(&img, w, h, image::imageops::FilterType::Triangle);
+    // Downsample before converting: the models never see more than the mask raster.
+    let img = input::neutral_srgb_sized(photo.pixels, photo.width, photo.height, photo.color, w, h);
     let guide = input::guide(&img, w, h);
     let save = |key: &str, r: Vec<u8>| -> CmdResult<bool> {
         let found = r.iter().filter(|&&v| v > 128).count() > (w * h / 500) as usize;

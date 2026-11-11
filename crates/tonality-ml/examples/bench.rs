@@ -34,9 +34,8 @@ fn main() {
     for raw in &args[2..] {
         let t = Instant::now();
         let p = tonality_raw::decode_preview(Path::new(raw), 1024).expect("decode");
-        let img = input::neutral_srgb(&p.pixels, p.width, p.height, &p.color);
         let (w, h) = mask_size(p.full_width, p.full_height);
-        let img = imageops::resize(&img, w, h, imageops::FilterType::Triangle);
+        let img = input::neutral_srgb_sized(&p.pixels, p.width, p.height, &p.color, w, h);
         let guide = input::guide(&img, w, h);
         let name = Path::new(raw).file_stem().unwrap().to_string_lossy().into_owned();
         println!("\n{name}: {w}×{h} (decode + neutral {:.0} ms)", t.elapsed().as_secs_f32() * 1e3);

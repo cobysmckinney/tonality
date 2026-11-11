@@ -3,7 +3,7 @@
 use std::path::Path;
 use std::time::Instant;
 
-use image::{imageops, GrayImage};
+use image::GrayImage;
 use tonality_core::mask::mask_size;
 use tonality_ml::{input, refine, scene};
 
@@ -15,7 +15,7 @@ fn main() {
     for raw in &args[2..] {
         let p = tonality_raw::decode_preview(Path::new(raw), 1024).unwrap();
         let (w, h) = mask_size(p.full_width, p.full_height);
-        let img = imageops::resize(&input::neutral_srgb(&p.pixels, p.width, p.height, &p.color), w, h, imageops::FilterType::Triangle);
+        let img = input::neutral_srgb_sized(&p.pixels, p.width, p.height, &p.color, w, h);
         let name = Path::new(raw).file_stem().unwrap().to_string_lossy().into_owned();
         let (maps, pw, ph) = scene::detect(model, scene::SceneModel::ADE_512, &img, &[scene::ade::SKY]).unwrap();
         let t = Instant::now();

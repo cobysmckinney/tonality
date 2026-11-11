@@ -37,17 +37,43 @@ fn tone(v: f32) -> f32 {
 
 /// Render camera-space linear RGB (half-float bit patterns, interleaved) as sRGB.
 pub fn neutral_srgb(pixels: &[u16], width: u32, height: u32, color: &CameraColor) -> RgbImage {
+    neutral_srgb_sized(pixels, width, height, color, width, height)
+}
+
+/// [`neutral_srgb`], box-downsampled to `out_w × out_h` (≤ the source) on the way. Averaging the
+/// linear data first means the colour maths only runs on the output pixels.
+pub fn neutral_srgb_sized(pixels: &[u16], width: u32, height: u32, color: &CameraColor, out_w: u32, out_h: u32) -> RgbImage {
+    let (w, h) = (width as usize, height as usize);
+    let (ow, oh) = (out_w.clamp(1, width.max(1)) as usize, out_h.clamp(1, height.max(1)) as usize);
     let wb = color.as_shot_multipliers();
     let cam_to_srgb = mul(&mul(&XYZ_TO_SRGB, &REC2020_TO_XYZ), &color.cam_to_working());
-    let n = (width * height) as usize;
-    let lin: Vec<[f32; 3]> = (0..n)
-        .into_par_iter()
-        .map(|i| {
-            // Clip after white balance, so blown highlights go white instead of magenta.
-            let c = [0, 1, 2].map(|k| (f16::from_bits(pixels[i * 3 + k]).to_f32() * wb[k]).min(1.0));
-            mul_vec(&cam_to_srgb, c).map(|v| v.max(0.0))
-        })
-        .collect();
+    // Half float → white balanced, clipped value, per channel: a lookup beats converting each one.
+    // Clip after white balance, so blown highlights go white instead of magenta.
+    let lut: Vec<[f32; 3]> = (0..=u16::MAX).map(|b| wb.map(|m| (f16::from_bits(b).to_f32() * m).min(1.0))).collect();
+    // Source pixels [span(o), span(o + 1)) average into output pixel o.
+    let span = |o: usize, n: usize, on: usize| o * n / on;
+    let cols: Vec<(usize, usize)> = (0..ow).map(|o| (span(o, w, ow), span(o + 1, w, ow).max(span(o, w, ow) + 1))).collect();
+
+    let mut lin = vec![[0.0f32; 3]; ow * oh];
+    lin.par_chunks_mut(ow).enumerate().for_each(|(oy, row)| {
+        let (y0, y1) = (span(oy, h, oh), span(oy + 1, h, oh).max(span(oy, h, oh) + 1));
+        let mut acc = vec![[0.0f32; 3]; ow];
+        for y in y0..y1 {
+            let src = &pixels[y * w * 3..(y + 1) * w * 3];
+            for (a, &(x0, x1)) in acc.iter_mut().zip(&cols) {
+                for x in x0..x1 {
+                    for k in 0..3 {
+                        a[k] += lut[src[x * 3 + k] as usize][k];
+                    }
+                }
+            }
+        }
+        for (o, (a, &(x0, x1))) in row.iter_mut().zip(acc.iter().zip(&cols)) {
+            let n = ((x1 - x0) * (y1 - y0)) as f32;
+            *o = mul_vec(&cam_to_srgb, a.map(|v| v / n)).map(|v| v.max(0.0));
+        }
+    });
+    let n = ow * oh;
 
     // Auto exposure from the median luminance (robust to small bright areas such as the sun).
     let mut lum: Vec<f32> = lin.iter().step_by(7).map(|c| 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]).collect();
@@ -61,7 +87,7 @@ pub fn neutral_srgb(pixels: &[u16], width: u32, height: u32, color: &CameraColor
             o[k] = (srgb_encode(tone(c[k] * gain)) * 255.0 + 0.5) as u8;
         }
     });
-    ImageBuffer::from_raw(width, height, out).expect("sized above")
+    ImageBuffer::from_raw(ow as u32, oh as u32, out).expect("sized above")
 }
 
 /// How a model wants its input tensor.
@@ -97,7 +123,13 @@ pub fn to_nchw(img: &RgbImage, w: u32, h: u32, norm: Normalize) -> Vec<f32> {
 
 /// Luminance of an sRGB image, 0..1, resized to `w × h` (the guide for [`crate::refine`]).
 pub fn guide(img: &RgbImage, w: u32, h: u32) -> Vec<f32> {
-    let r = imageops::resize(img, w, h, imageops::FilterType::Triangle);
+    let resized;
+    let r = if img.dimensions() == (w, h) {
+        img
+    } else {
+        resized = imageops::resize(img, w, h, imageops::FilterType::Triangle);
+        &resized
+    };
     r.pixels().map(|Rgb(p)| (0.2126 * p[0] as f32 + 0.7152 * p[1] as f32 + 0.0722 * p[2] as f32) / 255.0).collect()
 }
 
@@ -130,6 +162,21 @@ mod tests {
         let img = neutral_srgb(&px, 4, 4, &c);
         let p = img.get_pixel(0, 0).0;
         assert!(p[0].abs_diff(p[1]) <= 2 && p[1].abs_diff(p[2]) <= 2, "neutral, got {p:?}");
+    }
+
+    #[test]
+    fn downsizing_averages_in_linear() {
+        // Left half dark, right half bright; halving keeps the split and the colour.
+        let px: Vec<u16> = (0..8 * 4).flat_map(|i| [if i % 8 < 4 { 0.01 } else { 0.2 }; 3]).map(|v| f16::from_f32(v).to_bits()).collect();
+        let full = neutral_srgb(&px, 8, 4, &color());
+        let half = neutral_srgb_sized(&px, 8, 4, &color(), 4, 2);
+        assert_eq!(half.dimensions(), (4, 2));
+        for (x, fx) in [(0, 0), (3, 7)] {
+            let (a, b) = (half.get_pixel(x, 1).0, full.get_pixel(fx, 2).0);
+            assert!(a.iter().zip(b).all(|(a, b)| a.abs_diff(b) <= 2), "{a:?} vs {b:?}");
+        }
+        // Odd ratios cover every output pixel.
+        assert_eq!(neutral_srgb_sized(&px, 8, 4, &color(), 3, 3).dimensions(), (3, 3));
     }
 
     #[test]
