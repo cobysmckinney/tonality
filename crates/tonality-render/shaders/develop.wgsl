@@ -347,7 +347,8 @@ fn grain(c: vec3<f32>, uv: vec2<f32>, aspect: f32) -> vec3<f32> {
 }
 
 fn apply_curve(c: vec3<f32>) -> vec3<f32> {
-    let n = 1024.0;
+    // The LUT's own width (`LUT_SIZE`), so the two can't drift apart.
+    let n = f32(textureDimensions(curve, 0).x);
     let t = (clamp(c, vec3<f32>(0.0), vec3<f32>(1.0)) * (n - 1.0) + 0.5) / n;
     return vec3<f32>(
         textureSampleLevel(curve, curve_sampler, vec2<f32>(t.x, 0.5), 0.0).r,
