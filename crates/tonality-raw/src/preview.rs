@@ -123,12 +123,15 @@ impl FullImage {
                 row.copy_from_slice(&self.pixels[start..start + row.len()]);
                 return;
             }
-            let n = (f * f) as f32;
             for ox in 0..ow as usize {
                 let sx = x0 as usize + ox * f as usize;
                 let mut acc = [0f32; 3];
-                for yy in sy..(sy + f as usize).min(self.height as usize) {
-                    for xx in sx..(sx + f as usize).min(self.width as usize) {
+                // Boxes at the image edge can be partly outside it: average what's inside.
+                let ys = sy..(sy + f as usize).min(self.height as usize);
+                let xs = sx..(sx + f as usize).min(self.width as usize);
+                let n = (ys.len() * xs.len()).max(1) as f32;
+                for yy in ys {
+                    for xx in xs.clone() {
                         let i = yy * stride + xx * 3;
                         for (c, a) in acc.iter_mut().enumerate() {
                             *a += f16::from_bits(self.pixels[i + c]).to_f32();
@@ -266,9 +269,22 @@ fn float_data(raw: &RawImage) -> &[f32] {
 
 /// (x, y, w, h) of the recommended crop within the full sensor image.
 fn crop_rect(raw: &RawImage) -> (usize, usize, usize, usize) {
-    match raw.crop_area.or(raw.active_area) {
+    let (x, y, w, h) = match raw.crop_area.or(raw.active_area) {
         Some(r) => (r.p.x, r.p.y, r.d.w, r.d.h),
         None => (0, 0, raw.width, raw.height),
+    };
+    clamp_rect((x, y, w, h), raw.width, raw.height)
+}
+
+/// `(x, y, w, h)` limited to a `width × height` image (a damaged file can claim anything), and
+/// the whole image if nothing would be left.
+fn clamp_rect((x, y, w, h): (usize, usize, usize, usize), width: usize, height: usize) -> (usize, usize, usize, usize) {
+    let (x, y) = (x.min(width), y.min(height));
+    let (w, h) = (w.min(width - x), h.min(height - y));
+    if w == 0 || h == 0 {
+        (0, 0, width, height)
+    } else {
+        (x, y, w, h)
     }
 }
 
@@ -361,6 +377,14 @@ fn camera_color(raw: &RawImage) -> CameraColor {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn crop_rects_stay_inside_the_sensor() {
+        assert_eq!(clamp_rect((10, 20, 100, 50), 200, 100), (10, 20, 100, 50));
+        assert_eq!(clamp_rect((150, 80, 100, 50), 200, 100), (150, 80, 50, 20));
+        assert_eq!(clamp_rect((500, 0, 10, 10), 200, 100), (0, 0, 200, 100));
+        assert_eq!(clamp_rect((0, 0, usize::MAX, usize::MAX), 200, 100), (0, 0, 200, 100));
+    }
 
     fn image(w: u32, h: u32) -> FullImage {
         // Each pixel's red channel encodes x, green encodes y.
