@@ -69,11 +69,14 @@ pub struct LayerCache {
 struct Inner {
     rasters: Lru<PathBuf, Arc<Vec<u8>>>,
     layers: Vec<Layer>,
+    /// Bumped by `forget`: work loaded or built before then may hold the old raster, so it isn't
+    /// stored (it's still returned, once).
+    generation: u64,
 }
 
 impl Inner {
     fn new() -> Self {
-        Self { rasters: Lru::new(RASTERS), layers: Vec::new() }
+        Self { rasters: Lru::new(RASTERS), layers: Vec::new(), generation: 0 }
     }
 
     fn exact(&mut self, base: &Base, strokes: &[Stroke]) -> Option<Arc<Vec<u8>>> {
@@ -122,6 +125,7 @@ impl LayerCache {
     pub fn forget(&self, path: &Path) {
         let mut g = self.lock();
         let inner = g.as_mut().unwrap();
+        inner.generation += 1;
         inner.rasters.items.retain(|(p, _)| p != path);
         inner.layers.retain(|l| l.base.ai.as_ref().is_none_or(|(p, _)| p != path));
     }
@@ -150,12 +154,18 @@ impl LayerCache {
             let base = Base { photo: hash.to_string(), size, ai: path.clone().map(|p| (p, geo.clone())) };
             out.layers += 1;
 
-            if let Some(data) = self.lock().as_mut().unwrap().exact(&base, strokes) {
+            let (exact, start, generation) = {
+                let mut g = self.lock();
+                let inner = g.as_mut().unwrap();
+                let exact = inner.exact(&base, strokes);
+                // Otherwise start from a layer these strokes extend, or from scratch.
+                let start = if exact.is_none() { inner.prefix(&base, strokes) } else { None };
+                (exact, start, inner.generation)
+            };
+            if let Some(data) = exact {
                 out.data.extend_from_slice(&data);
                 continue;
             }
-            // Start from a layer these strokes extend, or from scratch.
-            let start = self.lock().as_ref().unwrap().prefix(&base, strokes);
             let (data, found) = match start {
                 Some((n, data)) => {
                     let mut layer = data.to_vec();
@@ -175,11 +185,11 @@ impl LayerCache {
                 }
             };
             if found {
-                self.lock().as_mut().unwrap().put(Layer {
-                    base,
-                    strokes: Arc::new(strokes.clone()),
-                    data: Arc::new(data.clone()),
-                });
+                let mut g = self.lock();
+                let inner = g.as_mut().unwrap();
+                if inner.generation == generation {
+                    inner.put(Layer { base, strokes: Arc::new(strokes.clone()), data: Arc::new(data.clone()) });
+                }
             } else {
                 // Not cached: it changes once the raster is detected.
                 out.missing.push(i);
@@ -191,11 +201,20 @@ impl LayerCache {
 
     fn raster(&self, path: &Path, load: impl Fn(&Path) -> Option<Vec<u8>>) -> Option<Arc<Vec<u8>>> {
         let key = path.to_path_buf();
-        if let Some(r) = self.lock().as_mut().unwrap().rasters.get(&key) {
-            return Some(r);
-        }
+        let generation = {
+            let mut g = self.lock();
+            let inner = g.as_mut().unwrap();
+            if let Some(r) = inner.rasters.get(&key) {
+                return Some(r);
+            }
+            inner.generation
+        };
         let r = Arc::new(load(path)?);
-        self.lock().as_mut().unwrap().rasters.put(key, r.clone());
+        let mut g = self.lock();
+        let inner = g.as_mut().unwrap();
+        if inner.generation == generation {
+            inner.rasters.put(key, r.clone());
+        }
         Some(r)
     }
 }
@@ -269,5 +288,15 @@ mod tests {
         cache.forget(Path::new("sky.png"));
         let l = cache.layers("h", &masks, (w, h), &table, raster, |_| Some(vec![9; (lw * lh) as usize]));
         assert!(l.data.iter().all(|&v| v == 9), "a regenerated raster replaces the old one");
+
+        // Regenerated while being loaded: the stale load is returned but not kept.
+        let stale = |_: &Path| {
+            cache.forget(Path::new("sky.png"));
+            Some(vec![1; (lw * lh) as usize])
+        };
+        cache.forget(Path::new("sky.png"));
+        assert!(cache.layers("h", &masks, (w, h), &table, raster, stale).data.iter().all(|&v| v == 1));
+        let l = cache.layers("h", &masks, (w, h), &table, raster, |_| Some(vec![7; (lw * lh) as usize]));
+        assert!(l.data.iter().all(|&v| v == 7), "the stale load wasn't cached");
     }
 }
