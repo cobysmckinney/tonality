@@ -192,15 +192,18 @@
     apply: (r: PreviewRenderer, params: Float32Array, curve: Uint16Array | null, brush: BrushLayers | null | undefined) => void,
   ) {
     let inflight = false;
-    let pending: EditState | null = null;
+    // Each request carries its own renderer and photo: switching photos mid-flight must not
+    // develop the new edit against the old photo's colour, lens and size.
+    type Job = { r: PreviewRenderer; id: number; state: EditState };
+    let pending: Job | null = null;
     let curveKey = "";
     let brushK: string | null = null;
-    async function pump(r: PreviewRenderer, id: number) {
+    async function pump() {
       if (inflight) return;
       inflight = true;
       try {
         while (pending) {
-          const next = pending;
+          const { r, id, state: next } = pending;
           pending = null;
           const key = JSON.stringify(next.curve);
           // Brush rasters only when strokes change (undefined: unchanged; null: none).
@@ -210,19 +213,25 @@
             key !== curveKey ? api.developCurve(next) : null,
             bk === brushK ? undefined : brushKey(next) ? api.maskLayers(id, next) : null,
           ]);
+          // Superseded by another photo (or renderer) meanwhile: its own request follows.
+          const later = pending as Job | null; // (set by calls made during the await)
+          if (later && (later.id !== id || later.r !== r)) continue;
           if (curve) curveKey = key;
           brushK = bk;
           apply(r, params, curve, brush);
+          error = null;
         }
       } catch (e) {
         error = String(e);
       } finally {
         inflight = false;
+        // A failed request leaves a newer one queued: run it.
+        if (pending) pump();
       }
     }
     return (r: PreviewRenderer, id: number, state: EditState) => {
-      pending = state;
-      pump(r, id);
+      pending = { r, id, state };
+      pump();
     };
   }
   const main = pipeline((r, params, curve, brush) => {

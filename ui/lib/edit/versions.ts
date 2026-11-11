@@ -44,7 +44,8 @@ async function still(imageId: number, state: EditState, edge: number) {
 
 /** Called by Canvas once its renderer shows `imageId` (null when it goes away). */
 export function attachRenderer(r: PreviewRenderer | null, imageId: number | null) {
-  if (r === null) flushSave();
+  // Leaving this photo (switching, or Edit closing): save its thumbnail while we still can.
+  if (pending && pending.imageId !== imageId) flushSave();
   renderer = r;
   rendererImage = imageId;
   if (r && pending?.imageId === imageId) {
@@ -82,29 +83,50 @@ export function requestBranchThumb(imageId: number, commit: number) {
 
 // ---- library thumbnail of the current version ----
 
-let pending: { imageId: number; state: EditState } | null = null;
+type Inputs = Awaited<ReturnType<typeof inputs>>;
+type SaveJob = { imageId: number; inputs: Inputs | null; failed: boolean };
+let pending: SaveJob | null = null;
 let timer: ReturnType<typeof setTimeout> | undefined;
 
-/** HEAD changed: refresh the library thumbnail soon. */
+/**
+ * HEAD changed: refresh the library thumbnail soon. Its inputs are fetched right away, so that
+ * when the renderer is about to move on (another photo, Edit closing) it can render at once.
+ */
 export function scheduleLibraryThumb(imageId: number, state: EditState) {
-  pending = { imageId, state };
+  // The previous photo's renderer still shows it (the new one isn't uploaded yet): save it now.
+  if (pending && pending.imageId !== imageId) flushSave();
+  const job: SaveJob = { imageId, inputs: null, failed: false };
+  pending = job;
+  inputs(imageId, state).then(
+    (v) => {
+      job.inputs = v;
+      if (pending === job && !timer) flushSave(); // came back after the delay
+    },
+    (e) => {
+      job.failed = true;
+      console.warn("[versions] library thumbnail inputs:", e);
+    },
+  );
   clearTimeout(timer);
-  timer = setTimeout(flushSave, SAVE_DELAY_MS);
+  timer = setTimeout(() => {
+    timer = undefined;
+    flushSave();
+  }, SAVE_DELAY_MS);
 }
 
+/** Render the pending job now, synchronously, if its photo is on screen and inputs are in. */
 function flushSave() {
   clearTimeout(timer);
+  timer = undefined;
   const job = pending;
-  if (!job || !renderer || rendererImage !== job.imageId) return; // retried on attach
+  if (!job) return;
+  if (job.failed) return void (pending = null);
+  // Not ready, or not on screen: kept pending (retried when the inputs land or on attach).
+  if (!job.inputs || !renderer || rendererImage !== job.imageId) return;
   pending = null;
-  // Render synchronously now (the renderer may be about to go away), upload afterwards.
-  const r = renderer;
-  const canvasP = inputs(job.imageId, job.state).then(([params, curve, brush]) =>
-    rendererImage === job.imageId && renderer === r ? r.renderStill(LIBRARY_EDGE, params, curve, brush) : null,
-  );
+  const c = renderer.renderStill(LIBRARY_EDGE, ...job.inputs);
+  if (!c) return;
   serial(async () => {
-    const c = await canvasP;
-    if (!c) return;
     const blob = await new Promise<Blob | null>((res) => c.toBlob(res, "image/jpeg", 0.88));
     if (!blob) return;
     await invoke("library_save_edited", new Uint8Array(await blob.arrayBuffer()), {
