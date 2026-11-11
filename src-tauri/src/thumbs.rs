@@ -53,9 +53,9 @@ fn generate(src: &Path, dest: &Path) -> Result<Vec<u8>, String> {
         let _ = std::fs::create_dir_all(dir);
     }
     // Write-then-rename so a concurrent reader never sees a partial file.
-    let tmp = dest.with_extension("tmp");
-    if std::fs::write(&tmp, &buf).is_ok() {
-        let _ = std::fs::rename(&tmp, dest);
+    let tmp = crate::store::temp_path(dest);
+    if std::fs::write(&tmp, &buf).is_err() || std::fs::rename(&tmp, dest).is_err() {
+        let _ = std::fs::remove_file(&tmp);
     }
     Ok(buf)
 }
@@ -85,8 +85,11 @@ pub async fn library_save_edited(
     if let Some(dir) = dest.parent() {
         std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     }
-    let tmp = dest.with_extension("tmp");
-    std::fs::write(&tmp, bytes).and_then(|_| std::fs::rename(&tmp, &dest)).map_err(|e| e.to_string())
+    let tmp = crate::store::temp_path(&dest);
+    std::fs::write(&tmp, bytes).and_then(|_| std::fs::rename(&tmp, &dest)).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp);
+        e.to_string()
+    })
 }
 
 pub fn handle<R: Runtime>(ctx: UriSchemeContext<'_, R>, request: Request<Vec<u8>>, responder: UriSchemeResponder) {

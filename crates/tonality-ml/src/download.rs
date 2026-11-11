@@ -2,6 +2,7 @@
 
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use sha2::{Digest, Sha256};
 
@@ -21,6 +22,13 @@ pub fn is_installed(dir: &Path, file: &ModelFile) -> bool {
 /// bytes arrive.
 pub fn ensure(dir: &Path, file: &ModelFile, progress: &mut dyn FnMut(u64, u64)) -> Result<PathBuf> {
     let dest = path_of(dir, file);
+    if is_installed(dir, file) {
+        return Ok(dest);
+    }
+    // One download at a time: two callers wanting the same file would otherwise write the same
+    // `.part` and rename it into place under each other. The second finds it installed.
+    static DOWNLOADING: Mutex<()> = Mutex::new(());
+    let _one = DOWNLOADING.lock().unwrap_or_else(|e| e.into_inner());
     if is_installed(dir, file) {
         return Ok(dest);
     }

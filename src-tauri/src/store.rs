@@ -12,6 +12,7 @@
 //! be rebuilt even without `catalog.sqlite`.
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 pub struct Store {
     root: PathBuf,
@@ -63,5 +64,29 @@ impl Store {
             Some(d) => format!("originals/{}/{}", &d[..4], &d[..10]),
             None => "originals/undated".into(),
         }
+    }
+}
+
+/// A fresh sibling path to write `dest` through (write, then rename into place). Unique per
+/// call, so concurrent writers of the same or same-stem files never share one.
+pub fn temp_path(dest: &Path) -> PathBuf {
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let n = NEXT.fetch_add(1, Ordering::Relaxed);
+    let name = dest.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    dest.with_file_name(format!(".{name}.{}-{n}.part", std::process::id()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn temp_paths_never_collide() {
+        let a = temp_path(Path::new("/l/originals/IMG_0001.CR2"));
+        let b = temp_path(Path::new("/l/originals/IMG_0001.DNG"));
+        let c = temp_path(Path::new("/l/originals/IMG_0001.CR2"));
+        assert_ne!(a, b);
+        assert_ne!(a, c);
+        assert_eq!(a.parent(), Some(Path::new("/l/originals")));
     }
 }

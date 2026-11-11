@@ -48,7 +48,7 @@ pub fn load_raster(path: &std::path::Path, w: u32, h: u32) -> Option<Vec<u8>> {
 pub fn save_raster(path: &std::path::Path, data: Vec<u8>, w: u32, h: u32) -> Result<(), String> {
     std::fs::create_dir_all(path.parent().unwrap()).map_err(|e| e.to_string())?;
     let img = image::GrayImage::from_raw(w, h, data).ok_or("raster has the wrong size")?;
-    let tmp = path.with_extension("png.tmp");
+    let tmp = crate::store::temp_path(path);
     img.save_with_format(&tmp, image::ImageFormat::Png).map_err(|e| e.to_string())?;
     std::fs::rename(&tmp, path).map_err(|e| e.to_string())
 }

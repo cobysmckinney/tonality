@@ -194,7 +194,7 @@ impl Importer<'_> {
         let name = src.file_name().map(|n| n.to_string_lossy().into_owned()).ok_or("no file name")?;
         let file = self.reserve(&Store::originals_dir(meta.as_ref().and_then(|m| m.captured_at.as_deref())), &name)?;
         let dest = self.store.abs(&file);
-        let part = dest.with_extension("part");
+        let part = crate::store::temp_path(&dest);
 
         let copy = || -> io::Result<u64> {
             std::fs::create_dir_all(dest.parent().unwrap())?;
