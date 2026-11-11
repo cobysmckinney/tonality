@@ -54,6 +54,62 @@ pub struct WhiteBalance {
     pub temperature: Option<f32>,
     /// Green(-)/magenta(+) shift, -150..=150. `None` = as shot.
     pub tint: Option<f32>,
+    /// The preset `temperature` and `tint` were set from, if any (`None`: as shot, or custom).
+    /// A label only: the values are what's rendered.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub preset: Option<WbPreset>,
+}
+
+/// A named lighting condition for white balance.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum WbPreset {
+    Daylight,
+    Cloudy,
+    Shade,
+    Tungsten,
+    Fluorescent,
+    Flash,
+}
+
+impl WbPreset {
+    pub const ALL: [WbPreset; 6] =
+        [WbPreset::Daylight, WbPreset::Cloudy, WbPreset::Shade, WbPreset::Tungsten, WbPreset::Fluorescent, WbPreset::Flash];
+
+    /// The light's chromaticity (CIE 1931 xy): standard illuminants where there is one.
+    pub fn xy(self) -> (f32, f32) {
+        use crate::color::daylight_xy;
+        match self {
+            WbPreset::Daylight => daylight_xy(5500.0),
+            WbPreset::Cloudy => daylight_xy(6500.0),
+            WbPreset::Shade => daylight_xy(7500.0),
+            // Illuminant A (incandescent).
+            WbPreset::Tungsten => (0.44757, 0.40745),
+            // F2, cool white fluorescent.
+            WbPreset::Fluorescent => (0.37208, 0.37529),
+            WbPreset::Flash => daylight_xy(5900.0),
+        }
+    }
+
+    /// `(temperature, tint)` on the sliders' scales, rounded as the sliders show them.
+    pub fn values(self) -> (f32, f32) {
+        let (x, y) = self.xy();
+        let (t, tint) = crate::color::temperature_tint(x, y);
+        ((t / 50.0).round() * 50.0, tint.round())
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            WbPreset::Daylight => "Daylight",
+            WbPreset::Cloudy => "Cloudy",
+            WbPreset::Shade => "Shade",
+            WbPreset::Tungsten => "Tungsten",
+            WbPreset::Fluorescent => "Fluorescent",
+            WbPreset::Flash => "Flash",
+        }
+    }
 }
 
 /// Tone curves in display space (0..1 in, 0..1 out). Each is a list of `[x, y]` control points
@@ -390,8 +446,21 @@ fn all_fields() -> impl Iterator<Item = &'static Field> {
 /// Human description of what changed from `prev` to `next`, e.g. `"Exposure +0.30"`,
 /// `"White Balance As Shot"`, `"Shadows, Blacks"` or `"5 adjustments"`.
 pub fn describe_change(prev: &EditState, next: &EditState) -> String {
-    let changed: Vec<&Field> = all_fields().filter(|f| (f.get)(prev) != (f.get)(next)).collect();
+    let mut changed: Vec<&Field> = all_fields().filter(|f| (f.get)(prev) != (f.get)(next)).collect();
     let mut curves: Vec<&str> = CURVES.iter().filter(|(_, c)| c(prev) != c(next)).map(|(l, _)| *l).collect();
+    // Picking a preset (or switching to Custom) names the mode, rather than the temperature
+    // and tint it set.
+    let mode = |w: &WhiteBalance| match (w.preset, w.temperature, w.tint) {
+        (Some(p), ..) => Some(p.label()),
+        (None, None, None) => None,
+        _ => Some("Custom"),
+    };
+    let (was, now) = (mode(&prev.white_balance), mode(&next.white_balance));
+    let preset_label = now.filter(|_| was != now).map(|m| format!("White Balance {m}"));
+    if let Some(label) = &preset_label {
+        changed.retain(|f| f.label != "Temperature" && f.label != "Tint");
+        curves.insert(0, label.as_str());
+    }
     // Framing changes that aren't scalars are named, like curves.
     let (a, b) = (&prev.crop, &next.crop);
     if a.turns != b.turns {
@@ -435,6 +504,18 @@ mod tests {
     use super::*;
 
     #[test]
+    fn wb_presets_sit_where_their_lights_do() {
+        let v = |p: WbPreset| p.values();
+        assert_eq!(v(WbPreset::Daylight), (5500.0, -11.0));
+        assert_eq!(v(WbPreset::Tungsten), (2850.0, 0.0), "illuminant A is on the Planckian locus");
+        let t: Vec<f32> = [WbPreset::Tungsten, WbPreset::Fluorescent, WbPreset::Daylight, WbPreset::Flash, WbPreset::Cloudy, WbPreset::Shade]
+            .iter()
+            .map(|p| p.values().0)
+            .collect();
+        assert!(t.windows(2).all(|w| w[0] < w[1]), "warm to cool: {t:?}");
+    }
+
+    #[test]
     fn describes_changes() {
         let a = EditState::default();
         let mut b = a.clone();
@@ -445,14 +526,26 @@ mod tests {
         assert_eq!(describe_change(&a, &b), "Exposure 0.00");
         let mut c = a.clone();
         c.white_balance.temperature = Some(5200.4);
-        assert_eq!(describe_change(&a, &c), "Temperature 5200K");
+        assert_eq!(describe_change(&a, &c), "White Balance Custom");
         assert_eq!(describe_change(&c, &a), "Temperature As Shot");
         c.white_balance.tint = Some(-12.0);
         assert_eq!(describe_change(&c, &a), "White Balance As Shot");
         c.light.shadows = 40.0;
-        assert_eq!(describe_change(&a, &c), "Temperature, Tint, Shadows");
+        assert_eq!(describe_change(&a, &c), "Shadows, White Balance Custom");
         c.light.blacks = -10.0;
+        assert_eq!(describe_change(&a, &c), "Shadows, Blacks, White Balance Custom");
+        c.light.whites = 5.0;
         assert_eq!(describe_change(&a, &c), "4 adjustments");
+
+        let mut w = a.clone();
+        w.white_balance = WhiteBalance { temperature: Some(2850.0), tint: Some(0.0), preset: Some(WbPreset::Tungsten) };
+        assert_eq!(describe_change(&a, &w), "White Balance Tungsten");
+        let mut custom = w.clone();
+        custom.white_balance.preset = None;
+        assert_eq!(describe_change(&w, &custom), "White Balance Custom");
+        let mut warmer = custom.clone();
+        warmer.white_balance.temperature = Some(3000.0);
+        assert_eq!(describe_change(&custom, &warmer), "Temperature 3000K");
 
         let mut d = a.clone();
         d.color.mixer.blue.saturation = -30.0;

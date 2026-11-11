@@ -100,6 +100,19 @@ fn xy_to_xyz(x: f32, y: f32) -> Vec3 {
     [x / y, 1.0, (1.0 - x - y) / y]
 }
 
+/// CIE daylight locus (xy) at correlated colour temperature `t`, 4000K..25000K.
+pub fn daylight_xy(t: f32) -> (f32, f32) {
+    let t = t.clamp(4000.0, 25000.0) as f64;
+    let (t2, t3) = (t * t, t * t * t);
+    let x = if t <= 7000.0 {
+        -4.6070e9 / t3 + 2.9678e6 / t2 + 0.09911e3 / t + 0.244063
+    } else {
+        -2.0064e9 / t3 + 1.9018e6 / t2 + 0.24748e3 / t + 0.237040
+    };
+    let y = -3.0 * x * x + 2.87 * x - 0.275;
+    (x as f32, y as f32)
+}
+
 /// Tint units: ±100 ≙ ±0.03 Duv. Positive tint = magenta (below the Planckian locus).
 const TINT_SCALE: f32 = 0.0003;
 

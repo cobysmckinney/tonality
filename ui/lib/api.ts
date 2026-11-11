@@ -2,6 +2,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import type { Checkout } from "$lib/bindings/Checkout";
+import type { WbPresetInfo } from "$lib/bindings/WbPresetInfo";
 import type { ImageQuery } from "$lib/bindings/ImageQuery";
 import type { ImageRow } from "$lib/bindings/ImageRow";
 import type { ImportSummary } from "$lib/bindings/ImportSummary";
@@ -29,6 +30,7 @@ function inOrder<T>(f: () => Promise<T>): Promise<T> {
 
 export const api = {
   defaultEditState: () => invoke<EditState>("default_edit_state"),
+  wbPresets: () => invoke<WbPresetInfo[]>("wb_presets"),
   startupPath: () => invoke<string | null>("startup_path"),
   startupImport: () => invoke<string | null>("startup_import"),
   devSnapshotPath: () => invoke<string | null>("dev_snapshot_path"),

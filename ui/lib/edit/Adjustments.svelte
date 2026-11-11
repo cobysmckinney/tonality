@@ -1,5 +1,13 @@
+<script lang="ts" module>
+  import type { WbPresetInfo } from "$lib/bindings/WbPresetInfo";
+  /** Fetched once per session: they never change. */
+  let cachedPresets: WbPresetInfo[] | null = null;
+</script>
+
 <script lang="ts">
   import type { ColorMixer } from "$lib/bindings/ColorMixer";
+  import type { WbPreset } from "$lib/bindings/WbPreset";
+  import { api } from "$lib/api";
   import type { EditState } from "$lib/bindings/EditState";
   import type { HueBand } from "$lib/bindings/HueBand";
   import type { LensCorrection } from "$lib/bindings/LensCorrection";
@@ -24,7 +32,14 @@
   let { edit = $bindable(), image, histogram, oncommit }: Props = $props();
 
   type LightKey = keyof EditState["light"];
-  const lightControls: { key: LightKey; label: string; min: number; max: number; step: number; decimals: number }[] = [
+  const lightControls: {
+    key: LightKey;
+    label: string;
+    min: number;
+    max: number;
+    step: number;
+    decimals: number;
+  }[] = [
     { key: "exposure", label: "Exposure", min: -5, max: 5, step: 0.01, decimals: 2 },
     { key: "contrast", label: "Contrast", min: -100, max: 100, step: 1, decimals: 0 },
     { key: "highlights", label: "Highlights", min: -100, max: 100, step: 1, decimals: 0 },
@@ -36,8 +51,35 @@
   const wb = $derived(edit.whiteBalance);
   const isAsShot = $derived(wb.temperature === null && wb.tint === null);
 
+  // ---- white balance: As Shot, a preset, or Custom (the only mode with sliders) ----
+  type WbMode = "asShot" | WbPreset | "custom";
+  const wbMode = $derived<WbMode>(wb.preset ?? (isAsShot ? "asShot" : "custom"));
+  let presets = $state<WbPresetInfo[]>(cachedPresets ?? []);
+  if (!cachedPresets) {
+    api
+      .wbPresets()
+      .then((p) => (presets = cachedPresets = p))
+      .catch((e) => console.warn("[wb] presets:", e));
+  }
+
   function resetWb() {
     edit.whiteBalance = { temperature: null, tint: null };
+    oncommit?.(null);
+  }
+  function chooseWb(mode: WbMode) {
+    if (mode === wbMode) return;
+    if (mode === "asShot") return resetWb();
+    if (mode === "custom") {
+      // Start the sliders where the current balance is.
+      edit.whiteBalance = {
+        temperature: wb.temperature ?? image.asShotTemperature,
+        tint: wb.tint ?? image.asShotTint,
+      };
+    } else {
+      const p = presets.find((x) => x.preset === mode);
+      if (!p) return;
+      edit.whiteBalance = { temperature: p.temperature, tint: p.tint, preset: p.preset };
+    }
     oncommit?.(null);
   }
 
@@ -81,7 +123,13 @@
   );
   // ---- lens ----
   // `edit.lens` is absent until first touched (so untouched states keep their hashes).
-  const LENS_DEFAULT: LensCorrection = { profile: false, distortion: 100, vignetting: 100, chromatic: true, manualDistortion: 0 };
+  const LENS_DEFAULT: LensCorrection = {
+    profile: false,
+    distortion: 100,
+    vignetting: 100,
+    chromatic: true,
+    manualDistortion: 0,
+  };
   const lens = $derived(edit.lens ?? LENS_DEFAULT);
   function setLens(patch: Partial<LensCorrection>) {
     edit.lens = { ...(edit.lens ?? LENS_DEFAULT), ...patch };
@@ -112,19 +160,14 @@
 
   function reset(section: "light" | "curve" | "detail" | "effects") {
     if (!defaults) return;
-    (edit as Record<string, unknown>)[section] = structuredClone($state.snapshot(defaults[section]));
+    (edit as Record<string, unknown>)[section] = structuredClone(
+      $state.snapshot(defaults[section]),
+    );
     oncommit?.(null);
   }
   function resetColor() {
     edit.color.vibrance = 0;
     edit.color.saturation = 0;
-    oncommit?.(null);
-  }
-  /** Switch to an explicit balance, starting where As Shot is (the sliders then own it). */
-  function customWb() {
-    if (!isAsShot) return;
-    edit.whiteBalance.temperature = image.asShotTemperature;
-    edit.whiteBalance.tint = image.asShotTint;
     oncommit?.(null);
   }
   function resetLens() {
@@ -137,56 +180,101 @@
   <div class="top">
     <HistogramView {histogram} />
     <div class="tools">
-      <button class="tool" onclick={() => session.startCrop()} title="Crop, rotate and straighten (R)">
-        <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"><path d="M4 1v11h11M1 4h11v11" /></svg>
+      <button
+        class="tool"
+        onclick={() => session.startCrop()}
+        title="Crop, rotate and straighten (R)"
+      >
+        <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"
+          ><path d="M4 1v11h11M1 4h11v11" /></svg
+        >
         <span>Crop</span>
         <kbd>R</kbd>
       </button>
-      <button class="tool" onclick={() => session.startMasks()} title="Local adjustments: gradients and brush (M)">
-        <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"><circle cx="8" cy="8" r="6" /><path d="M8 2a6 6 0 0 0 0 12Z" /></svg>
+      <button
+        class="tool"
+        onclick={() => session.startMasks()}
+        title="Local adjustments: gradients and brush (M)"
+      >
+        <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"
+          ><circle cx="8" cy="8" r="6" /><path d="M8 2a6 6 0 0 0 0 12Z" /></svg
+        >
         <span>Masks</span>
-        {#if edit.masks?.length}<span class="count">{edit.masks.length}</span>{:else}<kbd>M</kbd>{/if}
+        {#if edit.masks?.length}<span class="count">{edit.masks.length}</span>{:else}<kbd>M</kbd
+          >{/if}
       </button>
     </div>
   </div>
 
   <div class="scroll">
     <Section title="White Balance" edited={edited.wb} onreset={resetWb}>
-      <div class="seg wb-mode">
-        <button class:active={isAsShot} onclick={resetWb}>As Shot</button>
-        <button class:active={!isAsShot} onclick={customWb} title="Set your own balance, starting from the as-shot values">Custom</button>
+      <div class="wb-modes" role="radiogroup" aria-label="White balance">
+        <button
+          role="radio"
+          aria-checked={wbMode === "asShot"}
+          class:active={wbMode === "asShot"}
+          onclick={() => chooseWb("asShot")}
+        >
+          As Shot
+        </button>
+        {#each presets as p (p.preset)}
+          <button
+            role="radio"
+            aria-checked={wbMode === p.preset}
+            class:active={wbMode === p.preset}
+            onclick={() => chooseWb(p.preset)}
+            title={`${p.label}: ${p.temperature} K, tint ${p.tint > 0 ? "+" : ""}${p.tint}`}
+          >
+            {p.label}
+          </button>
+        {/each}
+        <button
+          role="radio"
+          aria-checked={wbMode === "custom"}
+          class:active={wbMode === "custom"}
+          onclick={() => chooseWb("custom")}
+          title="Set temperature and tint yourself"
+        >
+          Custom
+        </button>
       </div>
-      <Slider
-        label="Temperature"
-        value={wb.temperature ?? image.asShotTemperature}
-        min={2000}
-        max={12000}
-        step={50}
-        defaultValue={image.asShotTemperature}
-        unit="K"
-        bipolar={false}
-        track="linear-gradient(90deg, #4f7fd9, #d8d8d8 40%, #e0a63c)"
-        oninput={(v) => (edit.whiteBalance.temperature = v)}
-        oncommit={() => oncommit?.("temperature")}
-        onreset={() => {
-          edit.whiteBalance.temperature = null;
-          oncommit?.(null);
-        }}
-      />
-      <Slider
-        label="Tint"
-        value={wb.tint ?? image.asShotTint}
-        min={-150}
-        max={150}
-        defaultValue={image.asShotTint}
-        track="linear-gradient(90deg, #4fb55a, #d8d8d8 50%, #c45bc4)"
-        oninput={(v) => (edit.whiteBalance.tint = v)}
-        oncommit={() => oncommit?.("tint")}
-        onreset={() => {
-          edit.whiteBalance.tint = null;
-          oncommit?.(null);
-        }}
-      />
+      {#if wbMode !== "custom"}
+        {@const t = wb.temperature ?? image.asShotTemperature}
+        {@const tint = wb.tint ?? image.asShotTint}
+        <p class="wb-readout">{Math.round(t)} K · Tint {tint > 0 ? "+" : ""}{Math.round(tint)}</p>
+      {:else}
+        <Slider
+          label="Temperature"
+          value={wb.temperature ?? image.asShotTemperature}
+          min={2000}
+          max={12000}
+          step={50}
+          defaultValue={image.asShotTemperature}
+          unit="K"
+          bipolar={false}
+          track="linear-gradient(90deg, #4f7fd9, #d8d8d8 40%, #e0a63c)"
+          oninput={(v) => (edit.whiteBalance.temperature = v)}
+          oncommit={() => oncommit?.("temperature")}
+          onreset={() => {
+            edit.whiteBalance.temperature = null;
+            oncommit?.(null);
+          }}
+        />
+        <Slider
+          label="Tint"
+          value={wb.tint ?? image.asShotTint}
+          min={-150}
+          max={150}
+          defaultValue={image.asShotTint}
+          track="linear-gradient(90deg, #4fb55a, #d8d8d8 50%, #c45bc4)"
+          oninput={(v) => (edit.whiteBalance.tint = v)}
+          oncommit={() => oncommit?.("tint")}
+          onreset={() => {
+            edit.whiteBalance.tint = null;
+            oncommit?.(null);
+          }}
+        />
+      {/if}
     </Section>
 
     <Section title="Light" edited={edited.light} onreset={() => reset("light")}>
@@ -236,7 +324,12 @@
     <Section title="Color Mixer" open={false} edited={edited.mixer} onreset={resetMixer}>
       <div class="seg" role="tablist">
         {#each mixerModes as m (m.id)}
-          <button role="tab" aria-selected={mixerMode === m.id} class:active={mixerMode === m.id} onclick={() => (mixerMode = m.id)}>
+          <button
+            role="tab"
+            aria-selected={mixerMode === m.id}
+            class:active={mixerMode === m.id}
+            onclick={() => (mixerMode = m.id)}
+          >
             {m.label}
           </button>
         {/each}
@@ -328,7 +421,9 @@
             Enable profile corrections
           </label>
           <p class="note">
-            {lensInfo.name} · {lensInfo.source === "embedded" ? "the camera's own correction data" : "lensfun database"}
+            {lensInfo.name} · {lensInfo.source === "embedded"
+              ? "the camera's own correction data"
+              : "lensfun database"}
           </p>
           {#if lens.profile}
             {#if lensInfo.distortion}
@@ -484,7 +579,9 @@
     background: var(--bg-2);
     color: var(--text-1);
     font-size: var(--fs-s);
-    transition: background 120ms var(--ease), color 120ms var(--ease);
+    transition:
+      background 120ms var(--ease),
+      color 120ms var(--ease);
   }
   .tool:hover {
     background: var(--bg-3);
@@ -518,11 +615,35 @@
     text-align: center;
     line-height: 18px;
   }
-  .wb-mode {
-    width: 100%;
+  .wb-modes {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 2px;
+    padding: 2px;
+    border-radius: var(--radius-m);
+    background: var(--bg-0);
   }
-  .wb-mode button:disabled {
-    cursor: default;
+  .wb-modes button {
+    padding: 4px 0;
+    border-radius: var(--radius-s);
+    font-size: var(--fs-xs);
+    color: var(--text-2);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .wb-modes button:hover {
+    color: var(--text-0);
+  }
+  .wb-modes button.active {
+    background: var(--bg-3);
+    color: var(--text-0);
+  }
+  .wb-readout {
+    margin: 0;
+    font-size: var(--fs-xs);
+    color: var(--text-2);
+    font-variant-numeric: tabular-nums;
   }
   .spacer {
     height: var(--space-1);

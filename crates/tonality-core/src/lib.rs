@@ -11,7 +11,7 @@ pub mod mask;
 pub mod sidecar;
 
 pub use catalog::{Catalog, CatalogError, ImageId};
-pub use edit::{EditState, Panel};
+pub use edit::{EditState, Panel, WbPreset};
 pub use mask::{Mask, MaskShape};
 pub use history::{Checkout, CommitId, HistoryView};
 pub use sidecar::{MergeSummary, Sidecar};

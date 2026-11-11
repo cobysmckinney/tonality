@@ -26,6 +26,28 @@ fn default_edit_state() -> EditState {
     EditState::default()
 }
 
+/// The white balance presets, in display order, with the slider values each sets.
+#[derive(serde::Serialize, ts_rs::TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct WbPresetInfo {
+    pub preset: tonality_core::WbPreset,
+    pub label: String,
+    pub temperature: f32,
+    pub tint: f32,
+}
+
+#[tauri::command]
+fn wb_presets() -> Vec<WbPresetInfo> {
+    tonality_core::WbPreset::ALL
+        .iter()
+        .map(|&p| {
+            let (temperature, tint) = p.values();
+            WbPresetInfo { preset: p, label: p.label().into(), temperature, tint }
+        })
+        .collect()
+}
+
 /// Dev convenience: `TONALITY_OPEN=/path/to/file.ARW npm run tauri dev` imports a file and opens it.
 #[tauri::command]
 fn startup_path() -> Option<String> {
@@ -210,6 +232,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             default_edit_state,
+            wb_presets,
             startup_path,
             startup_import,
             dev_log,
