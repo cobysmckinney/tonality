@@ -278,7 +278,11 @@ pub async fn library_import(paths: Vec<String>, app: AppHandle) -> CmdResult<Imp
             reserved: Mutex::default(),
         };
         // Copying is IO-bound; a few workers saturate a card reader or SSD without thrashing.
-        let pool = rayon::ThreadPoolBuilder::new().num_threads(4).build().map_err(|e| e.to_string())?;
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(4)
+            .start_handler(|_| crate::priority::lower_this_thread())
+            .build()
+            .map_err(|e| e.to_string())?;
         // Pass 1: hash everything. Duplicates (already in the library, or the same file twice in
         // this import) are settled here, before anything is copied, and deterministically: the
         // first file in folder order wins.

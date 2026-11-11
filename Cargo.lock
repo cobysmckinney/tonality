@@ -5291,6 +5291,7 @@ dependencies = [
  "base64 0.22.1",
  "blake3",
  "image",
+ "libc",
  "rayon",
  "serde",
  "serde_json",

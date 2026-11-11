@@ -98,7 +98,8 @@ impl Images {
         std::thread::spawn(move || {
             std::thread::sleep(FULL_DELAY);
             if me.latest.load(Ordering::Relaxed) == id {
-                let _ = me.full(id, &path);
+                // At low priority (it's ahead of need); detail_region asks directly when it's not.
+                let _ = crate::priority::pool().install(|| me.full(id, &path));
             }
         });
 

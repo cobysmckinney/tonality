@@ -27,3 +27,6 @@ blake3.workspace = true
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "tiff"] }
 rayon.workspace = true
 tauri-plugin-opener = "2"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2"

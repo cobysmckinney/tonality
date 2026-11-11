@@ -3,6 +3,7 @@ mod export;
 mod history;
 mod images;
 mod layers;
+mod priority;
 mod library;
 mod sidecar;
 mod store;

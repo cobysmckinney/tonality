@@ -23,7 +23,12 @@ fn pool() -> &'static rayon::ThreadPool {
     static POOL: OnceLock<rayon::ThreadPool> = OnceLock::new();
     POOL.get_or_init(|| {
         let n = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4).clamp(2, 6);
-        rayon::ThreadPoolBuilder::new().num_threads(n).thread_name(|i| format!("thumb-{i}")).build().unwrap()
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(n)
+            .thread_name(|i| format!("thumb-{i}"))
+            .start_handler(|_| crate::priority::lower_this_thread())
+            .build()
+            .unwrap()
     })
 }
 

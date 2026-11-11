@@ -55,6 +55,9 @@ pub fn run(model: &Path, inputs: Vec<(&str, Tensor32)>, outputs: &[&str]) -> Res
             .map_err(ort_err)?
             .with_intra_threads(threads())
             .map_err(ort_err)?
+            // Idle workers sleep instead of busy-waiting for the next op, leaving the CPU to the UI.
+            .with_intra_op_spinning(false)
+            .map_err(ort_err)?
             .commit_from_file(model)
             .map_err(ort_err)?;
         map.insert(model.to_path_buf(), s);

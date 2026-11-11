@@ -149,51 +149,56 @@ pub fn detect(
     let _busy = det.lock.lock().map_err(|_| "detector lock poisoned")?;
     let _ = app.emit("ai-progress", Progress { stage: "detect", model: model.id, done: 0, total: 1 });
 
-    let (w, h) = mask_size(photo.full_width, photo.full_height);
-    // Downsample before converting: the models never see more than the mask raster.
-    let img = input::neutral_srgb_sized(photo.pixels, photo.width, photo.height, photo.color, w, h);
-    let guide = input::guide(&img, w, h);
-    let save = |key: &str, r: Vec<u8>| -> CmdResult<bool> {
-        let found = r.iter().filter(|&&v| v > 128).count() > (w * h / 500) as usize;
-        let path = raster_path(store, photo.hash, model.id, key);
-        save_raster(&path, r, w, h)?;
-        app.state::<LayerCache>().forget(&path);
-        Ok(found)
-    };
-    let err = |e: tonality_ml::MlError| e.to_string();
+    // At background priority: the models' threads (created on first use, inheriting it) and
+    // the refinement loops yield to the UI.
+    let found = crate::priority::pool().install(|| -> CmdResult<bool> {
+        let (w, h) = mask_size(photo.full_width, photo.full_height);
+        // Downsample before converting: the models never see more than the mask raster.
+        let img = input::neutral_srgb_sized(photo.pixels, photo.width, photo.height, photo.color, w, h);
+        let guide = input::guide(&img, w, h);
+        let save = |key: &str, r: Vec<u8>| -> CmdResult<bool> {
+            let found = r.iter().filter(|&&v| v > 128).count() > (w * h / 500) as usize;
+            let path = raster_path(store, photo.hash, model.id, key);
+            save_raster(&path, r, w, h)?;
+            app.state::<LayerCache>().forget(&path);
+            Ok(found)
+        };
+        let err = |e: tonality_ml::MlError| e.to_string();
 
-    let found = match (model.id, target) {
-        ("subject@1", AiTarget::Subject) => {
-            let (p, pw, ph) = subject::detect(&files[0], subject::SubjectModel::U2NET, &img).map_err(err)?;
-            save("subject", refine::to_raster(&p, pw, ph, &guide, w, h))?
-        }
-        ("scene@1", AiTarget::Sky | AiTarget::People) => {
-            // One pass gives both; cache both.
-            let (maps, pw, ph) =
-                scene::detect(&files[0], scene::SceneModel::ADE_512, &img, &[scene::ade::SKY, scene::ade::PERSON]).map_err(err)?;
-            let sky = save("sky", refine::sky_raster(&maps[0], pw, ph, &img))?;
-            let people = save("people", refine::to_raster(&maps[1], pw, ph, &guide, w, h))?;
-            if matches!(target, AiTarget::Sky) { sky } else { people }
-        }
-        ("sam@1", AiTarget::Object { lasso }) => {
-            // The loop was drawn on the corrected image; the model sees the uncorrected one.
-            let to_src = UvToSource::new(&lens_table(photo.profile, lens, photo.full_width as f32, photo.full_height as f32), photo.full_width, photo.full_height);
-            let lasso: Vec<[f32; 2]> = lasso.iter().map(|&p| to_src.map(p)).collect();
-            let mut cached = det.embedding.lock().map_err(|_| "embedding lock poisoned")?;
-            let emb = match &*cached {
-                Some((hash, e)) if hash == photo.hash => e.clone(),
-                _ => {
-                    let e = sam::encode(&files[0], &img).map_err(err)?;
-                    *cached = Some((photo.hash.to_string(), e.clone()));
-                    e
-                }
-            };
-            drop(cached);
-            let p = sam::decode(&files[1], &emb, &lasso, w, h).map_err(err)?;
-            save(&target.cache_key(), refine::to_raster(&p, w, h, &guide, w, h))?
-        }
-        _ => return Err(format!("{} can't detect {}", model.label, target.label())),
-    };
+        let found = match (model.id, target) {
+            ("subject@1", AiTarget::Subject) => {
+                let (p, pw, ph) = subject::detect(&files[0], subject::SubjectModel::U2NET, &img).map_err(err)?;
+                save("subject", refine::to_raster(&p, pw, ph, &guide, w, h))?
+            }
+            ("scene@1", AiTarget::Sky | AiTarget::People) => {
+                // One pass gives both; cache both.
+                let (maps, pw, ph) =
+                    scene::detect(&files[0], scene::SceneModel::ADE_512, &img, &[scene::ade::SKY, scene::ade::PERSON]).map_err(err)?;
+                let sky = save("sky", refine::sky_raster(&maps[0], pw, ph, &img))?;
+                let people = save("people", refine::to_raster(&maps[1], pw, ph, &guide, w, h))?;
+                if matches!(target, AiTarget::Sky) { sky } else { people }
+            }
+            ("sam@1", AiTarget::Object { lasso }) => {
+                // The loop was drawn on the corrected image; the model sees the uncorrected one.
+                let to_src = UvToSource::new(&lens_table(photo.profile, lens, photo.full_width as f32, photo.full_height as f32), photo.full_width, photo.full_height);
+                let lasso: Vec<[f32; 2]> = lasso.iter().map(|&p| to_src.map(p)).collect();
+                let mut cached = det.embedding.lock().map_err(|_| "embedding lock poisoned")?;
+                let emb = match &*cached {
+                    Some((hash, e)) if hash == photo.hash => e.clone(),
+                    _ => {
+                        let e = sam::encode(&files[0], &img).map_err(err)?;
+                        *cached = Some((photo.hash.to_string(), e.clone()));
+                        e
+                    }
+                };
+                drop(cached);
+                let p = sam::decode(&files[1], &emb, &lasso, w, h).map_err(err)?;
+                save(&target.cache_key(), refine::to_raster(&p, w, h, &guide, w, h))?
+            }
+            _ => return Err(format!("{} can't detect {}", model.label, target.label())),
+        };
+        Ok(found)
+    })?;
     let _ = app.emit("ai-progress", Progress { stage: "detect", model: model.id, done: 1, total: 1 });
     Ok(found)
 }
