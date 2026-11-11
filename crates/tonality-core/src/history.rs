@@ -479,6 +479,18 @@ impl Catalog {
         if h.branch == name {
             set_head(&tx, image, &fallback.name, fallback.tip)?;
         }
+        // The commits only that branch had are unreachable now: delete them (children first,
+        // which have the higher ids), and any edit state no commit uses any more.
+        let par = parents(&tx, image)?;
+        let keep: HashSet<CommitId> = branches(&tx, image)?.iter().flat_map(|b| lineage(&par, b.tip)).collect();
+        let mut gone: Vec<CommitId> = par.keys().filter(|c| !keep.contains(c)).copied().collect();
+        gone.sort_unstable_by(|a, b| b.cmp(a));
+        for c in &gone {
+            tx.execute("DELETE FROM commits WHERE id = ?1", [c])?;
+        }
+        if !gone.is_empty() {
+            tx.execute("DELETE FROM edit_states WHERE hash NOT IN (SELECT state_hash FROM commits)", [])?;
+        }
         tx.commit()?;
         self.checkout_result(image)
     }
@@ -635,8 +647,14 @@ mod tests {
         cat.commit(img, &exp(1.0), None).unwrap();
         let c = cat.delete_branch(img, "Creative").unwrap();
         assert_eq!(c.view.head.branch, "main");
-        assert_eq!(summaries(&c), ["Original"], "commits only on the deleted branch are hidden");
+        assert_eq!(summaries(&c), ["Original"], "commits only on the deleted branch are gone");
         assert!(cat.delete_branch(img, "main").is_err());
+        let rows: i64 = cat.conn.query_row("SELECT COUNT(*) FROM commits WHERE image_id = ?1", [img], |r| r.get(0)).unwrap();
+        assert_eq!(rows, 1, "and deleted, not just hidden");
+        let states: i64 = cat.conn.query_row("SELECT COUNT(*) FROM edit_states", [], |r| r.get(0)).unwrap();
+        assert_eq!(states, 1);
+        // Still fully usable.
+        cat.commit(img, &exp(2.0), None).unwrap();
     }
 
     #[test]
