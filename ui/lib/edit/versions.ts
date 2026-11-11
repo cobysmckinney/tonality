@@ -11,6 +11,7 @@ import type { PreviewRenderer } from "./renderer";
 import { brushKey, withoutStrokes } from "./masks";
 
 const BRANCH_EDGE = 200;
+const BRANCH_THUMBS = 64;
 const LIBRARY_EDGE = 640;
 const SAVE_DELAY_MS = 700;
 
@@ -19,6 +20,8 @@ let rendererImage: number | null = null;
 
 /** `${imageId}:${commit}` → data URL. */
 export const branchThumbs = new SvelteMap<string, string>();
+/** Asked for before a renderer showed their photo. */
+let retry: { imageId: number; commit: number }[] = [];
 
 let chain: Promise<unknown> = Promise.resolve();
 function serial<T>(f: () => Promise<T>): Promise<T> {
@@ -48,6 +51,11 @@ export function attachRenderer(r: PreviewRenderer | null, imageId: number | null
   if (pending && pending.imageId !== imageId) flushSave();
   renderer = r;
   rendererImage = imageId;
+  if (r) {
+    const again = retry.filter((t) => t.imageId === imageId);
+    retry = [];
+    for (const t of again) requestBranchThumb(t.imageId, t.commit);
+  }
   if (r && pending?.imageId === imageId) {
     clearTimeout(timer);
     timer = setTimeout(flushSave, SAVE_DELAY_MS);
@@ -72,12 +80,19 @@ export function snapshotNextFrame(): Promise<string> {
 export function requestBranchThumb(imageId: number, commit: number) {
   const key = `${imageId}:${commit}`;
   if (branchThumbs.has(key)) return;
+  // Keep one photo's thumbnails, and not too many of those (one per commit asked for).
+  for (const k of branchThumbs.keys()) if (!k.startsWith(`${imageId}:`)) branchThumbs.delete(k);
+  while (branchThumbs.size >= BRANCH_THUMBS) branchThumbs.delete(branchThumbs.keys().next().value!);
   branchThumbs.set(key, ""); // pending
   serial(async () => {
     const state = await api.history.state(commit);
     const c = await still(imageId, state, BRANCH_EDGE);
     if (c) branchThumbs.set(key, c.toDataURL("image/jpeg", 0.85));
-    else branchThumbs.delete(key);
+    else {
+      branchThumbs.delete(key);
+      // No renderer for this photo yet (Edit still starting): try again once there is one.
+      retry.push({ imageId, commit });
+    }
   }).catch(() => branchThumbs.delete(key));
 }
 

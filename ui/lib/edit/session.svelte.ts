@@ -296,7 +296,10 @@ class EditSession {
           this.edit = checkout.state;
           this.history = checkout.view;
           this.image = info;
-          scheduleLibraryThumb(id, checkout.state);
+          // Refresh the grid's rendering of an edited photo (its history may have arrived from a
+          // sidecar). An unedited one shows the plain thumbnail already: nothing to render.
+          const head = checkout.view.commits.find((c) => c.id === checkout.view.head.commit);
+          if (head?.parent != null) scheduleLibraryThumb(id, checkout.state);
         } catch (e) {
           if (this.opening !== id) continue;
           this.error = String(e);
