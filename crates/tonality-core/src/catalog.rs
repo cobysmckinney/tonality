@@ -106,6 +106,11 @@ const MIGRATIONS: &[&str] = &[
     );
     CREATE INDEX album_images_image ON album_images(image_id);
     "#,
+    // v3: the shown version's shape (width / height), learnt from its thumbnail, so the
+    // library grid can lay photos out before their thumbnails load.
+    r#"
+    ALTER TABLE images ADD COLUMN aspect REAL;
+    "#,
 ];
 
 pub fn system_clock() -> Clock {

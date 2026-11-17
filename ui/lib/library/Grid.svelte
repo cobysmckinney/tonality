@@ -5,6 +5,7 @@
   import { thumbKey, thumbnail } from "./thumbs";
   import type { ImageRow } from "$lib/bindings/ImageRow";
   import { dayKey, dayLabel } from "./dates";
+  import { library } from "./library.svelte";
 
   interface Props {
     images: ImageRow[];
@@ -36,20 +37,20 @@
     ondragstart,
   }: Props = $props();
 
-  const GAP = 12;
+  const GAP = 6;
   const PAD = 20;
-  const LABEL = 30;
   const HEADER = 52;
   const OVERSCAN = 400; // px
+  /** Shape assumed until a photo's thumbnail has been made (3:2, most cameras). */
+  const DEFAULT_ASPECT = 1.5;
 
   let el: HTMLDivElement;
   let width = $state(0);
   let height = $state(0);
   let scroll = $state(0);
 
-  const cols = $derived(Math.max(1, Math.floor((width - 2 * PAD + GAP) / (size + GAP))));
-  const cellW = $derived(Math.max(40, (width - 2 * PAD - GAP * (cols - 1)) / cols));
-  const rowH = $derived(cellW + LABEL + GAP);
+  /** Rows aim for this height; each is then scaled to fill the width exactly. */
+  const targetH = $derived(Math.round(size * 0.75));
 
   interface Header {
     key: string;
@@ -61,41 +62,69 @@
     img: ImageRow;
     top: number;
     left: number;
+    w: number;
+    h: number;
     /** Visual row, for keyboard navigation across sections. */
     row: number;
-    col: number;
   }
 
+  // Panoramas and very tall crops are kept within reason, so one can't take over a row.
+  const aspectOf = (img: ImageRow) => Math.min(3, Math.max(0.4, img.aspect ?? DEFAULT_ASPECT));
+
+  // Justified rows: photos keep their own shape, and each row (but a section's last) is scaled
+  // so its photos fill the width exactly.
   const layout = $derived.by(() => {
     const headers: Header[] = [];
     const cells: Cell[] = [];
     /** Indices into `cells`, per visual row. */
     const rows: number[][] = [];
+    const avail = Math.max(1, width - 2 * PAD);
     let y = PAD;
-    let col = 0;
+    let pending: ImageRow[] = [];
+
+    const flush = (last: boolean) => {
+      if (!pending.length) return;
+      const sum = pending.reduce((s, img) => s + aspectOf(img), 0);
+      const gaps = GAP * (pending.length - 1);
+      // A full row fits the width; a section's last row keeps the target height (unless even
+      // that overflows, which only a lone panorama can).
+      const h = last ? Math.min(targetH, (avail - gaps) / sum) : (avail - gaps) / sum;
+      let x = PAD;
+      rows.push([]);
+      pending.forEach((img, k) => {
+        // The last photo of a full row takes up any rounding, so the right edge is straight.
+        const w = !last && k === pending.length - 1 ? PAD + avail - x : aspectOf(img) * h;
+        rows.at(-1)!.push(cells.length);
+        cells.push({ img, top: y, left: x, w, h, row: rows.length - 1 });
+        x += w + GAP;
+      });
+      y += h + GAP;
+      pending = [];
+    };
+
     let key: string | null = null;
+    let rowAspect = 0;
     for (const img of images) {
       const k = grouped ? dayKey(img.meta?.capturedAt) : "";
       if (grouped && k !== key) {
-        if (col > 0) y += rowH;
-        if (headers.length) y += GAP;
+        flush(true);
+        if (headers.length) y += GAP * 2;
         key = k;
-        col = 0;
+        rowAspect = 0;
         headers.push({ key: k, label: dayLabel(k), top: y, ids: [] });
         y += HEADER;
       }
-      if (col === 0) rows.push([]);
       headers.at(-1)?.ids.push(img.id);
-      rows.at(-1)!.push(cells.length);
-      cells.push({ img, top: y, left: PAD + col * (cellW + GAP), row: rows.length - 1, col });
-      col++;
-      if (col === cols) {
-        col = 0;
-        y += rowH;
+      pending.push(img);
+      rowAspect += aspectOf(img);
+      // Full once the photos at the target height would be wider than the space.
+      if (rowAspect * targetH + GAP * (pending.length - 1) >= avail) {
+        flush(false);
+        rowAspect = 0;
       }
     }
-    if (col > 0) y += rowH;
-    return { headers, cells, rows, height: y + PAD, index: new Map(cells.map((c, i) => [c.img.id, i])) };
+    flush(true);
+    return { headers, cells, rows, height: y - GAP + PAD, index: new Map(cells.map((c, i) => [c.img.id, i])) };
   });
 
   /** First cell whose bottom is below `y` (cells are in top order). */
@@ -105,7 +134,7 @@
     let hi = cs.length;
     while (lo < hi) {
       const mid = (lo + hi) >> 1;
-      if (cs[mid].top + rowH < y) lo = mid + 1;
+      if (cs[mid].top + cs[mid].h < y) lo = mid + 1;
       else hi = mid;
     }
     return lo;
@@ -133,8 +162,10 @@
     if (key === "ArrowLeft") j = Math.max(0, i - 1);
     else if (key === "ArrowRight") j = Math.min(cells.length - 1, i + 1);
     else if (key === "ArrowUp" || key === "ArrowDown") {
+      // The photo in the next row up or down nearest this one's centre.
       const r = rows[c.row + (key === "ArrowUp" ? -1 : 1)];
-      if (r) j = r[Math.min(c.col, r.length - 1)];
+      const mid = c.left + c.w / 2;
+      if (r) j = r.reduce((best, k) => (Math.abs(cells[k].left + cells[k].w / 2 - mid) < Math.abs(cells[best].left + cells[best].w / 2 - mid) ? k : best));
     }
     return cells[j].img.id;
   }
@@ -154,7 +185,7 @@
       if (i === undefined || !el) return;
       const head = grouped ? HEADER : 0;
       const top = layout.cells[i].top;
-      const bottom = top + rowH;
+      const bottom = top + layout.cells[i].h;
       if (top < el.scrollTop + head) el.scrollTop = top - PAD - head;
       else if (bottom > el.scrollTop + el.clientHeight) el.scrollTop = bottom - el.clientHeight + PAD;
     });
@@ -211,14 +242,16 @@
         <span class="n">{h.ids.length}</span>
       </div>
     {/each}
-    {#each visible as { img, top, left } (img.id)}
+    {#each visible as { img, top, left, w, h } (img.id)}
       <div
         class="cell"
         class:selected={selected.has(img.id)}
         class:focus={focus === img.id}
         class:rejected={img.flag < 0}
         style:transform="translate({left}px, {top}px)"
-        style:width="{cellW}px"
+        style:width="{w}px"
+        style:height="{h}px"
+        title={img.name}
         role="button"
         tabindex="-1"
         onpointerdown={(e) => onDown(e, img.id)}
@@ -226,8 +259,17 @@
         ondblclick={() => onopen(img.id)}
         onkeydown={() => {}}
       >
-        <div class="frame" style:height="{cellW}px">
-          <img use:thumbnail={thumbKey(img.id, img.head)} alt="" decoding="async" draggable="false" />
+        <div class="frame">
+          <img
+            use:thumbnail={thumbKey(img.id, img.head)}
+            alt=""
+            decoding="async"
+            draggable="false"
+            onload={(e) => {
+              const t = e.currentTarget as HTMLImageElement;
+              library.learnAspect(img.id, t.naturalWidth / t.naturalHeight);
+            }}
+          />
           {#if img.flag > 0}
             <span class="flag pick" title="Pick">●</span>
           {:else if img.flag < 0}
@@ -236,12 +278,12 @@
           {#if img.branches > 1}
             <span class="versions" title="{img.branches} versions">{img.branches}</span>
           {/if}
-        </div>
-        <div class="label">
-          <span class="name">{img.name}</span>
-          {#if img.rating > 0}
-            <span class="stars" aria-label="{img.rating} stars">{"★".repeat(img.rating)}</span>
-          {/if}
+          <div class="label">
+            <span class="name">{img.name}</span>
+            {#if img.rating > 0}
+              <span class="stars" aria-label="{img.rating} stars">{"★".repeat(img.rating)}</span>
+            {/if}
+          </div>
         </div>
       </div>
     {/each}
@@ -288,37 +330,40 @@
     position: absolute;
     top: 0;
     left: 0;
-    border-radius: var(--radius-m);
+    border-radius: var(--radius-s);
     cursor: default;
     outline: none;
   }
+  /* The photo fills its card edge to edge; selection and focus ring it from outside. */
   .frame {
     position: relative;
-    display: grid;
-    place-items: center;
-    border-radius: var(--radius-m);
+    width: 100%;
+    height: 100%;
+    border-radius: var(--radius-s);
     background: var(--bg-2);
     overflow: hidden;
-    transition: background 100ms var(--ease);
-  }
-  .cell:hover .frame {
-    background: var(--bg-3);
   }
   .cell.selected .frame {
-    background: var(--bg-4);
-    box-shadow: inset 0 0 0 1px var(--line-strong);
+    box-shadow:
+      0 0 0 2px var(--bg-0),
+      0 0 0 4px var(--text-1);
   }
   .cell.focus .frame {
-    box-shadow: inset 0 0 0 2px var(--focus);
+    box-shadow:
+      0 0 0 2px var(--bg-0),
+      0 0 0 4px var(--focus);
   }
   img {
-    max-width: calc(100% - 16px);
-    max-height: calc(100% - 16px);
-    object-fit: contain;
-    border-radius: 3px;
+    display: block;
+    width: 100%;
+    height: 100%;
+    /* Matches the card's shape once known; until then, fills it rather than letterboxing. */
+    object-fit: cover;
     user-select: none;
     opacity: 0;
-    transition: opacity 160ms var(--ease);
+    transition:
+      opacity 160ms var(--ease),
+      filter 120ms var(--ease);
   }
   img:global(.loaded) {
     opacity: 1;
@@ -326,8 +371,16 @@
   img:not([src]) {
     display: none;
   }
+  .cell:hover img {
+    filter: brightness(1.08);
+  }
   .rejected img:global(.loaded) {
     opacity: 0.35;
+  }
+  .flag,
+  .versions,
+  .stars {
+    text-shadow: 0 1px 3px rgb(0 0 0 / 0.7);
   }
   .flag {
     position: absolute;
@@ -336,7 +389,7 @@
     font-size: 10px;
   }
   .pick {
-    color: var(--text-0);
+    color: #fff;
   }
   .reject {
     color: var(--danger);
@@ -348,23 +401,26 @@
     min-width: 18px;
     padding: 0 5px;
     border-radius: 9px;
-    background: color-mix(in srgb, var(--bg-0) 80%, transparent);
-    color: var(--text-0);
+    background: rgb(0 0 0 / 0.55);
+    color: #fff;
     font-size: var(--fs-xs);
     text-align: center;
     line-height: 18px;
   }
+  /* Name on hover, stars always: over the bottom of the photo, on a soft shade. */
   .label {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
     display: flex;
-    align-items: center;
+    align-items: flex-end;
     gap: var(--space-2);
-    height: 30px;
-    padding: 0 4px;
+    padding: 18px 8px 6px;
     font-size: var(--fs-xs);
-    color: var(--text-2);
-  }
-  .selected .label {
-    color: var(--text-1);
+    color: #fff;
+    pointer-events: none;
+    z-index: 1; /* its shade (::before) stays above the photo */
   }
   .name {
     flex: 1;
@@ -372,10 +428,25 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    opacity: 0;
+    transition: opacity 120ms var(--ease);
+  }
+  .label::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    background: linear-gradient(transparent, rgb(0 0 0 / 0.55));
+    opacity: 0;
+    transition: opacity 120ms var(--ease);
+  }
+  .cell:hover .name,
+  .cell:hover .label::before {
+    opacity: 1;
   }
   .stars {
     flex: none;
-    color: var(--text-1);
+    margin-left: auto;
     letter-spacing: 1px;
   }
 </style>

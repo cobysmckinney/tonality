@@ -42,6 +42,8 @@ pub struct NewImage {
     pub file_size: i64,
     pub source_path: String,
     pub meta: Option<ImageMeta>,
+    /// Width / height, if known (from its thumbnail).
+    pub aspect: Option<f32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
@@ -74,6 +76,8 @@ pub struct ImageRow {
     /// (used to refresh its thumbnail).
     #[ts(type = "number | null")]
     pub head: Option<i64>,
+    /// Width / height of the shown version, once a thumbnail of it has been made.
+    pub aspect: Option<f32>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -145,8 +149,8 @@ impl Catalog {
         let rating = img.meta.as_ref().and_then(|m| m.rating).unwrap_or(0).min(5);
         let n = self.conn.execute(
             "INSERT INTO images (hash, file, name, file_size, import_id, source_path, imported_at,
-                                 captured_at, meta, rating)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+                                 captured_at, meta, rating, aspect)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
              ON CONFLICT(hash) DO NOTHING",
             params![
                 img.hash,
@@ -158,7 +162,8 @@ impl Catalog {
                 (self.clock)(),
                 captured,
                 meta_json,
-                rating
+                rating,
+                img.aspect.filter(|a| a.is_finite() && *a > 0.0)
             ],
         )?;
         Ok((n == 1).then(|| self.conn.last_insert_rowid()))
@@ -202,7 +207,8 @@ impl Catalog {
         let mut sql = String::from(
             "SELECT i.id, i.name, i.rating, i.flag, i.meta,
                     (SELECT COUNT(*) FROM refs r WHERE r.image_id = i.id),
-                    (SELECT h.commit_id FROM heads h WHERE h.image_id = i.id)
+                    (SELECT h.commit_id FROM heads h WHERE h.image_id = i.id),
+                    i.aspect
              FROM images i WHERE i.rating >= ?1",
         );
         let mut args: Vec<rusqlite::types::Value> = vec![(q.min_rating as i64).into()];
@@ -238,6 +244,7 @@ impl Catalog {
                 meta: meta.and_then(|m| serde_json::from_str(&m).ok()),
                 branches: r.get(5)?,
                 head: r.get(6)?,
+                aspect: r.get(7)?,
             })
         })?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
@@ -263,6 +270,28 @@ impl Catalog {
     /// Whether a library-relative path is already taken (used when choosing a name for a copy).
     pub fn file_taken(&self, file: &str) -> Result<bool> {
         Ok(self.conn.query_row("SELECT EXISTS(SELECT 1 FROM images WHERE file = ?1)", [file], |r| r.get(0))?)
+    }
+
+    /// Images whose shape isn't recorded yet, with their content hashes.
+    pub fn images_without_aspect(&self) -> Result<Vec<(ImageId, String)>> {
+        let mut stmt = self.conn.prepare("SELECT id, hash FROM images WHERE aspect IS NULL")?;
+        let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// Record the shape of an image's shown version. With `if_unknown`, only when none is
+    /// recorded yet (a thumbnail that may be stale must not overwrite a fresher one).
+    pub fn set_aspect(&mut self, id: ImageId, aspect: f32, if_unknown: bool) -> Result<()> {
+        if !(aspect.is_finite() && aspect > 0.0) {
+            return Ok(());
+        }
+        let sql = if if_unknown {
+            "UPDATE images SET aspect = ?1 WHERE id = ?2 AND aspect IS NULL"
+        } else {
+            "UPDATE images SET aspect = ?1 WHERE id = ?2"
+        };
+        self.conn.execute(sql, params![aspect, id])?;
+        Ok(())
     }
 
     pub fn set_rating(&mut self, ids: &[ImageId], rating: u8) -> Result<()> {
@@ -298,7 +327,24 @@ mod tests {
             file_size: 100,
             source_path: format!("/card/{name}"),
             meta: at.map(|at| ImageMeta { make: "Sony".into(), captured_at: Some(at.into()), ..Default::default() }),
+            aspect: None,
         }
+    }
+
+    #[test]
+    fn aspect_is_learnt_once_then_updated_by_edits() {
+        let mut cat = Catalog::open_in_memory().unwrap();
+        let m = cat.begin_import("card", "/card").unwrap();
+        let id = cat.add_image(m, &img("a.ARW", "h1", None)).unwrap().unwrap();
+        let aspect = |cat: &Catalog| cat.images(&ImageQuery::default()).unwrap()[0].aspect;
+        assert_eq!(aspect(&cat), None);
+        cat.set_aspect(id, 1.5, true).unwrap();
+        cat.set_aspect(id, 0.66, true).unwrap(); // already known: kept
+        assert_eq!(aspect(&cat), Some(1.5));
+        cat.set_aspect(id, 1.0, false).unwrap(); // an edit (a square crop)
+        assert_eq!(aspect(&cat), Some(1.0));
+        cat.set_aspect(id, f32::NAN, false).unwrap();
+        assert_eq!(aspect(&cat), Some(1.0));
     }
 
     #[test]

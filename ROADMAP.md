@@ -16,24 +16,19 @@ Add new ideas to **Later**, and move finished items to **Done** with the date an
 ## Now
 
 ### 1. Library cards: image fills the card, no border
-`ui/lib/library/Grid.svelte`: the image sits inside `.frame` with an 8px inset
-(`max-width: calc(100% - 16px)`), `object-fit: contain` and a grey background, so every
-photo is letterboxed inside a border.
+**Decided (2026-11-17):** justified rows: each card takes its photo's own shape and rows
+stretch to the full width, nothing cropped.
 
-**Open questions**
-- Fill by cropping each image to a square (`object-fit: cover`), or a justified layout
-  (rows of varying widths, so each card has its photo's own shape and nothing is cropped)?
-  The justified layout looks best, but it's more work: the grid's virtualized layout
-  (`layout.cells`) has to calculate rows.
-
-**Plan**
-- [ ] Remove the inset and background; the image fills `.frame` to its edges with the card's
-  rounded corners.
-- [ ] New selected and focused styles (an outline drawn over the image) and hover.
-- [ ] Place the rating, flag and edited badges over the image with a soft shadow so they
-  stay readable.
-- [ ] Rejected photos are still dimmed; check placeholders while thumbnails load.
-- [ ] Check scroll performance with a large library.
+**Status:** built on branch `library-cards`, seen in the app on a copy of the real library;
+waiting for Coby's review before merging.
+- [x] Catalog v3: `images.aspect` (shape of the shown version). Set at import (the thumbnail is
+  made then), when Edit saves an edited thumbnail (crops change the shape), learnt from any
+  thumbnail served, and filled in at startup from thumbnails already on disk.
+- [x] Grid (`ui/lib/library/Grid.svelte`): justified rows, photos edge to edge, rounded corners;
+  name on hover, stars and flags over the photo; selection and focus as rings outside it;
+  ↑/↓ go to the nearest photo in the next row.
+- [ ] Coby tries it: selection, keyboard, drag to album, rating, size slider, grouped by day,
+  a cropped photo after leaving Edit.
 
 ### 2. Crop: aspect ratios as icon buttons
 `ui/lib/edit/CropPanel.svelte`, `ASPECTS` in `ui/lib/edit/crop.ts` (Free, Original, 1:1, 4:5, 5:7,

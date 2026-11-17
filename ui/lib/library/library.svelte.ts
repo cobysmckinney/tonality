@@ -252,6 +252,13 @@ class LibraryState {
     return this.focus !== null ? [this.focus] : [];
   }
 
+  /** A thumbnail showed photo `id`'s shape (width / height): lay it out by that. */
+  learnAspect(id: number, aspect: number) {
+    const row = this.images.find((i) => i.id === id);
+    if (!row || !(aspect > 0) || (row.aspect && Math.abs(row.aspect / aspect - 1) < 0.02)) return;
+    this.patch([id], (i) => ({ ...i, aspect }));
+  }
+
   private patch(ids: number[], f: (i: ImageRow) => ImageRow) {
     const set = new Set(ids);
     this.images = this.images.map((i) => (set.has(i.id) ? f(i) : i));

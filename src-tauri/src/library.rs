@@ -227,6 +227,9 @@ impl Importer<'_> {
             file_size: size as i64,
             source_path: src.to_string_lossy().into_owned(),
             meta,
+            // Its thumbnail now (it'll be wanted as soon as the import shows), and with it the
+            // shape the grid lays it out by.
+            aspect: crate::thumbs::warm(self.store, &dest, &hash),
         };
         match self.catalog.with(|c| c.add_image(self.import, &new)) {
             Ok(Some(id)) => Ok(Outcome::Added(id)),
@@ -398,6 +401,7 @@ pub async fn library_recover(app: AppHandle) -> CmdResult<ImportSummary> {
             let added = (|| -> CmdResult<Option<ImageId>> {
                 let hash = hash_file(&path).map_err(|e| e.to_string())?;
                 let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                let aspect = crate::thumbs::warm(&store, &path, &hash);
                 let new = NewImage {
                     hash,
                     file,
@@ -405,6 +409,7 @@ pub async fn library_recover(app: AppHandle) -> CmdResult<ImportSummary> {
                     file_size: std::fs::metadata(&path).map_err(|e| e.to_string())?.len() as i64,
                     source_path: path.to_string_lossy().into_owned(),
                     meta: tonality_raw::read_meta(&path).ok(),
+                    aspect,
                 };
                 // Same contents as a photo already catalogued: leave the stray copy alone.
                 catalog.with(|c| c.add_image(import, &new))

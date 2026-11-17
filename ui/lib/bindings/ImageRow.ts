@@ -14,4 +14,8 @@ branches: number,
  * HEAD commit, if the image has a history. Changes whenever the shown version does
  * (used to refresh its thumbnail).
  */
-head: number | null, };
+head: number | null, 
+/**
+ * Width / height of the shown version, once a thumbnail of it has been made.
+ */
+aspect: number | null, };

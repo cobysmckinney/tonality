@@ -44,6 +44,35 @@ fn respond(responder: UriSchemeResponder, status: StatusCode, body: Vec<u8>) {
     responder.respond(resp);
 }
 
+/// Width / height of a JPEG, from its header.
+fn jpeg_aspect(bytes: &[u8]) -> Option<f32> {
+    let (w, h) = image::ImageReader::with_format(Cursor::new(bytes), image::ImageFormat::Jpeg).into_dimensions().ok()?;
+    (w > 0 && h > 0).then(|| w as f32 / h as f32)
+}
+
+/// Shapes for photos catalogued before they were recorded, from thumbnails already on disk
+/// (headers only), so the grid doesn't reflow as they load. Photos without one learn theirs
+/// when it's first made.
+pub fn backfill_aspects(store: &Store, catalog: &mut tonality_core::Catalog) {
+    let Ok(missing) = catalog.images_without_aspect() else { return };
+    for (id, hash) in missing {
+        let size = [store.edited_thumb_path(&hash), store.thumb_path(&hash, EDGE)].into_iter().find_map(|p| {
+            let f = std::io::BufReader::new(std::fs::File::open(p).ok()?);
+            image::ImageReader::with_format(f, image::ImageFormat::Jpeg).into_dimensions().ok()
+        });
+        if let Some((w, h)) = size.filter(|&(w, h)| w > 0 && h > 0) {
+            let _ = catalog.set_aspect(id, w as f32 / h as f32, true);
+        }
+    }
+}
+
+/// Make (or find) the cached thumbnail of a just-imported original; its shape, for the grid.
+pub fn warm(store: &Store, original: &Path, hash: &str) -> Option<f32> {
+    let cache = store.thumb_path(hash, EDGE);
+    let bytes = std::fs::read(&cache).ok().or_else(|| generate(original, &cache).ok())?;
+    jpeg_aspect(&bytes)
+}
+
 fn generate(src: &Path, dest: &Path) -> Result<Vec<u8>, String> {
     let img = tonality_raw::thumbnail(src, EDGE).map_err(|e| e.to_string())?;
     let mut buf = Vec::new();
@@ -82,6 +111,10 @@ pub async fn library_save_edited(
         return Err("not a JPEG".into());
     }
     let bytes = bytes.clone();
+    // Edits (a crop, a turn) change the photo's shape: the grid lays it out by this.
+    if let Some(a) = jpeg_aspect(&bytes) {
+        catalog.read(move |c| c.set_aspect(id, a, false)).await?;
+    }
     let (_, hash, _) = catalog.read(move |c| c.image_file(id)).await?;
     let dest = store.edited_thumb_path(&hash);
     crate::blocking(move || {
@@ -116,14 +149,25 @@ pub fn handle<R: Runtime>(ctx: UriSchemeContext<'_, R>, request: Request<Vec<u8>
         // Originals never change (they are content-addressed), so the hash is a stable cache key.
         let cache = store.thumb_path(&hash, EDGE);
         let edited = store.edited_thumb_path(&hash);
+        // Photos catalogued before shapes were recorded learn theirs from the first thumbnail.
+        let learn = |bytes: &[u8]| {
+            if let Some(a) = jpeg_aspect(bytes) {
+                let _ = app.state::<CatalogState>().with(|c| c.set_aspect(id, a, true));
+            }
+        };
         if let Ok(bytes) = std::fs::read(&edited) {
+            learn(&bytes);
             return respond(responder, StatusCode::OK, bytes);
         }
         if let Ok(bytes) = std::fs::read(&cache) {
+            learn(&bytes);
             return respond(responder, StatusCode::OK, bytes);
         }
         match generate(&path, &cache) {
-            Ok(bytes) => respond(responder, StatusCode::OK, bytes),
+            Ok(bytes) => {
+                learn(&bytes);
+                respond(responder, StatusCode::OK, bytes)
+            }
             Err(e) => {
                 eprintln!("[thumb] {}: {e}", path.display());
                 respond(responder, StatusCode::UNPROCESSABLE_ENTITY, e.into_bytes())

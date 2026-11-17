@@ -223,7 +223,8 @@ pub fn run() {
         .setup(|app| {
             let root = Store::resolve(app.path().picture_dir().ok(), app.path().home_dir().ok());
             let store = Store::open(root.clone()).map_err(|e| format!("cannot open library at {root:?}: {e}"))?;
-            let catalog = Catalog::open(store.catalog_path())?;
+            let mut catalog = Catalog::open(store.catalog_path())?;
+            thumbs::backfill_aspects(&store, &mut catalog);
             eprintln!("[tonality] library: {}", store.root().display());
             app.manage(store);
             app.manage(history::CatalogState::new(catalog));
