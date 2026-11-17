@@ -15,42 +15,7 @@ Add new ideas to **Later**, and move finished items to **Done** with the date an
 
 ## Now
 
-### 1. Rebuild the masks UI
-The masks panel (`ui/lib/edit/MaskPanel.svelte`, 648 lines) feels cluttered. Make it more intuitive,
-and show the mask area in red.
-
-What's there today: Done button in a header; a row of Linear/Radial/Brush buttons; a "Detect" grid
-(Subject, Background, Sky, People, Select Object); the mask list (rename, hide, delete); then the
-selected mask's hint, shape settings, AI status, Invert, Amount, luminance range, the "Show overlay"
-checkbox and the adjustment sliders.
-The red overlay already exists, but it's off by default: `mask_overlay` in
-`crates/tonality-render/shaders/develop.wgsl` (red at 55%), toggled by `session.maskOverlay` or `O`.
-
-**Decided (2026-11-17):** the clutter is the settings once a mask exists, and it's hard to see
-what a mask affects. Lightroom-style layout: the masks float over the photo as black-and-white
-thumbnails; the selected mask's settings go in the side panel. Red overlay on by default.
-
-**Status:** built on branch `masks-ui`, seen in the app; waiting for Coby's review before merging.
-- [x] Floating mask list over the photo (`MaskList.svelte`): black-and-white thumbnail of each
-  mask (rendered by the shader's new mask-only mode), "+" menu to create one, hide/delete,
-  double-click to rename, collapsible.
-- [x] Side panel (`MaskPanel.svelte`): the selected mask's name and kind, then collapsible
-  sections: Gradient/Brush/Refine tools, Mask (Amount, Invert), Light, Color, Luminance Range
-  (closed by default). With no masks yet, the ways to make one (`MaskCreate.svelte`).
-- [x] Red overlay on by default, toggled with the checkbox or `O`.
-- [x] Hovering a mask in the list shows its area in red.
-- [x] List keyed by a stable per-mask id instead of position.
-- [x] Masks past the 16 drawn are marked "Not drawn: over 16" in the list.
-- [x] List at the bottom right of the photo (Coby, 2026-11-17); "+" swaps the list for the
-  ways to make a mask.
-- [x] More local adjustments: Hue, Vibrance (Color), Color Tint (hue + amount, keeps
-  brightness), Sharpness (negative softens) and Noise Reduction (Detail). Decided against
-  per-mask tone curve and colour mixer (heavy, rarely used) and frame-wide effects (vignette,
-  grain, lens, crop).
-- [ ] Coby tries it: every kind (linear, radial, brush, each AI preset, lasso object), rename,
-  hide, delete, undo; the floating list in a small window.
-
-### 2. Library cards: image fills the card, no border
+### 1. Library cards: image fills the card, no border
 `ui/lib/library/Grid.svelte`: the image sits inside `.frame` with an 8px inset
 (`max-width: calc(100% - 16px)`), `object-fit: contain` and a grey background, so every
 photo is letterboxed inside a border.
@@ -70,7 +35,7 @@ photo is letterboxed inside a border.
 - [ ] Rejected photos are still dimmed; check placeholders while thumbnails load.
 - [ ] Check scroll performance with a large library.
 
-### 3. Crop: aspect ratios as icon buttons
+### 2. Crop: aspect ratios as icon buttons
 `ui/lib/edit/CropPanel.svelte`, `ASPECTS` in `ui/lib/edit/crop.ts` (Free, Original, 1:1, 4:5, 5:7,
 2:3, 9:16).
 
@@ -82,7 +47,7 @@ photo is letterboxed inside a border.
   the labels read right in both orientations) and 3:4.
 - [ ] Keep `session.cropAspect` and the highlighted button in sync (regression check).
 
-### 4. Logo and brand
+### 3. Logo and brand
 **Open questions**
 - What should tonality look and feel like? Words, references, colors, and any wordmark ideas.
 
@@ -92,7 +57,7 @@ photo is letterboxed inside a border.
 - [ ] Use it in the app: library header or title area, and the about/empty state.
 - [ ] Optional: an accent color that goes with it, set in the design tokens.
 
-### 5. Reset a photo's history
+### 4. Reset a photo's history
 A single action that takes a photo back to as-shot and removes **all** its edit history and
 branches. Can't be undone.
 
@@ -108,7 +73,7 @@ branches. Can't be undone.
   confirmation dialog that names what will be lost.
 - [ ] Make sure an open Edit session reloads cleanly afterwards.
 
-### 6. AgX done properly (the only tone mapping)
+### 5. AgX done properly (the only tone mapping)
 AgX is already the display transform (`agx()` in `develop.wgsl`), but it's an approximation:
 - The sigmoid is a 6th-order polynomial fit (from the "minimal AgX" approximations), not
   AgX's actual curve.
@@ -146,7 +111,7 @@ and the histogram, so a fix lands everywhere at once.
   sample photos. Note in the commit that existing edits will look different.
 - [ ] Remove any wording or code suggesting other tone mappers.
 
-### 7. Texture, Clarity and Dehaze (global and on masks)
+### 6. Texture, Clarity and Dehaze (global and on masks)
 The most used local adjustments in other editors, and missing globally too. Each compares a
 pixel with a blurred copy of its neighbourhood, so they need a multi-scale blur (or a
 precomputed blurred pyramid) rather than a per-pixel formula.
@@ -158,7 +123,7 @@ precomputed blurred pyramid) rather than a per-pixel formula.
 - [ ] Global sliders (Effects or a new Presence section) and the same three on masks.
 - [ ] Watch preview speed: blurs at full resolution while zoomed, and at tile edges in export.
 
-### 8. Leftovers from the code review
+### 7. Leftovers from the code review
 - [ ] Try in the app: the content security policy (watch the console for blocked loads), the
   white balance presets (does "Fluorescent" fit?), the library thumbnail after leaving Edit
   quickly, and switching photos quickly with masks.
@@ -179,5 +144,6 @@ precomputed blurred pyramid) rather than a per-pixel formula.
 _(new ideas go here)_
 
 ## Done
+- 2026-11-17 — Masks rebuilt: floating list with black-and-white mask thumbnails (bottom right), settings in the side panel, red overlay on by default, hover to preview; local Hue, Vibrance, Color Tint, Sharpness and Noise Reduction (`masks-ui`).
 - 2026-11-10 — Code review fixes (24 commits, `999a6a6`).
 - 2026-11-10 — White balance presets: Daylight, Cloudy, Shade, Tungsten, Fluorescent, Flash (`5c95747`).
