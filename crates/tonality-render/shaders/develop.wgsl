@@ -52,7 +52,7 @@ struct View {
     xform: vec4<f32>,   // xy: scale, zw: offset — places the quad in clip space
     quad: vec4<f32>,    // the part of the frame the quad shows
     tex: vec4<f32>,     // the part of the source the bound texture holds
-    frame: vec4<f32>,   // xy: full-resolution source size in pixels; z: mask overlay (preview)
+    frame: vec4<f32>,   // xy: full-resolution source size in pixels; z: mask overlay, w: overlay mode (preview)
 };
 
 @group(0) @binding(0) var<uniform> params: Params;
@@ -70,7 +70,7 @@ struct VsOut {
     @location(0) f: vec2<f32>,                       // frame coordinates
     @location(1) @interpolate(flat) tex: vec4<f32>,  // view.tex
     @location(2) @interpolate(flat) px: vec4<f32>,   // xy: texture units per source pixel; zw: source uv per pixel
-    @location(3) @interpolate(flat) overlay: f32,    // preview: 1 + index of the mask to show, or 0
+    @location(3) @interpolate(flat) overlay: vec2<f32>, // preview: x: 1 + index of the mask to show, or 0; y: 1 = the mask alone, in black and white
 };
 
 @vertex
@@ -87,7 +87,7 @@ fn vs_main(@builtin(vertex_index) i: u32) -> VsOut {
     out.f = view.quad.xy + local * view.quad.zw;
     out.tex = view.tex;
     out.px = vec4<f32>(1.0 / (view.frame.xy * view.tex.zw), 1.0 / view.frame.xy);
-    out.overlay = view.frame.z;
+    out.overlay = view.frame.zw;
     return out;
 }
 
@@ -474,16 +474,12 @@ fn develop(cam: vec3<f32>, f: vec2<f32>, uv: vec2<f32>, aspect: f32) -> vec3<f32
     return clamp(c, vec3<f32>(0.0), vec3<f32>(1.0));
 }
 
-// Preview only: tint what the selected mask (view.frame.z - 1) selects.
-fn mask_overlay(c: vec3<f32>, f: vec2<f32>, uv: vec2<f32>, cam: vec3<f32>, which: f32) -> vec3<f32> {
-    if (which < 0.5) {
-        return c;
-    }
+// Preview only: how much mask `which - 1` (its shader index) selects here.
+fn overlay_mask(uv: vec2<f32>, cam: vec3<f32>, which: f32) -> f32 {
     var rgb = vec3<f32>(dot(params.cam0.xyz, cam), dot(params.cam1.xyz, cam), dot(params.cam2.xyz, cam));
     rgb = max(rgb, vec3<f32>(0.0)) * params.light0.x;
     let lum = srgb_encode(agx(vec3<f32>(max(dot(rgb, REC2020_LUMA), 0.0)))).y;
-    let m = clamp(mask_value(u32(which - 1.0), uv, lum), 0.0, 1.0);
-    return mix(c, vec3<f32>(1.0, 0.18, 0.12), 0.55 * m);
+    return clamp(mask_value(u32(which - 1.0), uv, lum), 0.0, 1.0);
 }
 
 // ---- Lens correction ---------------------------------------------------------------------------
@@ -536,6 +532,13 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         }
         cam = cam * gain;
     }
-    let c = develop(cam, in.f, uv, params.geo0.w / params.geo1.w);
-    return vec4<f32>(mask_overlay(c, in.f, uv, cam, in.overlay), 1.0);
+    if (in.overlay.x > 0.5 && in.overlay.y > 0.5) {
+        // The mask alone (mask thumbnails): white where it applies, black where it doesn't.
+        return vec4<f32>(vec3<f32>(overlay_mask(uv, cam, in.overlay.x)), 1.0);
+    }
+    var c = develop(cam, in.f, uv, params.geo0.w / params.geo1.w);
+    if (in.overlay.x > 0.5) {
+        c = mix(c, vec3<f32>(0.95, 0.08, 0.08), 0.5 * overlay_mask(uv, cam, in.overlay.x));
+    }
+    return vec4<f32>(c, 1.0);
 }

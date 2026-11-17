@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, untrack } from "svelte";
   import { api } from "$lib/api";
   import type { EditState } from "$lib/bindings/EditState";
   import type { ImageInfo } from "$lib/bindings/ImageInfo";
@@ -10,7 +10,7 @@
   import { FULL, turnedSize } from "./crop";
   import MaskOverlay from "./MaskOverlay.svelte";
   import LassoOverlay from "./LassoOverlay.svelte";
-  import { brushKey, brushLayer, maskSize, masksOf, shaderIndex, withoutStrokes, type BrushLayers } from "./masks";
+  import { MASK_THUMB_EDGE, brushKey, brushLayer, maskSize, masksOf, shaderIndex, withoutStrokes, type BrushLayers } from "./masks";
   import { session } from "./session.svelte";
   import type { Mask } from "$lib/bindings/Mask";
   import type { Stroke } from "$lib/bindings/Stroke";
@@ -272,6 +272,7 @@
     if (brush?.missing?.length) session.detectMissing(brush.missing);
     r.setParams(params);
     session.framing = r.framing;
+    refreshMaskThumbs();
   });
   const side = pipeline((r, params, curve, brush) => {
     if (!comparing) return;
@@ -288,9 +289,35 @@
   $effect(() => {
     const r = renderer;
     if (!r) return;
+    // Hovering a mask in the list shows its area even with the overlay off.
+    const hover = session.masking && !before ? session.maskHover : null;
+    if (hover !== null && hover < masks.length) {
+      r.setOverlay(shaderIndex(masks, hover));
+      return;
+    }
     const show = selected !== null && (session.maskOverlay || interacting);
     r.setOverlay(show && selected !== null ? shaderIndex(masks, selected) : null);
   });
+
+  // Black-and-white mask thumbnails for the mask list, redrawn shortly after the params settle.
+  let thumbTimer: ReturnType<typeof setTimeout> | undefined;
+  function refreshMaskThumbs() {
+    clearTimeout(thumbTimer);
+    if (!session.masking) return;
+    thumbTimer = setTimeout(() => {
+      const r = renderer;
+      if (!r || !session.masking || before) return;
+      const ms = masksOf(edit);
+      const idx = ms.map((_, i) => shaderIndex(ms, i));
+      const drawn = r.renderMasks(idx.filter((v) => v !== null), MASK_THUMB_EDGE) ?? [];
+      let k = 0;
+      session.maskThumbs = idx.map((v) => (v === null ? null : (drawn[k++] ?? null)));
+    }, 120);
+  }
+  $effect(() => {
+    if (session.masking && renderer) untrack(refreshMaskThumbs);
+  });
+  onMount(() => () => clearTimeout(thumbTimer));
 
   function setMask(i: number, m: Mask) {
     if (!edit.masks) return;

@@ -50,8 +50,12 @@ class EditSession {
   /** Mask mode: the mask list replaces the adjustments, and the selected mask has handles. */
   masking = $state(false);
   maskIndex = $state<number | null>(null);
-  /** Tint the selected mask's area (O). */
-  maskOverlay = $state(false);
+  /** Tint the selected mask's area red (O). */
+  maskOverlay = $state(true);
+  /** The mask the pointer is over in the mask list: its area shows while hovering. */
+  maskHover = $state<number | null>(null);
+  /** Each mask on its own in black and white (null: hidden, so not drawn), set by Canvas. */
+  maskThumbs = $state.raw<(ImageData | null)[]>([]);
   brush = $state<BrushTool>({ size: 0.04, feather: 0.6, strength: 1, erase: false });
   /** Detections, by `aiKey`. */
   aiStatus = new SvelteMap<string, AiStatus>();
@@ -95,6 +99,7 @@ class EditSession {
   stopMasks() {
     this.masking = false;
     this.lassoing = null;
+    this.maskHover = null;
   }
 
   addMask(kind: MaskKind) {

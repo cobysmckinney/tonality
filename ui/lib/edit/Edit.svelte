@@ -5,6 +5,7 @@
   import ApplyDialog from "$lib/history/ApplyDialog.svelte";
   import CropPanel from "./CropPanel.svelte";
   import MaskPanel from "./MaskPanel.svelte";
+  import MaskList from "./MaskList.svelte";
   import Filmstrip from "./Filmstrip.svelte";
   import { turn } from "./crop";
   import { library } from "$lib/library/library.svelte";
@@ -181,6 +182,9 @@
           onlevel={() => (level = false)}
           onhistogram={(h) => (histogram = h)}
         />
+        {#if session.masking && session.masks.length && !session.cropping}
+          <MaskList />
+        {/if}
         <div class="caption">
           <span>{session.image.name}</span>
           <span class="dim">{session.image.make} {session.image.model}</span>

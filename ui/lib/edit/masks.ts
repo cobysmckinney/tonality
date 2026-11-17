@@ -49,6 +49,30 @@ export const AI_LABEL: Record<AiPreset, string> = {
   object: "Object",
 };
 
+/** 16×16 stroke icons for each kind of mask. */
+export const SHAPE_ICON: Record<MaskShape["kind"], string> = {
+  ai: "M8 1.5l1.6 4.9 4.9 1.6-4.9 1.6L8 14.5l-1.6-4.9L1.5 8l4.9-1.6Z",
+  linear: "M2 4h12M2 8h12M2 12h12",
+  radial: "M8 2.5a5.5 4.5 0 1 0 0.01 0Z",
+  brush: "M3 13c2 0 3-1 3-3l6-6.5a1.4 1.4 0 0 0-2-2L4 7.5c-2 0-3 1-3 3",
+};
+export const AI_ICON: Record<AiPreset, string> = {
+  subject: "M8 2.5a2.6 2.6 0 1 0 .01 0ZM3 14c0-3 2.2-5 5-5s5 2 5 5",
+  background: "M2 2h12v12H2ZM8 5a2 2 0 1 0 .01 0ZM4.5 14c.4-2.2 1.8-3.5 3.5-3.5s3.1 1.3 3.5 3.5",
+  sky: "M4 11a3 3 0 0 1 .4-6A4 4 0 0 1 12 6a2.5 2.5 0 0 1 0 5ZM2 14h12",
+  people: "M5.5 3a2 2 0 1 0 .01 0ZM11 4a1.7 1.7 0 1 0 .01 0ZM1.5 13c0-2.5 1.8-4 4-4s4 1.5 4 4M9.5 9.3c.5-.2 1-.3 1.5-.3 2 0 3.5 1.3 3.5 3.5",
+  object: "M8 2c3.6 0 6 2.4 6 5.5S11.4 13 8 13s-6-2.5-6-5.5c0-1 .3-2 .9-2.8M8 6v3M6.5 7.5h3",
+};
+
+/** A stable key for a mask object, for keyed lists (masks have no id of their own). */
+const maskIds = new WeakMap<object, number>();
+let nextMaskId = 0;
+export function maskId(m: Mask): number {
+  let id = maskIds.get(m);
+  if (id === undefined) maskIds.set(m, (id = ++nextMaskId));
+  return id;
+}
+
 /** A new mask's name: "Radial 2", "Sky 1" etc. */
 export function nextName(masks: Mask[], kind: MaskKind | AiPreset): string {
   const label = kind in KIND_LABEL ? KIND_LABEL[kind as MaskKind] : AI_LABEL[kind as AiPreset];
@@ -191,6 +215,9 @@ export function withoutStrokes(state: EditState): EditState {
     ),
   };
 }
+
+/** Long edge of the black-and-white mask thumbnails, px (drawn at about half that). */
+export const MASK_THUMB_EDGE = 112;
 
 /** Mirrors `MASK_EDGE` / `mask_size` in tonality-core: the brush raster size. */
 export const MASK_EDGE = 1024;

@@ -293,6 +293,57 @@ export class PreviewRenderer {
     return out;
   }
 
+  /**
+   * Masks `indices` (shader indices) on their own, white where they apply, as greyscale images
+   * of the framed photo at `edge` px on the long side. Uses the current params and brush layers.
+   */
+  renderMasks(indices: number[], edge: number): ImageData[] | null {
+    const gl = this.gl;
+    if (!this.texture || !this.hasParams || !indices.length) return null;
+    const o = this.out;
+    const s = edge / Math.max(o.w, o.h, 1);
+    const w = Math.max(1, Math.round(o.w * s));
+    const h = Math.max(1, Math.round(o.h * s));
+    const tex = gl.createTexture()!;
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.texStorage2D(gl.TEXTURE_2D, 1, gl.RGBA8, w, h);
+    const fbo = gl.createFramebuffer()!;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+    gl.viewport(0, 0, w, h);
+    gl.useProgram(this.program);
+    gl.bindBufferBase(gl.UNIFORM_BUFFER, PARAMS_BINDING, this.paramsUbo);
+    gl.bindBufferBase(gl.UNIFORM_BUFFER, VIEW_BINDING, this.viewUbo);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, this.texture);
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, this.curve);
+    gl.activeTexture(gl.TEXTURE2);
+    gl.bindTexture(gl.TEXTURE_2D_ARRAY, this.brush.main.texture);
+    gl.bindVertexArray(this.vao);
+    const whole = { x: 0, y: 0, w: 1, h: 1 };
+    const px = new Uint8Array(w * h * 4);
+    const out: ImageData[] = [];
+    for (const i of indices) {
+      gl.bindBuffer(gl.UNIFORM_BUFFER, this.viewUbo);
+      gl.bufferData(gl.UNIFORM_BUFFER, this.viewBlock(1, 1, whole, whole, whole, i + 1, true), gl.DYNAMIC_DRAW);
+      gl.clearColor(0, 0, 0, 1);
+      gl.clear(gl.COLOR_BUFFER_BIT);
+      gl.drawArrays(gl.TRIANGLES, 0, 6);
+      gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, px);
+      // GL rows run bottom-up.
+      const img = new ImageData(w, h);
+      const row = w * 4;
+      for (let y = 0; y < h; y++) img.data.set(px.subarray((h - 1 - y) * row, (h - y) * row), y * row);
+      out.push(img);
+    }
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.deleteFramebuffer(fbo);
+    gl.deleteTexture(tex);
+    this.requestDraw();
+    return out;
+  }
+
   setImage(width: number, height: number, rgb16f: Uint16Array, fullW = width, fullH = height) {
     const gl = this.gl;
     if (this.texture) gl.deleteTexture(this.texture);
@@ -465,7 +516,7 @@ export class PreviewRenderer {
   }
 
   /** View uniforms (xform, quad, tex, frame) to draw `quad` of the frame from a texture holding `tex` of the source. */
-  private viewBlock(cw: number, ch: number, img: { x: number; y: number; w: number; h: number }, quad: Rect, tex: Rect, overlay = 0) {
+  private viewBlock(cw: number, ch: number, img: { x: number; y: number; w: number; h: number }, quad: Rect, tex: Rect, overlay = 0, maskOnly = false) {
     const x = img.x + quad.x * img.w;
     const y = img.y + quad.y * img.h;
     const w = quad.w * img.w;
@@ -474,7 +525,7 @@ export class PreviewRenderer {
       w / cw, h / ch, ((x + w / 2) / cw) * 2 - 1, 1 - ((y + h / 2) / ch) * 2,
       quad.x, quad.y, quad.w, quad.h,
       tex.x, tex.y, tex.w, tex.h,
-      this.fullW, this.fullH, overlay, 0,
+      this.fullW, this.fullH, overlay, maskOnly ? 1 : 0,
     ]);
   }
 

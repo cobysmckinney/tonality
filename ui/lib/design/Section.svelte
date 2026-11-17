@@ -1,6 +1,7 @@
 <!--
   Collapsible panel section. Open/closed is remembered per title.
   - `edited` shows a dot next to the title; with `onreset`, a reset button appears on hover.
+  - `storeKey` remembers open/closed under its own name (two panels with a "Light" section).
 -->
 <script lang="ts">
   import type { Snippet } from "svelte";
@@ -10,11 +11,12 @@
     open?: boolean;
     edited?: boolean;
     onreset?: () => void;
+    storeKey?: string;
     children: Snippet;
   }
-  let { title, open = $bindable(true), edited = false, onreset, children }: Props = $props();
+  let { title, open = $bindable(true), edited = false, onreset, storeKey, children }: Props = $props();
 
-  const key = () => `tonality.section.${title}`;
+  const key = () => `tonality.section.${storeKey ?? title}`;
   try {
     const v = localStorage.getItem(key());
     if (v !== null) open = v === "1";
