@@ -15,22 +15,7 @@ Add new ideas to **Later**, and move finished items to **Done** with the date an
 
 ## Now
 
-### 1. Library cards: image fills the card, no border
-**Decided (2026-11-17):** justified rows: each card takes its photo's own shape and rows
-stretch to the full width, nothing cropped.
-
-**Status:** built on branch `library-cards`, seen in the app on a copy of the real library;
-waiting for Coby's review before merging.
-- [x] Catalog v3: `images.aspect` (shape of the shown version). Set at import (the thumbnail is
-  made then), when Edit saves an edited thumbnail (crops change the shape), learnt from any
-  thumbnail served, and filled in at startup from thumbnails already on disk.
-- [x] Grid (`ui/lib/library/Grid.svelte`): justified rows, photos edge to edge, rounded corners;
-  name on hover, stars and flags over the photo; selection and focus as rings outside it;
-  ↑/↓ go to the nearest photo in the next row.
-- [ ] Coby tries it: selection, keyboard, drag to album, rating, size slider, grouped by day,
-  a cropped photo after leaving Edit.
-
-### 2. Crop: aspect ratios as icon buttons
+### 1. Crop: aspect ratios as icon buttons
 `ui/lib/edit/CropPanel.svelte`, `ASPECTS` in `ui/lib/edit/crop.ts` (Free, Original, 1:1, 4:5, 5:7,
 2:3, 9:16).
 
@@ -42,7 +27,7 @@ waiting for Coby's review before merging.
   the labels read right in both orientations) and 3:4.
 - [ ] Keep `session.cropAspect` and the highlighted button in sync (regression check).
 
-### 3. Logo and brand
+### 2. Logo and brand
 **Open questions**
 - What should tonality look and feel like? Words, references, colors, and any wordmark ideas.
 
@@ -52,7 +37,7 @@ waiting for Coby's review before merging.
 - [ ] Use it in the app: library header or title area, and the about/empty state.
 - [ ] Optional: an accent color that goes with it, set in the design tokens.
 
-### 4. Reset a photo's history
+### 3. Reset a photo's history
 A single action that takes a photo back to as-shot and removes **all** its edit history and
 branches. Can't be undone.
 
@@ -68,7 +53,7 @@ branches. Can't be undone.
   confirmation dialog that names what will be lost.
 - [ ] Make sure an open Edit session reloads cleanly afterwards.
 
-### 5. AgX done properly (the only tone mapping)
+### 4. AgX done properly (the only tone mapping)
 AgX is already the display transform (`agx()` in `develop.wgsl`), but it's an approximation:
 - The sigmoid is a 6th-order polynomial fit (from the "minimal AgX" approximations), not
   AgX's actual curve.
@@ -106,7 +91,7 @@ and the histogram, so a fix lands everywhere at once.
   sample photos. Note in the commit that existing edits will look different.
 - [ ] Remove any wording or code suggesting other tone mappers.
 
-### 6. Texture, Clarity and Dehaze (global and on masks)
+### 5. Texture, Clarity and Dehaze (global and on masks)
 The most used local adjustments in other editors, and missing globally too. Each compares a
 pixel with a blurred copy of its neighbourhood, so they need a multi-scale blur (or a
 precomputed blurred pyramid) rather than a per-pixel formula.
@@ -118,7 +103,7 @@ precomputed blurred pyramid) rather than a per-pixel formula.
 - [ ] Global sliders (Effects or a new Presence section) and the same three on masks.
 - [ ] Watch preview speed: blurs at full resolution while zoomed, and at tile edges in export.
 
-### 7. Leftovers from the code review
+### 6. Leftovers from the code review
 - [ ] Try in the app: the content security policy (watch the console for blocked loads), the
   white balance presets (does "Fluorescent" fit?), the library thumbnail after leaving Edit
   quickly, and switching photos quickly with masks.
@@ -139,6 +124,7 @@ precomputed blurred pyramid) rather than a per-pixel formula.
 _(new ideas go here)_
 
 ## Done
+- 2026-11-17 — Library: justified rows, photos edge to edge in their own shape; catalog v3 records each photo's shape (`library-cards`).
 - 2026-11-17 — Masks rebuilt: floating list with black-and-white mask thumbnails (bottom right), settings in the side panel, red overlay on by default, hover to preview; local Hue, Vibrance, Color Tint, Sharpness and Noise Reduction (`masks-ui`).
 - 2026-11-10 — Code review fixes (24 commits, `999a6a6`).
 - 2026-11-10 — White balance presets: Daylight, Cloudy, Shade, Tungsten, Fluorescent, Flash (`5c95747`).
