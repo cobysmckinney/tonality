@@ -15,18 +15,12 @@ Add new ideas to **Later**, and move finished items to **Done** with the date an
 
 ## Now
 
-### 1. Crop: aspect ratios as icon buttons
-**Status:** built on branch `crop-buttons`, seen in the app; waiting for Coby's review.
-- [x] Each preset is a button with an icon drawn in its shape (dashed for Free, a little
-  landscape for Original), label underneath, 4 × 2 grid; 3:4 added.
-- [x] Landscape / portrait switch (icons); labels read the way round the crop will be
-  (5:4 in landscape); follows rotation with [ ].
-- [x] Rotate left/right and Flip have icons.
-- [ ] Coby tries it.
+### 1. Logo and brand
+**Direction (Coby):** a single lowercase `t` in an italic/script face that keeps the tail.
+Candidates rendered from OFL fonts (outlines become paths, so no font ships with the app).
 
-### 2. Logo and brand
 **Open questions**
-- What should tonality look and feel like? Words, references, colors, and any wordmark ideas.
+- Which `t` (and does the wordmark use the same face)?
 
 **Plan**
 - [ ] Two or three directions for a mark plus the "tonality" wordmark, made as SVG; pick one.
@@ -34,7 +28,7 @@ Add new ideas to **Later**, and move finished items to **Done** with the date an
 - [ ] Use it in the app: library header or title area, and the about/empty state.
 - [ ] Optional: an accent color that goes with it, set in the design tokens.
 
-### 3. Reset a photo's history
+### 2. Reset a photo's history
 A single action that takes a photo back to as-shot and removes **all** its edit history and
 branches. Can't be undone.
 
@@ -50,7 +44,7 @@ branches. Can't be undone.
   confirmation dialog that names what will be lost.
 - [ ] Make sure an open Edit session reloads cleanly afterwards.
 
-### 4. AgX done properly (the only tone mapping)
+### 3. AgX done properly (the only tone mapping)
 AgX is already the display transform (`agx()` in `develop.wgsl`), but it's an approximation:
 - The sigmoid is a 6th-order polynomial fit (from the "minimal AgX" approximations), not
   AgX's actual curve.
@@ -88,7 +82,7 @@ and the histogram, so a fix lands everywhere at once.
   sample photos. Note in the commit that existing edits will look different.
 - [ ] Remove any wording or code suggesting other tone mappers.
 
-### 5. Texture, Clarity and Dehaze (global and on masks)
+### 4. Texture, Clarity and Dehaze (global and on masks)
 The most used local adjustments in other editors, and missing globally too. Each compares a
 pixel with a blurred copy of its neighbourhood, so they need a multi-scale blur (or a
 precomputed blurred pyramid) rather than a per-pixel formula.
@@ -100,7 +94,7 @@ precomputed blurred pyramid) rather than a per-pixel formula.
 - [ ] Global sliders (Effects or a new Presence section) and the same three on masks.
 - [ ] Watch preview speed: blurs at full resolution while zoomed, and at tile edges in export.
 
-### 6. Leftovers from the code review
+### 5. Leftovers from the code review
 - [ ] Try in the app: the content security policy (watch the console for blocked loads), the
   white balance presets (does "Fluorescent" fit?), the library thumbnail after leaving Edit
   quickly, and switching photos quickly with masks.
@@ -121,6 +115,7 @@ precomputed blurred pyramid) rather than a per-pixel formula.
 _(new ideas go here)_
 
 ## Done
+- 2026-11-17 — Crop: aspect presets as icon buttons, orientation switch, 3:4; sidecar merge no longer duplicates histories when a new setting is added (`crop-buttons`, `7fbec47`).
 - 2026-11-17 — Library: justified rows, photos edge to edge in their own shape; catalog v3 records each photo's shape (`library-cards`).
 - 2026-11-17 — Masks rebuilt: floating list with black-and-white mask thumbnails (bottom right), settings in the side panel, red overlay on by default, hover to preview; local Hue, Vibrance, Color Tint, Sharpness and Noise Reduction (`masks-ui`).
 - 2026-11-10 — Code review fixes (24 commits, `999a6a6`).
