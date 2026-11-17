@@ -108,6 +108,7 @@ export const ASPECTS: { label: string; ratio: number | "original" | null }[] = [
   { label: "Original", ratio: "original" },
   { label: "1:1", ratio: 1 },
   { label: "4:5", ratio: 4 / 5 },
+  { label: "3:4", ratio: 3 / 4 },
   { label: "5:7", ratio: 5 / 7 },
   { label: "2:3", ratio: 2 / 3 },
   { label: "9:16", ratio: 9 / 16 },

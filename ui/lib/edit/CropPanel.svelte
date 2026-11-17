@@ -5,6 +5,7 @@
   import Slider from "$lib/design/Slider.svelte";
   import { ASPECTS, FULL, flip, shrinkToFit, turn, turnedSize, withAspect, type Rect } from "./crop";
   import { session } from "./session.svelte";
+  import { untrack } from "svelte";
 
   interface Props {
     image: ImageInfo;
@@ -26,7 +27,37 @@
 
   // ---- aspect ----
   let preset = $state<string>("Free");
-  let portrait = $state(false);
+  // Starts as the crop box is, so the icons and labels match what's on screen.
+  let portrait = $state(untrack(() => {
+    const [tw, th] = turnedSize(session.edit!.crop, image.fullWidth, image.fullHeight);
+    const r = session.edit!.crop.rect;
+    return r[2] * tw < r[3] * th;
+  }));
+  // Rotating with [ ] (in Edit) turns the locked aspect: follow it.
+  $effect(() => {
+    const a = session.cropAspect;
+    if (a !== null && a !== 1) portrait = a < 1;
+  });
+
+  /** Presets with no orientation of their own. */
+  const square = (label: string) => label === "Free" || label === "1:1";
+
+  /** "4:5" shown the way round it will crop: "5:4" in landscape. */
+  function labelFor(label: string, port: boolean): string {
+    const m = label.match(/^(\d+):(\d+)$/);
+    if (!m) return label;
+    const [a, b] = [Number(m[1]), Number(m[2])];
+    const [lo, hi] = [Math.min(a, b), Math.max(a, b)];
+    return port ? `${lo}:${hi}` : `${hi}:${lo}`;
+  }
+
+  /** The icon's rectangle (in a 28 × 28 box) for a preset, the way round it will crop. */
+  function iconRect(label: string, port: boolean) {
+    const r = label === "Free" ? 1.4 : (ratioFor(label, port) ?? 1);
+    const m = 20;
+    const [w, h] = r >= 1 ? [m, m / r] : [m * r, m];
+    return { x: 14 - w / 2, y: 14 - h / 2, w, h };
+  }
 
   function ratioFor(label: string, port: boolean): number | null {
     const a = ASPECTS.find((x) => x.label === label)!;
@@ -88,12 +119,51 @@
   </header>
 
   <div class="group">
-    <span class="sub">Aspect</span>
-    <div class="aspects">
+    <div class="aspect-head">
+      <span class="sub">Aspect</span>
+      <div class="orient" role="radiogroup" aria-label="Orientation">
+        <button
+          role="radio"
+          aria-checked={!portrait}
+          class:active={!portrait}
+          onclick={() => portrait && swap()}
+          disabled={square(preset)}
+          title="Landscape"
+        >
+          <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><rect x="2" y="4.5" width="12" height="7" rx="1.2" /></svg>
+        </button>
+        <button
+          role="radio"
+          aria-checked={portrait}
+          class:active={portrait}
+          onclick={() => !portrait && swap()}
+          disabled={square(preset)}
+          title="Portrait"
+        >
+          <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><rect x="4.5" y="2" width="7" height="12" rx="1.2" /></svg>
+        </button>
+      </div>
+    </div>
+    <div class="aspects" role="radiogroup" aria-label="Aspect ratio">
       {#each ASPECTS as a (a.label)}
-        <button class:active={preset === a.label} onclick={() => choose(a.label)}>{a.label}</button>
+        {@const r = iconRect(a.label, portrait)}
+        <button
+          role="radio"
+          aria-checked={preset === a.label}
+          class:active={preset === a.label}
+          onclick={() => choose(a.label)}
+          title={a.label === "Free" ? "Any shape" : a.label === "Original" ? "The photo's own shape" : `${labelFor(a.label, portrait)}`}
+        >
+          <svg viewBox="0 0 28 28" width="28" height="28" aria-hidden="true">
+            <rect x={r.x} y={r.y} width={r.w} height={r.h} rx="1.5" class:dashed={a.label === "Free"} />
+            {#if a.label === "Original"}
+              <!-- A little landscape: the photo as shot. -->
+              <path d="M{r.x + 2.5} {r.y + r.h - 2.5}l{r.w * 0.28} {-r.h * 0.38}l{r.w * 0.18} {r.h * 0.2}l{r.w * 0.14} {-r.h * 0.14}l{r.w * 0.22} {r.h * 0.32}" />
+            {/if}
+          </svg>
+          <span>{labelFor(a.label, portrait)}</span>
+        </button>
       {/each}
-      <button class="swap" onclick={swap} disabled={preset === "Free"} title="Swap portrait / landscape">⇄</button>
     </div>
   </div>
 
@@ -120,9 +190,18 @@
   </div>
 
   <div class="group row">
-    <button class="tool" onclick={() => rotate(-1)} title="Rotate left ([)">⟲ Left</button>
-    <button class="tool" onclick={() => rotate(1)} title="Rotate right (])">⟳ Right</button>
-    <button class="tool" onclick={() => set(flip(crop))} title="Flip horizontally">⇋ Flip</button>
+    <button class="tool icon" onclick={() => rotate(-1)} title="Rotate left ([)">
+      <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"><path d="M3.5 6.5A5 5 0 1 1 4 11M3.5 2.5v4h4" /></svg>
+      Left
+    </button>
+    <button class="tool icon" onclick={() => rotate(1)} title="Rotate right (])">
+      <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"><path d="M12.5 6.5A5 5 0 1 0 12 11M12.5 2.5v4h-4" /></svg>
+      Right
+    </button>
+    <button class="tool icon" onclick={() => set(flip(crop))} title="Flip horizontally">
+      <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"><path d="M8 1.5v13M6 4 2 12h4ZM10 4l4 8h-4Z" /></svg>
+      Flip
+    </button>
   </div>
 
   <p class="hint">Drag the corners or edges to crop, inside to move, outside to rotate.</p>
@@ -167,26 +246,77 @@
     letter-spacing: 0.06em;
     color: var(--text-2);
   }
-  .aspects {
-    display: grid;
-    grid-template-columns: repeat(4, 1fr);
+  svg {
+    flex: none;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.4;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+  .aspect-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .orient {
+    display: flex;
     gap: 2px;
     padding: 2px;
     border-radius: var(--radius-m);
     background: var(--bg-0);
   }
-  .aspects button {
-    padding: 4px 0;
+  .orient button {
+    display: grid;
+    place-items: center;
+    width: 30px;
+    height: 24px;
     border-radius: var(--radius-s);
-    font-size: var(--fs-xs);
     color: var(--text-2);
   }
-  .aspects button.active {
+  .orient button.active {
     background: var(--bg-3);
     color: var(--text-0);
   }
-  .aspects button:disabled {
+  .orient button:disabled {
     opacity: 0.35;
+  }
+  .aspects {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: var(--space-1);
+  }
+  .aspects button {
+    display: grid;
+    justify-items: center;
+    gap: 2px;
+    padding: 8px 0 6px;
+    border-radius: var(--radius-m);
+    background: var(--bg-2);
+    font-size: var(--fs-xs);
+    color: var(--text-2);
+    transition: background 100ms var(--ease);
+  }
+  .aspects button:hover {
+    background: var(--bg-3);
+    color: var(--text-1);
+  }
+  .aspects button.active {
+    background: var(--bg-4, var(--line-strong));
+    color: var(--text-0);
+    box-shadow: inset 0 0 0 1px var(--line-strong);
+  }
+  .aspects svg rect {
+    transition: all 150ms var(--ease);
+  }
+  .aspects .dashed {
+    stroke-dasharray: 2.5 2;
+  }
+  .tool.icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
   }
   .tool {
     padding: 5px 8px;
