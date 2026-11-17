@@ -7,6 +7,7 @@
   import { library } from "$lib/library/library.svelte";
   import ExportDialog from "$lib/export/ExportDialog.svelte";
   import { exportCurrent } from "$lib/export/targets";
+  import Splash from "$lib/Splash.svelte";
 
   // Dev hooks: TONALITY_OPEN imports and opens a file; TONALITY_IMPORT imports a folder.
   api.startupPath().then((p) => {
@@ -68,6 +69,7 @@
   </main>
 </div>
 <ExportDialog />
+{#if app.splash}<Splash />{/if}
 
 <style>
   .shell {

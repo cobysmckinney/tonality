@@ -12,7 +12,7 @@
 
 <header>
   <div class="left">
-    <div class="brand"><Logo height={21} label="tonality" /></div>
+    <div class="brand" data-brand-wordmark style:visibility={app.splash ? "hidden" : null}><Logo height={21} label="tonality" /></div>
     {#if app.mode === "edit"}<BranchMenu />{/if}
   </div>
 

@@ -21,6 +21,8 @@ Add new ideas to **Later**, and move finished items to **Done** with the date an
   wordmark "tonality" in the same face (Coby's pick, 2026-11-17).
 - [x] App icons generated from `src-tauri/icons/icon.svg` (`scripts/brand.py` regenerates it all).
 - [x] In the app: wordmark in the top bar, mark in the empty library.
+- [x] Startup animation: the wordmark traces itself, fills, and flies to the top bar
+  (`ui/lib/Splash.svelte`; skipped with a click or key, or under reduced motion).
 - [ ] Coby tries it. The UI accent stays colorless on purpose (color lives in the photo).
 
 ### 2. Reset a photo's history
