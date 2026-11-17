@@ -70,7 +70,7 @@
   }
 
   function onWindowPointerDown(e: PointerEvent) {
-    if (adding && !(e.target instanceof Element && e.target.closest(".add-wrap"))) adding = false;
+    if (adding && !(e.target instanceof Element && e.target.closest(".float"))) adding = false;
   }
   function onWindowKey(e: KeyboardEvent) {
     if (adding && e.key === "Escape") {
@@ -94,19 +94,19 @@
         class="icon"
         class:on={adding}
         onclick={() => (adding = !adding)}
-        disabled={masks.length >= MAX_MASKS}
+        disabled={!adding && masks.length >= MAX_MASKS}
         aria-expanded={adding}
-        title={masks.length >= MAX_MASKS ? `Up to ${MAX_MASKS} masks per photo` : "Create a new mask"}
+        title={adding ? "Cancel" : masks.length >= MAX_MASKS ? `Up to ${MAX_MASKS} masks per photo` : "Create a new mask"}
       >
-        <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M8 3v10M3 8h10" /></svg>
+        <svg class="plus" class:x={adding} viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M8 3v10M3 8h10" /></svg>
       </button>
-      {#if adding}
-        <div class="menu"><MaskCreate onpicked={() => (adding = false)} /></div>
-      {/if}
     </div>
   </header>
 
-  {#if !collapsed}
+  {#if adding}
+    <!-- In place of the list, so it always fits. -->
+    <div class="menu"><MaskCreate onpicked={() => (adding = false)} /></div>
+  {:else if !collapsed}
     <ul>
       {#each masks as m, i (maskId(m))}
         {@const st = status(m)}
@@ -191,8 +191,8 @@
 <style>
   .float {
     position: absolute;
-    /* Under the zoom button. */
-    top: 40px;
+    /* Bottom right, growing upwards (clear of the zoom button at the top). */
+    bottom: var(--space-3);
     right: var(--space-3);
     z-index: 3;
     width: 236px;
@@ -257,20 +257,17 @@
   .icon:disabled {
     opacity: 0.4;
   }
-  .add-wrap {
-    position: relative;
-  }
   .menu {
-    position: absolute;
-    top: calc(100% + 4px);
-    right: 0;
-    z-index: 4;
-    width: 220px;
-    padding: var(--space-2);
-    border-radius: var(--radius-m);
-    border: 1px solid var(--line);
-    background: var(--bg-1);
-    box-shadow: 0 8px 24px rgb(0 0 0 / 0.4);
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 0 var(--space-1) var(--space-2);
+  }
+  .plus {
+    transition: transform 150ms var(--ease);
+  }
+  .plus.x {
+    transform: rotate(45deg);
   }
   ul {
     flex: 1 1 auto;
