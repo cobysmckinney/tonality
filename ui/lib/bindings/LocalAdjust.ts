@@ -19,4 +19,28 @@ temperature: number,
 /**
  * Green (-) / magenta (+).
  */
-tint: number, saturation: number, };
+tint: number, saturation: number, 
+/**
+ * Saturation that favours muted colours.
+ */
+vibrance: number, 
+/**
+ * Hue shift: -100..=100 is -30°..=30°.
+ */
+hue: number, 
+/**
+ * Sharpening added to the global amount; negative softens.
+ */
+sharpness: number, 
+/**
+ * Luminance noise reduction added to (or, negative, taken from) the global amount.
+ */
+noise: number, 
+/**
+ * Colour tint: hue in degrees (0..360, OkLCh, as the colour mixer), …
+ */
+colorHue: number, 
+/**
+ * … and how strongly it tints, 0..=100 (0: off).
+ */
+colorAmount: number, };

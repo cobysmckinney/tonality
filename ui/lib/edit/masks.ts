@@ -4,6 +4,7 @@ import type { Mask } from "$lib/bindings/Mask";
 import type { MaskShape } from "$lib/bindings/MaskShape";
 import type { Stroke } from "$lib/bindings/Stroke";
 import type { AiTarget } from "$lib/bindings/AiTarget";
+import type { LocalAdjust } from "$lib/bindings/LocalAdjust";
 import type { Framing } from "./renderer";
 
 /** Masks drawn by hand (AI masks are created by detection instead). */
@@ -116,7 +117,16 @@ export function newMask(kind: MaskKind, masks: Mask[], fr: Framing, fullW: numbe
     invert: false,
     amount: 100,
     range: { low: 0, high: 100, smoothness: 20 },
-    adjust: { exposure: 0, contrast: 0, highlights: 0, shadows: 0, whites: 0, blacks: 0, temperature: 0, tint: 0, saturation: 0 },
+    adjust: zeroAdjust(),
+  };
+}
+
+/** A mask's settings with nothing changed. */
+export function zeroAdjust(): LocalAdjust {
+  return {
+    exposure: 0, contrast: 0, highlights: 0, shadows: 0, whites: 0, blacks: 0,
+    temperature: 0, tint: 0, saturation: 0, vibrance: 0, hue: 0,
+    sharpness: 0, noise: 0, colorHue: 0, colorAmount: 0,
   };
 }
 
@@ -139,7 +149,7 @@ export function newAiMask(preset: AiPreset, target: AiTarget, model: string, mas
     invert: preset === "background",
     amount: 100,
     range: { low: 0, high: 100, smoothness: 20 },
-    adjust: { exposure: 0, contrast: 0, highlights: 0, shadows: 0, whites: 0, blacks: 0, temperature: 0, tint: 0, saturation: 0 },
+    adjust: zeroAdjust(),
   };
 }
 

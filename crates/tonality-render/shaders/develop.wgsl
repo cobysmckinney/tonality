@@ -25,7 +25,8 @@ struct Params {
     // Framing (crop / rotate): source uv = [geo0.xyz, geo1.xyz] · (frame position, 1).
     geo0: vec4<f32>,     // w: output width (source px)
     geo1: vec4<f32>,     // w: output height (source px)
-    // Masks (local adjustments): x: count, yz: source size / its long edge.
+    // Masks (local adjustments): x: count, yz: source size / its long edge, w: 1 if any mask
+    // sharpens or denoises.
     masks_head: vec4<f32>,
     masks: array<MaskParams, 16>,
     // Lens correction (see `tonality_core::lens`): x: active, y: tile margin, zw: source size / diagonal.
@@ -42,7 +43,8 @@ struct MaskParams {
     range: vec4<f32>,  // luminance range: low, high, smoothness (0..1), w: enabled
     adj0: vec4<f32>,   // exposure (stops), contrast, highlights, shadows (-1..1)
     adj1: vec4<f32>,   // whites, blacks, temperature, tint
-    adj2: vec4<f32>,   // saturation
+    adj2: vec4<f32>,   // saturation, vibrance, hue shift, sharpness (-1..1)
+    adj3: vec4<f32>,   // x: noise reduction (-1..1), y: tint hue (OkLCh, radians), z: tint amount (0..1)
 };
 
 // Where to draw. Rects are (x, y, w, h). The *frame* is the framed (cropped, rotated) output,
@@ -109,10 +111,12 @@ fn root_luma(c: vec3<f32>) -> f32 {
     return sqrt(max(dot(c, CAM_LUMA), 0.0));
 }
 
-fn detail(tc: vec2<f32>, px: vec2<f32>) -> vec3<f32> {
+// `local`: what masks add here: x: sharpness, y: luminance noise reduction (-1..1).
+fn detail(tc: vec2<f32>, px: vec2<f32>, local: vec2<f32>) -> vec3<f32> {
     let c0 = cam_at(tc);
-    let amount = params.detail0.x;
-    let lnr = params.detail0.w;
+    // Negative sharpening softens (down to the blur itself at -1).
+    let amount = max(params.detail0.x + 1.6 * local.x, -1.0);
+    let lnr = clamp(params.detail0.w + local.y, 0.0, 1.0);
     let cnr = params.detail1.x;
     if (amount == 0.0 && lnr == 0.0 && cnr == 0.0) {
         return c0;
@@ -160,7 +164,8 @@ fn detail(tc: vec2<f32>, px: vec2<f32>) -> vec3<f32> {
 
     // Sharpening: unsharp mask on sqrt luminance, with coring (ignores noise-sized detail when
     // noise reduction is on), edge masking and overshoot limiting (no halos).
-    if (amount > 0.0) {
+    if (amount != 0.0) {
+        let soften = amount < 0.0;
         let r = params.detail0.y;
         var n: array<f32, 9>;
         var mn = s0;
@@ -173,13 +178,15 @@ fn detail(tc: vec2<f32>, px: vec2<f32>) -> vec3<f32> {
         }
         let blur = (4.0 * n[4] + 2.0 * (n[1] + n[3] + n[5] + n[7]) + n[0] + n[2] + n[6] + n[8]) / 16.0;
         var d = s0 - blur;
-        let t = 0.5 * sigma_r * step(1e-3, lnr);
-        d = sign(d) * max(abs(d) - t, 0.0);
+        if (!soften) {
+            let t = 0.5 * sigma_r * step(1e-3, lnr);
+            d = sign(d) * max(abs(d) - t, 0.0);
+        }
         let gx = (n[2] + 2.0 * n[5] + n[8]) - (n[0] + 2.0 * n[3] + n[6]);
         let gy = (n[6] + 2.0 * n[7] + n[8]) - (n[0] + 2.0 * n[1] + n[2]);
         let edge = abs(gx) + abs(gy);
         let m = params.detail0.z * 0.12;
-        let mask = select(1.0, smoothstep(m * 0.5, m, edge), m > 0.0);
+        let mask = select(1.0, smoothstep(m * 0.5, m, edge), m > 0.0 && !soften);
         let margin = 0.02 + 0.1 * (mx - mn);
         s = clamp(s + amount * d * mask, mn - margin, mx + margin);
         s = max(s, 0.0);
@@ -272,7 +279,8 @@ fn band_value(lo: vec4<f32>, hi: vec4<f32>, h: f32) -> f32 {
     return out;
 }
 
-fn color(rgb: vec3<f32>, saturation: f32) -> vec3<f32> {
+// `saturation`, `vibrance`, `hue` (-1..1: ±30°): global plus what masks add here.
+fn color(rgb: vec3<f32>, saturation: f32, vibrance: f32, hue: f32) -> vec3<f32> {
     let lab = to_oklab(max(rgb, vec3<f32>(0.0)));
     var l = lab.x;
     var c = length(lab.yz);
@@ -284,13 +292,12 @@ fn color(rgb: vec3<f32>, saturation: f32) -> vec3<f32> {
     let dh = band_value(params.mix_hue0, params.mix_hue1, h);
     let ds = band_value(params.mix_sat0, params.mix_sat1, h);
     let dl = band_value(params.mix_lum0, params.mix_lum1, h);
-    h = h + 30.0 * dh * colourful;
+    h = h + 30.0 * (dh + hue) * colourful;
     c = c * max(0.0, 1.0 + ds * colourful);
     l = l * exp2(0.5 * dl * colourful);
 
     // Vibrance favours muted colours; saturation is uniform.
-    let vib = params.color0.y;
-    c = c * max(0.0, 1.0 + vib * (1.0 - smoothstep(0.0, 0.2, c)));
+    c = c * max(0.0, 1.0 + vibrance * (1.0 - smoothstep(0.0, 0.2, c)));
     c = c * max(0.0, 1.0 + saturation);
 
     let hr = radians(h);
@@ -401,6 +408,33 @@ fn srgb_encode(c: vec3<f32>) -> vec3<f32> {
 }
 
 // ---- Masks -------------------------------------------------------------------------------------
+// Display luminance of camera RGB `cam`: what masks' luminance ranges compare against.
+fn display_lum(cam: vec3<f32>) -> f32 {
+    var rgb = vec3<f32>(dot(params.cam0.xyz, cam), dot(params.cam1.xyz, cam), dot(params.cam2.xyz, cam));
+    rgb = max(rgb, vec3<f32>(0.0)) * params.light0.x;
+    return srgb_encode(agx(vec3<f32>(max(dot(rgb, REC2020_LUMA), 0.0)))).y;
+}
+
+// A colour of hue `h` (radians, OkLCh) and unit luminance: a mask's tint multiplies by it.
+fn tint_color(h: f32) -> vec3<f32> {
+    let c = max(from_oklab(vec3<f32>(0.75, 0.08 * cos(h), 0.08 * sin(h))), vec3<f32>(1e-4));
+    return c / dot(c, REC2020_LUMA);
+}
+
+// What masks add to sharpening (x) and noise reduction (y) at source position `uv`.
+fn local_detail(tc: vec2<f32>, uv: vec2<f32>) -> vec2<f32> {
+    let lum = display_lum(cam_at(tc));
+    var out = vec2<f32>(0.0);
+    let n = u32(params.masks_head.x);
+    for (var i = 0u; i < n; i = i + 1u) {
+        let m = mask_value(i, uv, lum);
+        if (m > 0.0) {
+            out = out + m * vec2<f32>(params.masks[i].adj2.w, params.masks[i].adj3.x);
+        }
+    }
+    return out;
+}
+
 // How much mask `i` selects at source position `uv`, for a pixel of display luminance `lum`.
 fn mask_value(i: u32, uv: vec2<f32>, lum: f32) -> f32 {
     let mk = params.masks[i];
@@ -445,11 +479,14 @@ fn develop(cam: vec3<f32>, f: vec2<f32>, uv: vec2<f32>, aspect: f32) -> vec3<f32
     var t = vec4<f32>(params.light0.yzw, params.light1.x);
     var blacks = params.light1.y;
     var saturation = params.color0.x;
+    var vibrance = params.color0.y;
+    var hue = 0.0;
     let n = u32(params.masks_head.x);
     if (n > 0u) {
-        let lum = srgb_encode(agx(vec3<f32>(max(dot(rgb, REC2020_LUMA), 0.0)))).y;
+        let lum = display_lum(cam);
         var ev = 0.0;
         var wb = vec2<f32>(0.0);
+        var tint = vec3<f32>(1.0);
         for (var i = 0u; i < n; i = i + 1u) {
             let m = mask_value(i, uv, lum);
             if (m <= 0.0) {
@@ -461,13 +498,18 @@ fn develop(cam: vec3<f32>, f: vec2<f32>, uv: vec2<f32>, aspect: f32) -> vec3<f32
             blacks = blacks + m * mk.adj1.y;
             wb = wb + m * mk.adj1.zw;
             saturation = saturation + m * mk.adj2.x;
+            vibrance = vibrance + m * mk.adj2.y;
+            hue = hue + m * mk.adj2.z;
+            if (mk.adj3.z > 0.0) {
+                tint = tint * mix(vec3<f32>(1.0), tint_color(mk.adj3.y), m * mk.adj3.z);
+            }
         }
-        rgb = rgb * exp2(ev) * white_shift(wb.x, wb.y);
+        rgb = rgb * exp2(ev) * white_shift(wb.x, wb.y) * tint;
     }
 
     rgb = vignette(rgb, f);
     rgb = tone(rgb, t, blacks);
-    rgb = color(rgb, saturation);
+    rgb = color(rgb, saturation, vibrance, hue);
     var c = srgb_encode(agx(rgb));
     c = apply_curve(c);
     c = grain(c, f, aspect);
@@ -476,10 +518,7 @@ fn develop(cam: vec3<f32>, f: vec2<f32>, uv: vec2<f32>, aspect: f32) -> vec3<f32
 
 // Preview only: how much mask `which - 1` (its shader index) selects here.
 fn overlay_mask(uv: vec2<f32>, cam: vec3<f32>, which: f32) -> f32 {
-    var rgb = vec3<f32>(dot(params.cam0.xyz, cam), dot(params.cam1.xyz, cam), dot(params.cam2.xyz, cam));
-    rgb = max(rgb, vec3<f32>(0.0)) * params.light0.x;
-    let lum = srgb_encode(agx(vec3<f32>(max(dot(rgb, REC2020_LUMA), 0.0)))).y;
-    return clamp(mask_value(u32(which - 1.0), uv, lum), 0.0, 1.0);
+    return clamp(mask_value(u32(which - 1.0), uv, display_lum(cam)), 0.0, 1.0);
 }
 
 // ---- Lens correction ---------------------------------------------------------------------------
@@ -519,7 +558,11 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     if (any(tc < vec2<f32>(0.0)) || any(tc > vec2<f32>(1.0))) {
         discard;
     }
-    var cam = detail(tc, in.px.xy);
+    var local = vec2<f32>(0.0);
+    if (params.masks_head.w > 0.5) {
+        local = local_detail(tc, uv);
+    }
+    var cam = detail(tc, in.px.xy, local);
     if (lens_on) {
         // Lateral chromatic aberration: red and blue come from slightly different radii.
         if (k.x != k.y || k.z != k.y) {

@@ -36,21 +36,34 @@
   const color: Control[] = [
     { key: "temperature", label: "Temperature", min: -100, max: 100, track: "linear-gradient(90deg, #4f7fd9, #d8d8d8 50%, #e0a63c)" },
     { key: "tint", label: "Tint", min: -100, max: 100, track: "linear-gradient(90deg, #4fb55a, #d8d8d8 50%, #c45bc4)" },
+    { key: "hue", label: "Hue", min: -100, max: 100, track: "linear-gradient(90deg, #c46bd0, #d8d8d8 50%, #d8b04f)" },
     { key: "saturation", label: "Saturation", min: -100, max: 100 },
+    { key: "vibrance", label: "Vibrance", min: -100, max: 100 },
   ];
+  const detail: Control[] = [
+    { key: "sharpness", label: "Sharpness", min: -100, max: 100 },
+    { key: "noise", label: "Noise Reduction", min: -100, max: 100 },
+  ];
+  const tintKeys: AdjustKey[] = ["colorHue", "colorAmount"];
+  // The tint's hue is OkLCh, like the colour mixer: the track shows those hues.
+  const hueTrack = `linear-gradient(90deg, ${Array.from({ length: 13 }, (_, i) => `oklch(72% 0.14 ${i * 30})`).join(", ")})`;
+  const tintSwatch = (h: number) => `oklch(72% 0.14 ${h})`;
 
   const edited = $derived({
     mask: mask ? mask.amount !== 100 || mask.invert : false,
     light: mask ? light.some((c) => mask.adjust[c.key] !== 0) : false,
     color: mask ? color.some((c) => mask.adjust[c.key] !== 0) : false,
+    tint: mask ? mask.adjust.colorAmount !== 0 : false,
+    detail: mask ? detail.some((c) => mask.adjust[c.key] !== 0) : false,
     range: mask ? mask.range.low !== 0 || mask.range.high !== 100 || mask.range.smoothness !== 20 : false,
   });
 
-  function zero(controls: Control[]) {
+  function zero(keys: AdjustKey[]) {
     if (!mask) return;
-    for (const c of controls) mask.adjust[c.key] = 0;
+    for (const k of keys) mask.adjust[k] = 0;
     commit(null);
   }
+  const keysOf = (cs: Control[]) => cs.map((c) => c.key);
   function resetMask() {
     if (!mask) return;
     mask.amount = 100;
@@ -216,7 +229,7 @@
         </button>
       </Section>
 
-      <Section title="Light" storeKey="mask.light" edited={edited.light} onreset={() => zero(light)}>
+      <Section title="Light" storeKey="mask.light" edited={edited.light} onreset={() => zero(keysOf(light))}>
         {#each light as c (c.key)}
           <Slider
             label={c.label}
@@ -231,7 +244,7 @@
         {/each}
       </Section>
 
-      <Section title="Color" storeKey="mask.color" edited={edited.color} onreset={() => zero(color)}>
+      <Section title="Color" storeKey="mask.color" edited={edited.color} onreset={() => zero(keysOf(color))}>
         {#each color as c (c.key)}
           <Slider
             label={c.label}
@@ -239,6 +252,49 @@
             min={c.min}
             max={c.max}
             track={c.track}
+            oninput={(v) => (mask.adjust[c.key] = v)}
+            oncommit={() => commit(key(c.key))}
+          />
+        {/each}
+      </Section>
+
+      <Section title="Color Tint" storeKey="mask.tint" open={false} edited={edited.tint} onreset={() => zero(tintKeys)}>
+        <p class="hint">Wash the area with a colour, keeping its brightness.</p>
+        <div class="tint-row">
+          <span class="swatch" style:background={tintSwatch(mask.adjust.colorHue)} style:opacity={0.35 + 0.65 * (mask.adjust.colorAmount / 100)}></span>
+          <div class="grow">
+            <Slider
+              label="Hue"
+              value={mask.adjust.colorHue}
+              min={0}
+              max={360}
+              defaultValue={0}
+              bipolar={false}
+              track={hueTrack}
+              oninput={(v) => (mask.adjust.colorHue = v)}
+              oncommit={() => commit(key("colorHue"))}
+            />
+          </div>
+        </div>
+        <Slider
+          label="Amount"
+          value={mask.adjust.colorAmount}
+          min={0}
+          max={100}
+          defaultValue={0}
+          bipolar={false}
+          oninput={(v) => (mask.adjust.colorAmount = v)}
+          oncommit={() => commit(key("colorAmount"))}
+        />
+      </Section>
+
+      <Section title="Detail" storeKey="mask.detail" open={false} edited={edited.detail} onreset={() => zero(keysOf(detail))}>
+        {#each detail as c (c.key)}
+          <Slider
+            label={c.label}
+            value={mask.adjust[c.key]}
+            min={c.min}
+            max={c.max}
             oninput={(v) => (mask.adjust[c.key] = v)}
             oncommit={() => commit(key(c.key))}
           />
@@ -424,6 +480,23 @@
   .toggle.active {
     background: var(--text-1);
     color: var(--bg-0);
+  }
+  .tint-row {
+    display: flex;
+    align-items: flex-end;
+    gap: var(--space-3);
+  }
+  .grow {
+    flex: 1;
+    min-width: 0;
+  }
+  .swatch {
+    flex: none;
+    width: 22px;
+    height: 22px;
+    margin-bottom: 4px;
+    border-radius: 50%;
+    box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.15);
   }
   .hint {
     margin: 0;

@@ -188,6 +188,18 @@ pub struct LocalAdjust {
     /// Green (-) / magenta (+).
     pub tint: f32,
     pub saturation: f32,
+    /// Saturation that favours muted colours.
+    pub vibrance: f32,
+    /// Hue shift: -100..=100 is -30°..=30°.
+    pub hue: f32,
+    /// Sharpening added to the global amount; negative softens.
+    pub sharpness: f32,
+    /// Luminance noise reduction added to (or, negative, taken from) the global amount.
+    pub noise: f32,
+    /// Colour tint: hue in degrees (0..360, OkLCh, as the colour mixer), …
+    pub color_hue: f32,
+    /// … and how strongly it tints, 0..=100 (0: off).
+    pub color_amount: f32,
 }
 
 // ---- brush rasterisation ------------------------------------------------------------------------
@@ -371,12 +383,20 @@ fn describe_mask(a: &Mask, b: &Mask) -> String {
         ("Temperature", |l| l.temperature, 0),
         ("Tint", |l| l.tint, 0),
         ("Saturation", |l| l.saturation, 0),
+        ("Vibrance", |l| l.vibrance, 0),
+        ("Hue", |l| l.hue, 0),
+        ("Sharpness", |l| l.sharpness, 0),
+        ("Noise", |l| l.noise, 0),
+        ("Color", |l| l.color_amount, 0),
     ];
     for (label, get, decimals) in FIELDS {
         let v = get(&b.adjust);
         if get(&a.adjust) != v {
             what.push(format!("{label} {}", crate::edit::signed(v, *decimals)));
         }
+    }
+    if a.adjust.color_hue != b.adjust.color_hue {
+        what.push(format!("Color Hue {}°", b.adjust.color_hue.round() as i64));
     }
     match what.as_slice() {
         [w] if w == "Paint" || w == "Erase" || w == "Invert" || w == "Uninvert" || w == "Reselect" => {

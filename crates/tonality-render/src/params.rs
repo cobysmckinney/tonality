@@ -7,7 +7,7 @@ use tonality_core::EditState;
 /// Masks the shader evaluates (more are ignored).
 pub const MAX_MASKS: usize = 16;
 /// vec4s per mask in the uniform block.
-const MASK_VEC4S: usize = 7;
+const MASK_VEC4S: usize = 8;
 
 /// Uniform block matching `struct Params` in `develop.wgsl` (std140-compatible: all vec4).
 #[repr(C)]
@@ -101,6 +101,7 @@ impl DevelopParams {
         let n = |v: f32| if v.is_finite() { (v / 100.0).clamp(-1.0, 1.0) } else { 0.0 };
         let mut count = 0;
         let mut layer = 0.0;
+        let mut local_detail = false;
         for m in masks {
             let brush_layer = layer;
             if m.shape.is_raster() {
@@ -130,11 +131,19 @@ impl DevelopParams {
                 [n(r.low).clamp(0.0, 1.0), n(r.high).clamp(0.0, 1.0), n(r.smoothness).clamp(0.0, 1.0), if r.is_full() { 0.0 } else { 1.0 }],
                 [if a.exposure.is_finite() { a.exposure.clamp(-5.0, 5.0) } else { 0.0 }, n(a.contrast), n(a.highlights), n(a.shadows)],
                 [n(a.whites), n(a.blacks), n(a.temperature), n(a.tint)],
-                [n(a.saturation), 0.0, 0.0, 0.0],
+                [n(a.saturation), n(a.vibrance), n(a.hue), n(a.sharpness)],
+                [
+                    n(a.noise),
+                    if a.color_hue.is_finite() { a.color_hue.rem_euclid(360.0).to_radians() } else { 0.0 },
+                    n(a.color_amount).max(0.0),
+                    0.0,
+                ],
             ];
+            local_detail |= n(a.sharpness) != 0.0 || n(a.noise) != 0.0;
             count += 1;
         }
-        self.masks_head = [count as f32, norm[0], norm[1], 0.0];
+        // w: some mask sharpens or denoises, so the detail pass must look at the masks.
+        self.masks_head = [count as f32, norm[0], norm[1], if local_detail { 1.0 } else { 0.0 }];
         self
     }
 
@@ -211,6 +220,25 @@ mod tests {
         let p = DevelopParams::new(&e, &color(), None, 600, 400);
         assert_eq!(p.masks[0][4], [0.0, 1.0, 0.0, 0.0]);
         assert!(p.to_vec().iter().all(|v| v.is_finite()));
+    }
+
+    #[test]
+    fn local_color_and_detail_are_packed() {
+        let mut m = Mask::default();
+        m.adjust.vibrance = 50.0;
+        m.adjust.hue = -100.0;
+        m.adjust.sharpness = 40.0;
+        m.adjust.noise = -20.0;
+        m.adjust.color_hue = 450.0; // wraps to 90°
+        m.adjust.color_amount = -10.0; // tint can't go negative
+        let e = EditState { masks: vec![m], ..Default::default() };
+        let p = DevelopParams::new(&e, &color(), None, 600, 400);
+        assert_eq!(p.masks[0][6], [0.0, 0.5, -1.0, 0.4]);
+        assert_eq!(p.masks[0][7], [-0.2, 90f32.to_radians(), 0.0, 0.0]);
+        assert_eq!(p.masks_head[3], 1.0, "the detail pass must read the masks");
+
+        let p = DevelopParams::new(&EditState { masks: vec![Mask::default()], ..Default::default() }, &color(), None, 600, 400);
+        assert_eq!(p.masks_head[3], 0.0);
     }
 
     #[test]

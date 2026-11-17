@@ -41,6 +41,12 @@ thumbnails; the selected mask's settings go in the side panel. Red overlay on by
 - [x] Hovering a mask in the list shows its area in red.
 - [x] List keyed by a stable per-mask id instead of position.
 - [x] Masks past the 16 drawn are marked "Not drawn: over 16" in the list.
+- [x] List at the bottom right of the photo (Coby, 2026-11-17); "+" swaps the list for the
+  ways to make a mask.
+- [x] More local adjustments: Hue, Vibrance (Color), Color Tint (hue + amount, keeps
+  brightness), Sharpness (negative softens) and Noise Reduction (Detail). Decided against
+  per-mask tone curve and colour mixer (heavy, rarely used) and frame-wide effects (vignette,
+  grain, lens, crop).
 - [ ] Coby tries it: every kind (linear, radial, brush, each AI preset, lasso object), rename,
   hide, delete, undo; the floating list in a small window.
 
@@ -140,7 +146,19 @@ and the histogram, so a fix lands everywhere at once.
   sample photos. Note in the commit that existing edits will look different.
 - [ ] Remove any wording or code suggesting other tone mappers.
 
-### 7. Leftovers from the code review
+### 7. Texture, Clarity and Dehaze (global and on masks)
+The most used local adjustments in other editors, and missing globally too. Each compares a
+pixel with a blurred copy of its neighbourhood, so they need a multi-scale blur (or a
+precomputed blurred pyramid) rather than a per-pixel formula.
+
+**Plan**
+- [ ] Research how they're usually built (local contrast at fine / medium scale; dehaze via
+  a dark-channel or atmospheric-light estimate) and pick methods that run on the GPU in the
+  preview and match in export, tiled.
+- [ ] Global sliders (Effects or a new Presence section) and the same three on masks.
+- [ ] Watch preview speed: blurs at full resolution while zoomed, and at tile edges in export.
+
+### 8. Leftovers from the code review
 - [ ] Try in the app: the content security policy (watch the console for blocked loads), the
   white balance presets (does "Fluorescent" fit?), the library thumbnail after leaving Edit
   quickly, and switching photos quickly with masks.
