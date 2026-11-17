@@ -16,17 +16,12 @@ Add new ideas to **Later**, and move finished items to **Done** with the date an
 ## Now
 
 ### 1. Logo and brand
-**Direction (Coby):** a single lowercase `t` in an italic/script face that keeps the tail.
-Candidates rendered from OFL fonts (outlines become paths, so no font ships with the app).
-
-**Open questions**
-- Which `t` (and does the wordmark use the same face)?
-
-**Plan**
-- [ ] Two or three directions for a mark plus the "tonality" wordmark, made as SVG; pick one.
-- [ ] Generate the app icons from the SVG (`npx tauri icon`, replacing `src-tauri/icons/*`).
-- [ ] Use it in the app: library header or title area, and the about/empty state.
-- [ ] Optional: an accent color that goes with it, set in the design tokens.
+**Status:** built on branch `logo`, seen in the app; waiting for Coby's review.
+- [x] Mark: a lowercase `t` in Playfair Display Italic (SIL OFL), kept as SVG paths;
+  wordmark "tonality" in the same face (Coby's pick, 2026-11-17).
+- [x] App icons generated from `src-tauri/icons/icon.svg` (`scripts/brand.py` regenerates it all).
+- [x] In the app: wordmark in the top bar, mark in the empty library.
+- [ ] Coby tries it. The UI accent stays colorless on purpose (color lives in the photo).
 
 ### 2. Reset a photo's history
 A single action that takes a photo back to as-shot and removes **all** its edit history and

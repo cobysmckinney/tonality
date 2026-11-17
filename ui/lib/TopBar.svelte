@@ -2,6 +2,7 @@
   import { app, type Mode } from "$lib/app.svelte";
   import { exportCurrent, exportCount } from "$lib/export/targets";
   import BranchMenu from "$lib/history/BranchMenu.svelte";
+  import Logo from "$lib/design/Logo.svelte";
 
   const modes: { id: Mode; label: string; key: string }[] = [
     { id: "library", label: "Library", key: "G" },
@@ -11,10 +12,7 @@
 
 <header>
   <div class="left">
-    <div class="brand">
-      <span class="mark" aria-hidden="true"></span>
-      tonality
-    </div>
+    <div class="brand"><Logo height={21} label="tonality" /></div>
     {#if app.mode === "edit"}<BranchMenu />{/if}
   </div>
 
@@ -48,20 +46,9 @@
     min-width: 0;
   }
   .brand {
-    display: flex;
-    align-items: center;
-    gap: var(--space-2);
-    font-weight: 600;
-    letter-spacing: -0.01em;
     color: var(--text-0);
-  }
-  /* A tonal ramp: the app's whole idea in one glyph. */
-  .mark {
-    width: 14px;
-    height: 14px;
-    border-radius: 4px;
-    background: linear-gradient(135deg, #f0f0f0, #5a5a5a 60%, #1c1c1c);
-    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.12);
+    /* The y's descender hangs below; lift the word so its x-height sits centred. */
+    margin-top: 2px;
   }
   .modes {
     min-width: 180px;

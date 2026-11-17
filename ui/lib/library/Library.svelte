@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import Logo from "$lib/design/Logo.svelte";
   import type { ImageMeta } from "$lib/bindings/ImageMeta";
   import type { ImageQuery } from "$lib/bindings/ImageQuery";
   import Grid from "./Grid.svelte";
@@ -443,6 +444,7 @@
       {:else if library.loaded}
         <div class="empty">
           {#if library.total === 0}
+            <div class="mark"><Logo kind="mark" height={64} /></div>
             <p class="big">Your library is empty</p>
             <p class="dim">Import a folder or drop RAW files here. tonality keeps its own copy,<br />so the originals can stay wherever they are, or go.</p>
             <button class="btn primary" onclick={() => library.importFolder()} disabled={!!library.importing}>Import Folder…</button>
@@ -885,6 +887,10 @@
   .empty p {
     margin: 0;
     line-height: 1.5;
+  }
+  .empty .mark {
+    color: var(--text-2);
+    margin-bottom: var(--space-3);
   }
   .empty .big {
     font-size: var(--fs-l);
