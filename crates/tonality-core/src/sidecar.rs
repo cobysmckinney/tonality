@@ -266,9 +266,7 @@ impl Catalog {
                 None => match existing_root {
                     Some(root) if fresh => Some(root),
                     Some(root) => {
-                        let root_hash: String =
-                            tx.query_row("SELECT state_hash FROM commits WHERE id = ?1", [root], |r| r.get(0))?;
-                        if root_hash == state_hash {
+                        if same_state(&tx, root, &state_hash)? {
                             map.push(root);
                             continue;
                         }
@@ -277,13 +275,7 @@ impl Catalog {
                     None => None,
                 },
             };
-            let found: Option<CommitId> = tx
-                .query_row(
-                    "SELECT id FROM commits WHERE image_id = ?1 AND parent IS ?2 AND state_hash = ?3 ORDER BY id LIMIT 1",
-                    params![image, parent, state_hash],
-                    |r| r.get(0),
-                )
-                .optional()?;
+            let found = same_child(&tx, image, parent, &state_hash, c)?;
             // Or the same commit, rewritten here since that sidecar was written (a slider gesture
             // coalesces into its commit in place): same parent and creation time, updated later.
             // Without this, a sidecar left stale by a crash comes back as a diverged branch.
@@ -404,6 +396,57 @@ impl Catalog {
     }
 }
 
+/// Whether commit `id` holds the state hashed `hash`, comparing in today's format: a state
+/// stored by an older version (before a setting existed) hashes differently from the same
+/// state read back now, but is the same edit.
+fn same_state(tx: &rusqlite::Connection, id: CommitId, hash: &str) -> Result<bool> {
+    let (stored, json): (String, String) = tx.query_row(
+        "SELECT c.state_hash, s.json FROM commits c JOIN edit_states s ON s.hash = c.state_hash WHERE c.id = ?1",
+        [id],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )?;
+    Ok(stored == hash || serde_json::from_str::<EditState>(&json).is_ok_and(|s| s.hash() == hash))
+}
+
+/// The catalog's child of `parent` that is the sidecar's commit `c` (state hashed `hash`), if any:
+/// one with the same state (in today's format), or the very same commit (same creation and
+/// update times and summary) whatever its stored state looks like.
+fn same_child(
+    tx: &rusqlite::Connection,
+    image: ImageId,
+    parent: Option<CommitId>,
+    hash: &str,
+    c: &SidecarCommit,
+) -> Result<Option<CommitId>> {
+    let exact = tx
+        .query_row(
+            "SELECT id FROM commits WHERE image_id = ?1 AND parent IS ?2 AND state_hash = ?3 ORDER BY id LIMIT 1",
+            params![image, parent, hash],
+            |r| r.get(0),
+        )
+        .optional()?;
+    if exact.is_some() {
+        return Ok(exact);
+    }
+    let mut stmt = tx.prepare(
+        "SELECT id, summary, created_at, updated_at FROM commits WHERE image_id = ?1 AND parent IS ?2 ORDER BY id",
+    )?;
+    let kids: Vec<(CommitId, String, i64, i64)> = stmt
+        .query_map(params![image, parent], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
+        .collect::<rusqlite::Result<_>>()?;
+    for (id, summary, created, updated) in &kids {
+        if *created == c.created && *updated == c.time && *summary == c.summary {
+            return Ok(Some(*id));
+        }
+    }
+    for (id, ..) in &kids {
+        if same_state(tx, *id, hash)? {
+            return Ok(Some(*id));
+        }
+    }
+    Ok(None)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -460,6 +503,47 @@ mod tests {
         assert_eq!(b.sidecar(ib).unwrap(), a.sidecar(ia).unwrap(), "same graph, same sidecar");
         // Reading it again changes nothing.
         assert!(!b.merge_sidecar(ib, &sc).unwrap().changed());
+    }
+
+    /// A state stored before a setting existed reads back with it (at its default), so it
+    /// hashes differently now. Its own sidecar must still merge back as the same history, not
+    /// as a copy on a new branch (as happened when masks gained new adjustments).
+    #[test]
+    fn states_stored_by_an_older_version_still_match() {
+        let mut a = Catalog::open_in_memory().unwrap();
+        let ia = a.test_image("x");
+        a.history_open(ia).unwrap();
+        let mut st = exp(1.0);
+        st.masks.push(crate::mask::Mask::default());
+        a.commit(ia, &st, None).unwrap();
+        st.light.exposure = 2.0;
+        a.commit(ia, &st, None).unwrap();
+
+        // Rewrite every stored state as an older version would have written it: without
+        // the masks' `vibrance`.
+        let rows: Vec<(String, String)> = {
+            let mut q = a.conn.prepare("SELECT hash, json FROM edit_states").unwrap();
+            q.query_map([], |r| Ok((r.get(0).unwrap(), r.get(1).unwrap()))).unwrap().map(|r| r.unwrap()).collect()
+        };
+        for (hash, json) in rows {
+            let mut v: serde_json::Value = serde_json::from_str(&json).unwrap();
+            for m in v.get_mut("masks").and_then(|m| m.as_array_mut()).into_iter().flatten() {
+                m["adjust"].as_object_mut().unwrap().remove("vibrance");
+            }
+            let old = serde_json::to_string(&v).unwrap();
+            let old_hash = blake3::hash(old.as_bytes()).to_hex().to_string();
+            if old_hash == hash {
+                continue;
+            }
+            a.conn.execute("INSERT INTO edit_states (hash, json) VALUES (?1, ?2)", params![old_hash, old]).unwrap();
+            a.conn.execute("UPDATE commits SET state_hash = ?1 WHERE state_hash = ?2", params![old_hash, hash]).unwrap();
+        }
+
+        let before = graph(&a, ia);
+        let sc = Sidecar::from_json(&a.sidecar(ia).unwrap().to_json()).unwrap();
+        assert!(!a.merge_sidecar(ia, &sc).unwrap().changed(), "nothing new");
+        assert_eq!(graph(&a, ia), before);
+        assert_eq!(a.history_view(ia).unwrap().branches.len(), 1, "no main-2");
     }
 
     #[test]

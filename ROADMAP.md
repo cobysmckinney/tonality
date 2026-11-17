@@ -16,16 +16,13 @@ Add new ideas to **Later**, and move finished items to **Done** with the date an
 ## Now
 
 ### 1. Crop: aspect ratios as icon buttons
-`ui/lib/edit/CropPanel.svelte`, `ASPECTS` in `ui/lib/edit/crop.ts` (Free, Original, 1:1, 4:5, 5:7,
-2:3, 9:16).
-
-**Plan**
-- [ ] Each aspect becomes a button with an icon: a rectangle drawn in that ratio (a dashed one
-  for Free, a photo shape for Original) with the label under it.
-- [ ] Turn the portrait/landscape choice into one rotate button that flips the icons too.
-- [ ] Consider adding 16:9 (landscape of 9:16 already covers it when flipped; check
-  the labels read right in both orientations) and 3:4.
-- [ ] Keep `session.cropAspect` and the highlighted button in sync (regression check).
+**Status:** built on branch `crop-buttons`, seen in the app; waiting for Coby's review.
+- [x] Each preset is a button with an icon drawn in its shape (dashed for Free, a little
+  landscape for Original), label underneath, 4 × 2 grid; 3:4 added.
+- [x] Landscape / portrait switch (icons); labels read the way round the crop will be
+  (5:4 in landscape); follows rotation with [ ].
+- [x] Rotate left/right and Flip have icons.
+- [ ] Coby tries it.
 
 ### 2. Logo and brand
 **Open questions**
