@@ -124,10 +124,12 @@ negative component, and 200 random ones):
 
 The results are in `crates/tonality-core/tests/data/agx_reference.json`.
 
-- **At the LUT's own grid points** (4000 of the 57³ nodes of `AgX_Base_sRGB.cube`, decoded from
-  E-Gamut log2 and pushed through the steps above) the exact values match Blender's table with a
-  mean difference of 0.000008 and a maximum of 0.001 (a nearly black channel, where the table's 7
-  decimals and the 1/2.4 power meet).
+- **At the LUT's own grid points** (the 57³ nodes of `AgX_Base_sRGB.cube`, decoded from E-Gamut
+  log2 and pushed through the steps above) the exact values match Blender's table with a mean
+  difference of 0.000008 and 0.00026 at the 99.9th percentile. The largest, 0.013 (in the table's
+  2.4-power encoding), are on nearly black channels, where the 1/2.4 power magnifies tiny
+  differences: 0.013 there is about 0.00003 linear, 0.0004 in sRGB. (The script checks a random
+  4000 of the nodes; all 185,193 were checked once, November 2026.)
 - **Between grid points** Blender interpolates (tetrahedral, 57 points over 25 stops), so for
   arbitrary colours the two differ by 0.0013 on average (sRGB code value, 0–1), 0.018 at the 99th
   percentile, and up to 0.063 for very saturated colours where one channel heads to zero and the

@@ -35,8 +35,7 @@ pub struct DevelopParams {
     pub lens_head: [f32; 4],
     /// Per radius knot: red, green, blue source/output radius ratio; vignetting gain.
     pub lens: [[f32; 4]; LENS_KNOTS],
-    /// AgX's matrices and curve constants (`tonality_core::agx::Agx::uniform`). Last, so the
-    /// offsets the preview reads (framing, lens) don't move.
+    /// AgX's matrices and curve constants (`tonality_core::agx::Agx::uniform`).
     pub agx: [[f32; 4]; 15],
     /// Texture, Clarity, Dehaze (see `presence` in `develop.wgsl`): the as-shot luminance guide,
     /// the airlight (from [`PresenceMaps`], via [`with_presence`](Self::with_presence)) and the
