@@ -33,11 +33,19 @@ struct Params {
     lens_head: vec4<f32>,
     // Per radius knot (0..LENS_RMAX half-diagonals): rgb: source ÷ output radius, w: vignetting gain.
     lens: array<vec4<f32>, 32>,
-    // AgX (see `tonality_core::agx` and docs/agx.md), matrices as rows: 0–2 Rec.2020 → E-Gamut,
-    // 3–5 back, 6–8 inset, 9–11 outset then → display primaries; 12: Rec.2020 luminance weights,
-    // w: input floor; 13: display luminance weights, w: input ceiling; 14: sigmoid pivot x, y,
-    // toe scale, shoulder scale.
-    agx: array<vec4<f32>, 15>,
+    // AgX (see `tonality_core::agx` and docs/agx.md): two parameter blocks of AGX_BLOCK vec4s,
+    // the SDR display's AgX Base (block 0, at 0) and AgX HDR (block 1, at AGX_BLOCK; the export's
+    // gain map only). Matrices as rows: 0–2 Rec.2020 → E-Gamut, 3–5 back, 6–8 inset, 9–11 outset
+    // then → the lower guard rail's gamut; 12: Rec.2020 luminance weights, w: input floor;
+    // 13: the rail gamut's luminance weights, w: input ceiling; 14: sigmoid pivot x, y, toe scale,
+    // shoulder scale; 15: toe power, shoulder power, z: 1 for HDR, w: HDR peak ÷ SDR white;
+    // HDR only: 16–18 rail gamut → Rec.2020, 19–21 Rec.2020 → the display, 22: darkening
+    // sigmoid pivot x, y, toe scale, shoulder scale, 23: its slope, toe power, shoulder power,
+    // w: purity kept.
+    agx: array<vec4<f32>, 48>,
+    // What to output: x: 0 the developed image, 1 the Ultra HDR gain map (export): per channel
+    // log2((HDR + w) / (SDR + w)), stored from y to z.
+    output: vec4<f32>,
     // Texture, Clarity, Dehaze (see `tonality_render::presence`): 0: as-shot luminance weights
     // for camera RGB, w: clip level; 1: as-shot white balance, w: the airlight's as-shot
     // luminance; 2: the airlight (camera RGB), w: 1 if the maps are bound; 3: global texture,
@@ -399,7 +407,10 @@ fn apply_curve(c: vec3<f32>) -> vec3<f32> {
     );
 }
 
-// ---- Display transform: AgX Base (docs/agx.md; `tonality_core::agx::Agx::display`) -----------
+// ---- Display transform: AgX (docs/agx.md; `tonality_core::agx::Agx`) -------------------------
+// `b`: the parameter block, 0 (AgX Base for the display) or AGX_BLOCK (AgX HDR).
+const AGX_BLOCK: i32 = 24;
+
 fn agx_mat(i: i32, c: vec3<f32>) -> vec3<f32> {
     return vec3<f32>(dot(params.agx[i].xyz, c), dot(params.agx[i + 1].xyz, c), dot(params.agx[i + 2].xyz, c));
 }
@@ -423,18 +434,18 @@ fn agx_lift(c: vec3<f32>) -> vec3<f32> {
 }
 
 // Lower guard rail in Rec.2020: lift negatives, keep the compensated luminance.
-fn agx_low_side(c: vec3<f32>) -> vec3<f32> {
-    let w = params.agx[12].xyz;
+fn agx_low_side(c: vec3<f32>, b: i32) -> vec3<f32> {
+    let w = params.agx[b + 12].xyz;
     let y = agx_compensated(c, w);
     let lifted = agx_lift(c);
     let y_new = agx_compensated(lifted, w);
     return lifted * select(1.0, y / y_new, y_new > y);
 }
 
-// The display gamut's guard rail: compensation blended in by min(Y^0.08, 1). A negative
+// The rail gamut's guard rail: compensation blended in by min(Y^0.08, 1). A negative
 // luminance leaves the colour unscaled. Returns -1 for that.
-fn agx_display_y(x: vec3<f32>) -> f32 {
-    let w = params.agx[13].xyz;
+fn agx_display_y(x: vec3<f32>, b: i32) -> f32 {
+    let w = params.agx[b + 13].xyz;
     let y = dot(x, w);
     if (y < 0.0) {
         return -1.0;
@@ -443,10 +454,10 @@ fn agx_display_y(x: vec3<f32>) -> f32 {
     return (1.0 - t) * agx_compensated(x, w) + t * y;
 }
 
-fn agx_low_side_display(c: vec3<f32>) -> vec3<f32> {
-    let y = agx_display_y(c);
+fn agx_low_side_display(c: vec3<f32>, b: i32) -> vec3<f32> {
+    let y = agx_display_y(c, b);
     let lifted = agx_lift(c);
-    let y_new = agx_display_y(lifted);
+    let y_new = agx_display_y(lifted, b);
     let scale = y >= 0.0 && y_new >= 0.0 && y_new > y;
     return lifted * select(1.0, y / max(y_new, 1e-30), scale);
 }
@@ -470,43 +481,80 @@ fn hsv_hue(c: vec3<f32>) -> f32 {
     return h / 6.0;
 }
 
-// `c` with its HSV hue set to `h`, saturation and value kept.
-fn with_hsv_hue(c: vec3<f32>, h: f32) -> vec3<f32> {
+// HSV saturation; 0 for black.
+fn hsv_sat(c: vec3<f32>) -> f32 {
     let v = max3(c);
-    if (v <= 0.0) {
-        return c;
-    }
-    let s = (v - min3(c)) / v;
+    return select(0.0, (v - min3(c)) / v, v > 0.0);
+}
+
+fn hsv_rgb(h: f32, s: f32, v: f32) -> vec3<f32> {
     let k = clamp(abs(fract(vec3<f32>(h) + vec3<f32>(0.0, 2.0 / 3.0, 1.0 / 3.0)) * 6.0 - 3.0) - 1.0, vec3<f32>(0.0), vec3<f32>(1.0));
     return v * (1.0 - s + s * k);
 }
 
-// Jed Smith's tunable sigmoid through the pivot (slope 2.4, toe and shoulder power 1.5).
-fn agx_sigmoid(x: vec3<f32>) -> vec3<f32> {
-    let k = params.agx[14];
-    let s = select(vec3<f32>(k.w), vec3<f32>(k.z), x < vec3<f32>(k.x));
-    let u = 2.4 * (x - vec3<f32>(k.x)) / s; // ≥ 0 on both sides (the toe's scale is negative)
-    return s * u / pow(1.0 + pow(u, vec3<f32>(1.5)), vec3<f32>(1.0 / 1.5)) + vec3<f32>(k.y);
+// Hue `a` moved `t` of the way to `b`, the short way round.
+fn lerp_hue(a: f32, b: f32, t: f32) -> f32 {
+    let d = b - a;
+    let bb = b - select(0.0, 1.0, d > 0.5) + select(0.0, 1.0, d < -0.5);
+    return fract(a + t * (bb - a) + 1.0);
 }
 
-// Scene-linear Rec.2020 → linear display Rec.709, clipped to 0..1 (encode with srgb_encode).
-fn agx(rgb: vec3<f32>) -> vec3<f32> {
+// Jed Smith's tunable sigmoid through pivot k.xy (k.zw: toe and shoulder scales), with `slope`
+// there and toe and shoulder powers `p`. `u` is negative only on a shoulder with a negative scale
+// (the darkening curve's), whose power is 1.
+fn agx_sigmoid(x: vec3<f32>, k: vec4<f32>, p: vec2<f32>, slope: f32) -> vec3<f32> {
+    let toe = x < vec3<f32>(k.x);
+    let s = select(vec3<f32>(k.w), vec3<f32>(k.z), toe);
+    let pw = select(vec3<f32>(p.y), vec3<f32>(p.x), toe);
+    let u = slope * (x - vec3<f32>(k.x)) / s;
+    return s * u / pow(1.0 + sign(u) * pow(abs(u), pw), 1.0 / pw) + vec3<f32>(k.y);
+}
+
+// HDR: middle grey down by the HDR ratio, per channel along the darkening curve (on log2 from
+// −20 stops to linear 1.0), then hue and saturation moved back by the purity kept.
+fn agx_darken(c: vec3<f32>, b: i32) -> vec3<f32> {
+    let q = params.agx[b + 23];
+    let range = 20.0 + log2(1.0 / 0.18);
+    let x = (log2(max(c, vec3<f32>(1e-30)) / 0.18) + 20.0) / range;
+    var d = 0.18 * exp2(agx_sigmoid(x, params.agx[b + 22], q.yz, q.x) * range - 20.0);
+    d = select(d, vec3<f32>(0.0), c <= vec3<f32>(0.0));
+    let h = lerp_hue(hsv_hue(c), hsv_hue(d), q.w);
+    let s = mix(hsv_sat(c), hsv_sat(d), q.w);
+    return hsv_rgb(h, s, max3(d));
+}
+
+// Scene-linear Rec.2020 → AgX. Block 0: linear display RGB, clipped to 0..1 (encode with
+// srgb_encode). AGX_BLOCK: HDR display light in the display's primaries, relative to SDR white
+// (0..the HDR ratio).
+fn agx(rgb: vec3<f32>, b: i32) -> vec3<f32> {
+    let hdr = params.agx[b + 15].z > 0.5;
     // 1. Input domain: E-Gamut, −10…+15 stops around middle grey.
-    var c = agx_mat(3, clamp(agx_mat(0, rgb), vec3<f32>(params.agx[12].w), vec3<f32>(params.agx[13].w)));
+    var c = agx_mat(b + 3, clamp(agx_mat(b, rgb), vec3<f32>(params.agx[b + 12].w), vec3<f32>(params.agx[b + 13].w)));
     // 2. Guard rail, 3. inset, 4. its hue.
-    c = agx_mat(6, agx_low_side(c));
+    c = agx_mat(b + 6, agx_low_side(c, b));
     let h0 = hsv_hue(c);
-    // 5.–7. Log2 over −10…+6.5 stops, sigmoid, linearise.
-    let x = (log2(max(c, vec3<f32>(1e-30)) / 0.18) + 10.0) / 16.5;
-    c = pow(max(agx_sigmoid(x), vec3<f32>(0.0)), vec3<f32>(2.4));
+    // 5.–7. Log2 over −10…+6.5 stops (clipped to it for HDR), sigmoid, linearise.
+    var x = (log2(max(c, vec3<f32>(1e-30)) / 0.18) + 10.0) / 16.5;
+    if (hdr) {
+        x = clamp(x, vec3<f32>(0.0), vec3<f32>(1.0));
+    }
+    c = pow(max(agx_sigmoid(x, params.agx[b + 14], params.agx[b + 15].xy, 2.4), vec3<f32>(0.0)), vec3<f32>(2.4));
+    if (hdr) {
+        c = agx_darken(c, b);
+    }
     // 8. Keep 40% of the sigmoid's hue shift.
-    var h = hsv_hue(c);
-    let d = h - h0;
-    h = h - select(0.0, 1.0, d > 0.5) + select(0.0, 1.0, d < -0.5);
-    h = fract(h0 + 0.4 * (h - h0) + 1.0);
-    c = with_hsv_hue(c, h);
-    // 9.–11. Outset, to the display's primaries, guard rail. 12. Clip.
-    c = agx_low_side_display(agx_mat(9, c));
+    let v = max3(c);
+    if (v > 0.0) {
+        c = hsv_rgb(lerp_hue(h0, hsv_hue(c), 0.4), hsv_sat(c), v);
+    }
+    // 9.–11. Outset, to the rail gamut's primaries, guard rail.
+    c = agx_low_side_display(agx_mat(b + 9, c), b);
+    if (hdr) {
+        // Back to Rec.2020, clip to the 1000-nit peak, to the display's primaries.
+        let lit = clamp(agx_mat(b + 16, c), vec3<f32>(0.0), vec3<f32>(1.0));
+        return max(agx_mat(b + 19, lit), vec3<f32>(0.0)) * params.agx[b + 15].w;
+    }
+    // 12. Clip.
     return clamp(c, vec3<f32>(0.0), vec3<f32>(1.0));
 }
 
@@ -520,7 +568,7 @@ fn srgb_encode(c: vec3<f32>) -> vec3<f32> {
 // Display luminance of camera RGB `cam`: what masks' luminance ranges compare against.
 fn display_lum(cam: vec3<f32>) -> f32 {
     let rgb = vec3<f32>(dot(params.cam0.xyz, cam), dot(params.cam1.xyz, cam), dot(params.cam2.xyz, cam)) * params.light0.x;
-    return srgb_encode(agx(vec3<f32>(max(dot(rgb, REC2020_LUMA), 0.0)))).y;
+    return srgb_encode(agx(vec3<f32>(max(dot(rgb, REC2020_LUMA), 0.0)), 0)).y;
 }
 
 // A colour of hue `h` (radians, OkLCh) and unit luminance: a mask's tint multiplies by it.
@@ -706,7 +754,14 @@ fn develop(cam: vec3<f32>, f: vec2<f32>, uv: vec2<f32>, aspect: f32, tc: vec2<f3
     rgb = vignette(rgb, f);
     rgb = tone(rgb, t, blacks);
     rgb = color(rgb, saturation, vibrance, hue);
-    var c = srgb_encode(agx(rgb));
+    if (params.output.x > 0.5) {
+        // The Ultra HDR gain map: how much brighter (or darker) AgX HDR is than AgX Base, per
+        // channel. The base image carries the curve and grain; the gain applies on top.
+        let k = params.output.w;
+        let g = log2((agx(rgb, AGX_BLOCK) + k) / (agx(rgb, 0) + k));
+        return clamp((g - params.output.y) / (params.output.z - params.output.y), vec3<f32>(0.0), vec3<f32>(1.0));
+    }
+    var c = srgb_encode(agx(rgb, 0));
     c = apply_curve(c);
     c = grain(c, f, aspect);
     return clamp(c, vec3<f32>(0.0), vec3<f32>(1.0));

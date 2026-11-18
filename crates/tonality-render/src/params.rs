@@ -1,3 +1,4 @@
+use tonality_core::agx::{Agx, Display, AGX_VEC4S, GAIN_LOG2, GAIN_OFFSET, HDR_RATIO};
 use tonality_core::color::CameraColor;
 use tonality_core::geometry::Geometry;
 use tonality_core::lens::{lens_table, LensProfile, LENS_KNOTS};
@@ -35,8 +36,11 @@ pub struct DevelopParams {
     pub lens_head: [f32; 4],
     /// Per radius knot: red, green, blue source/output radius ratio; vignetting gain.
     pub lens: [[f32; 4]; LENS_KNOTS],
-    /// AgX's matrices and curve constants (`tonality_core::agx::Agx::uniform`).
-    pub agx: [[f32; 4]; 15],
+    /// AgX's matrices and curve constants (`Agx::uniform`): AgX Base for the display, then AgX
+    /// HDR (used only for an Ultra HDR export's gain map).
+    pub agx: [[f32; 4]; 2 * AGX_VEC4S],
+    /// x: 0 renders the image, 1 the Ultra HDR gain map ([`gain_map`](Self::gain_map)).
+    pub output: [f32; 4],
     /// Texture, Clarity, Dehaze (see `presence` in `develop.wgsl`): the as-shot luminance guide,
     /// the airlight (from [`PresenceMaps`], via [`with_presence`](Self::with_presence)) and the
     /// global amounts.
@@ -44,7 +48,7 @@ pub struct DevelopParams {
 }
 
 impl DevelopParams {
-    pub const FLOATS: usize = 80 + MAX_MASKS * MASK_VEC4S * 4 + 4 + LENS_KNOTS * 4 + 15 * 4 + 4 * 4;
+    pub const FLOATS: usize = 80 + MAX_MASKS * MASK_VEC4S * 4 + 4 + LENS_KNOTS * 4 + 2 * AGX_VEC4S * 4 + 4 + 4 * 4;
     /// Float offsets of blocks the preview reads back: framing (geo0, geo1) and `lens_head`.
     pub const GEO_OFFSET: usize = 68;
     pub const LENS_OFFSET: usize = 80 + MAX_MASKS * MASK_VEC4S * 4;
@@ -101,7 +105,8 @@ impl DevelopParams {
             masks: [[[0.0; 4]; MASK_VEC4S]; MAX_MASKS],
             lens_head: [if lt.active { 1.0 } else { 0.0 }, lt.margin, w / diag, h / diag],
             lens: lt.knots,
-            agx: tonality_core::agx::Agx::get().uniform(),
+            agx: agx_blocks(Display::Srgb),
+            output: [0.0; 4],
             presence: {
                 let g = Guide::new(color);
                 let e = &edit.effects;
@@ -114,6 +119,20 @@ impl DevelopParams {
             },
         }
         .with_masks(&edit.masks, src_w, src_h)
+    }
+
+    /// Render for `display` (the preview and default exports are sRGB).
+    pub fn for_display(mut self, display: Display) -> Self {
+        self.agx = agx_blocks(display);
+        self
+    }
+
+    /// Render the Ultra HDR gain map instead of the image: per channel, how AgX HDR compares
+    /// with the image (AgX Base for the same display), as `log2((HDR + k) / (SDR + k))` over
+    /// [`GAIN_LOG2`], 0–1.
+    pub fn gain_map(mut self) -> Self {
+        self.output = [1.0, GAIN_LOG2[0] as f32, GAIN_LOG2[1] as f32, GAIN_OFFSET as f32];
+        self
     }
 
     /// Bind the photo's Clarity and Dehaze maps (without them, only Texture works).
@@ -213,11 +232,22 @@ impl DevelopParams {
         for r in &self.agx {
             v.extend_from_slice(r);
         }
+        v.extend_from_slice(&self.output);
         for r in &self.presence {
             v.extend_from_slice(r);
         }
         v
     }
+}
+
+/// AgX Base for `display`, then AgX HDR converted to its primaries (with the HDR ratio in the
+/// HDR block's row 15.w).
+fn agx_blocks(display: Display) -> [[f32; 4]; 2 * AGX_VEC4S] {
+    let mut out = [[0.0; 4]; 2 * AGX_VEC4S];
+    out[..AGX_VEC4S].copy_from_slice(&Agx::sdr(display).uniform());
+    out[AGX_VEC4S..].copy_from_slice(&Agx::hdr(display).uniform());
+    out[AGX_VEC4S + 15][3] = HDR_RATIO as f32;
+    out
 }
 
 fn split(v: [f32; 8]) -> [[f32; 4]; 2] {

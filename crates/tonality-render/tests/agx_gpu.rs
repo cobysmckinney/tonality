@@ -3,7 +3,7 @@
 //! a usable adapter.
 
 use half::f16;
-use tonality_core::agx::Agx;
+use tonality_core::agx::{Agx, Display, GAIN_LOG2, GAIN_OFFSET};
 use tonality_core::color::{invert, CameraColor, Mat3, REC2020_TO_XYZ};
 use tonality_core::mask::brush_layers;
 use tonality_core::EditState;
@@ -70,9 +70,8 @@ fn gpu() -> Option<Gpu> {
     Gpu::new().map_err(|e| eprintln!("skipped: {e}")).ok()
 }
 
-#[test]
-fn shader_agx_matches_the_cpu_reference() {
-    let Some(gpu) = gpu() else { return };
+/// The reference colours, as camera values and as the Rec.2020 colours the shader receives.
+fn reference_colours() -> (Mat3, Vec<[f32; 3]>, Vec<[f64; 3]>) {
     let reference: Reference =
         serde_json::from_str(include_str!("../../tonality-core/tests/data/agx_reference.json")).unwrap();
     let m = invert(&REC2020_TO_XYZ).unwrap();
@@ -80,12 +79,14 @@ fn shader_agx_matches_the_cpu_reference() {
     let inputs: Vec<[f64; 3]> = cam.iter().map(|&c| rec2020(&m, c)).collect();
     let negative = inputs.iter().filter(|c| c.iter().any(|&v| v < -1e-4)).count();
     assert!(negative >= 10, "only {negative} colours outside Rec.2020 reach the test");
+    (m, cam, inputs)
+}
 
-    let out = develop(&gpu, &m, &cam, |_| {});
-    let agx = Agx::get();
+/// Largest difference between the shader's output and `want`, and the input it was at.
+fn worst(inputs: &[[f64; 3]], out: &[[f64; 3]], want: impl Fn([f64; 3]) -> [f64; 3]) -> (f64, [f64; 3]) {
     let mut worst = (0.0f64, [0.0f64; 3]);
-    for (c, got) in inputs.iter().zip(&out) {
-        let want = agx.display(*c);
+    for (c, got) in inputs.iter().zip(out) {
+        let want = want(*c);
         for k in 0..3 {
             let d = (got[k] - want[k]).abs();
             if d > worst.0 {
@@ -93,14 +94,43 @@ fn shader_agx_matches_the_cpu_reference() {
             }
         }
     }
-    eprintln!(
-        "GPU ({}) vs CPU, {} colours ({negative} outside Rec.2020): worst {:.6} at {:?}",
-        gpu.adapter,
-        inputs.len(),
-        worst.0,
-        worst.1
-    );
-    assert!(worst.0 < 1e-3, "worst {} at {:?}", worst.0, worst.1);
+    worst
+}
+
+#[test]
+fn shader_agx_matches_the_cpu_reference() {
+    let Some(gpu) = gpu() else { return };
+    let (m, cam, inputs) = reference_colours();
+    for display in [Display::Srgb, Display::DisplayP3] {
+        let out = develop(&gpu, &m, &cam, |p| *p = p.for_display(display));
+        let agx = Agx::sdr(display);
+        let (d, at) = worst(&inputs, &out, |c| agx.display(c));
+        eprintln!("GPU ({}) vs CPU, {display:?}, {} colours: worst {d:.6} at {at:?}", gpu.adapter, inputs.len());
+        assert!(d < 1e-3, "{display:?}: worst {d} at {at:?}");
+    }
+}
+
+/// The gain map pass: per channel, log2 of AgX HDR over AgX Base (linear, in the display's
+/// primaries), over the stored range.
+#[test]
+fn shader_gain_map_matches_the_cpu_reference() {
+    let Some(gpu) = gpu() else { return };
+    let (m, cam, inputs) = reference_colours();
+    let linear = |v: f64| if v <= 0.04045 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) };
+    for display in [Display::Srgb, Display::DisplayP3] {
+        let out = develop(&gpu, &m, &cam, |p| *p = p.for_display(display).gain_map());
+        let (sdr, hdr) = (Agx::sdr(display), Agx::hdr(display));
+        let (d, at) = worst(&inputs, &out, |c| {
+            let (s, h) = (sdr.display(c).map(linear), hdr.hdr_relative(c));
+            [0, 1, 2].map(|i| {
+                let g = ((h[i] + GAIN_OFFSET) / (s[i] + GAIN_OFFSET)).log2();
+                ((g - GAIN_LOG2[0]) / (GAIN_LOG2[1] - GAIN_LOG2[0])).clamp(0.0, 1.0)
+            })
+        });
+        // 1/255 is one step of the 8-bit gain map.
+        eprintln!("GPU gain map vs CPU, {display:?}: worst {d:.6} at {at:?}");
+        assert!(d < 1.0 / 255.0, "{display:?}: worst {d} at {at:?}");
+    }
 }
 
 /// A dark, saturated blue just outside Rec.2020 has a luminance at or below zero. Tone scales
