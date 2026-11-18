@@ -144,8 +144,15 @@ export class PreviewRenderer {
   /** 1 + shader index of the mask to tint, or 0. */
   private overlay = 0;
 
-  constructor(private canvas: HTMLCanvasElement, src: GlslProgram) {
-    const gl = canvas.getContext("webgl2", { antialias: false, alpha: false, premultipliedAlpha: false });
+  constructor(
+    private canvas: HTMLCanvasElement,
+    src: GlslProgram,
+  ) {
+    const gl = canvas.getContext("webgl2", {
+      antialias: false,
+      alpha: false,
+      premultipliedAlpha: false,
+    });
     if (!gl) throw new Error("WebGL2 is not available");
     this.gl = gl;
     this.program = link(gl, src.vertex, src.fragment);
@@ -168,7 +175,17 @@ export class PreviewRenderer {
     this.presence = gl.createTexture()!;
     gl.activeTexture(gl.TEXTURE3);
     gl.bindTexture(gl.TEXTURE_2D, this.presence);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA16F, 1, 1, 0, gl.RGBA, gl.HALF_FLOAT, new Uint16Array(4));
+    gl.texImage2D(
+      gl.TEXTURE_2D,
+      0,
+      gl.RGBA16F,
+      1,
+      1,
+      0,
+      gl.RGBA,
+      gl.HALF_FLOAT,
+      new Uint16Array(4),
+    );
     setLinearClamp(gl);
     gl.activeTexture(gl.TEXTURE0);
     this.brush = { main: emptyBrush(gl), compare: emptyBrush(gl), still: emptyBrush(gl) };
@@ -191,7 +208,12 @@ export class PreviewRenderer {
     const b = this.brush[slot];
     uploadBrush(this.gl, b, layers);
     if (slot === "main" && this.live) {
-      paint(b.data.subarray(this.live.layer * b.w * b.h, (this.live.layer + 1) * b.w * b.h), b.w, b.h, this.live.stroke);
+      paint(
+        b.data.subarray(this.live.layer * b.w * b.h, (this.live.layer + 1) * b.w * b.h),
+        b.w,
+        b.h,
+        this.live.stroke,
+      );
       uploadBrush(this.gl, b, null, true);
     }
     this.requestDraw(true);
@@ -201,12 +223,21 @@ export class PreviewRenderer {
    * Paint the stroke being drawn into brush layer `layer` of the main view, from `a` to `b`
    * (source uv). `size` is the raster size the backend uses (`mask_size`).
    */
-  paintLive(layer: number, stroke: Stroke, a: readonly number[], b: readonly number[], size: [number, number]) {
+  paintLive(
+    layer: number,
+    stroke: Stroke,
+    a: readonly number[],
+    b: readonly number[],
+    size: [number, number],
+  ) {
     const gl = this.gl;
     const slot = this.brush.main;
     if (slot.w !== size[0] || slot.h !== size[1] || layer >= slot.layers) {
       // A new brush mask (or the first one): grow the layers, keeping what's painted.
-      const layers = Math.max(layer + 1, slot.w === size[0] && slot.h === size[1] ? slot.layers : 0);
+      const layers = Math.max(
+        layer + 1,
+        slot.w === size[0] && slot.h === size[1] ? slot.layers : 0,
+      );
       const data = new Uint8Array(size[0] * size[1] * layers);
       if (slot.w === size[0] && slot.h === size[1]) data.set(slot.data.subarray(0, data.length));
       uploadBrush(gl, slot, { width: size[0], height: size[1], layers, data });
@@ -217,10 +248,23 @@ export class PreviewRenderer {
     const r = stampSegment(plane, slot.w, slot.h, a, b, stroke);
     if (!r) return;
     const sub = new Uint8Array(r.w * r.h);
-    for (let y = 0; y < r.h; y++) sub.set(plane.subarray((r.y + y) * slot.w + r.x, (r.y + y) * slot.w + r.x + r.w), y * r.w);
+    for (let y = 0; y < r.h; y++)
+      sub.set(plane.subarray((r.y + y) * slot.w + r.x, (r.y + y) * slot.w + r.x + r.w), y * r.w);
     gl.bindTexture(gl.TEXTURE_2D_ARRAY, slot.texture);
     gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
-    gl.texSubImage3D(gl.TEXTURE_2D_ARRAY, 0, r.x, r.y, layer, r.w, r.h, 1, gl.RED, gl.UNSIGNED_BYTE, sub);
+    gl.texSubImage3D(
+      gl.TEXTURE_2D_ARRAY,
+      0,
+      r.x,
+      r.y,
+      layer,
+      r.w,
+      r.h,
+      1,
+      gl.RED,
+      gl.UNSIGNED_BYTE,
+      sub,
+    );
     this.requestDraw(true);
   }
 
@@ -256,7 +300,17 @@ export class PreviewRenderer {
     gl.activeTexture(gl.TEXTURE3);
     gl.bindTexture(gl.TEXTURE_2D, this.presence);
     gl.pixelStorei(gl.UNPACK_ALIGNMENT, 2);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA16F, maps.width, maps.height, 0, gl.RGBA, gl.HALF_FLOAT, maps.data);
+    gl.texImage2D(
+      gl.TEXTURE_2D,
+      0,
+      gl.RGBA16F,
+      maps.width,
+      maps.height,
+      0,
+      gl.RGBA,
+      gl.HALF_FLOAT,
+      maps.data,
+    );
     gl.activeTexture(gl.TEXTURE0);
     this.presenceFor = imageId;
     // Params sent before the maps arrived had them switched off: send them again.
@@ -301,7 +355,12 @@ export class PreviewRenderer {
    * Render the whole image with `params` (and `curve`) at `edge` px on the long side, into a
    * new 2D canvas. Used for branch and library thumbnails; doesn't disturb the main view.
    */
-  renderStill(edge: number, params: Float32Array, curve: Uint16Array | null, brush: BrushLayers | null = null): HTMLCanvasElement | null {
+  renderStill(
+    edge: number,
+    params: Float32Array,
+    curve: Uint16Array | null,
+    brush: BrushLayers | null = null,
+  ): HTMLCanvasElement | null {
     const gl = this.gl;
     if (!this.texture) return null;
     const fr = framingOf(params);
@@ -347,7 +406,8 @@ export class PreviewRenderer {
     const ctx = out.getContext("2d")!;
     const data = ctx.createImageData(w, h);
     const row = w * 4;
-    for (let y = 0; y < h; y++) data.data.set(px.subarray((h - 1 - y) * row, (h - y) * row), y * row);
+    for (let y = 0; y < h; y++)
+      data.data.set(px.subarray((h - 1 - y) * row, (h - y) * row), y * row);
     ctx.putImageData(data, 0, 0);
     return out;
   }
@@ -385,7 +445,11 @@ export class PreviewRenderer {
     const out: ImageData[] = [];
     for (const i of indices) {
       gl.bindBuffer(gl.UNIFORM_BUFFER, this.viewUbo);
-      gl.bufferData(gl.UNIFORM_BUFFER, this.viewBlock(1, 1, whole, whole, whole, i + 1, true), gl.DYNAMIC_DRAW);
+      gl.bufferData(
+        gl.UNIFORM_BUFFER,
+        this.viewBlock(1, 1, whole, whole, whole, i + 1, true),
+        gl.DYNAMIC_DRAW,
+      );
       gl.clearColor(0, 0, 0, 1);
       gl.clear(gl.COLOR_BUFFER_BIT);
       gl.drawArrays(gl.TRIANGLES, 0, 6);
@@ -393,7 +457,8 @@ export class PreviewRenderer {
       // GL rows run bottom-up.
       const img = new ImageData(w, h);
       const row = w * 4;
-      for (let y = 0; y < h; y++) img.data.set(px.subarray((h - 1 - y) * row, (h - y) * row), y * row);
+      for (let y = 0; y < h; y++)
+        img.data.set(px.subarray((h - 1 - y) * row, (h - y) * row), y * row);
       out.push(img);
     }
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
@@ -453,7 +518,13 @@ export class PreviewRenderer {
   }
 
   /** Full-resolution pixels for `region` (full-res px), `width × height` RGB16F samples. */
-  setDetail(region: { x: number; y: number; w: number; h: number }, level: number, width: number, height: number, rgb16f: Uint16Array) {
+  setDetail(
+    region: { x: number; y: number; w: number; h: number },
+    level: number,
+    width: number,
+    height: number,
+    rgb16f: Uint16Array,
+  ) {
     const gl = this.gl;
     this.dropDetail();
     const texture = gl.createTexture()!;
@@ -461,7 +532,12 @@ export class PreviewRenderer {
     gl.pixelStorei(gl.UNPACK_ALIGNMENT, 2);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGB16F, width, height, 0, gl.RGB, gl.HALF_FLOAT, rgb16f);
     setLinearClamp(gl);
-    const rect = { x: region.x / this.fullW, y: region.y / this.fullH, w: region.w / this.fullW, h: region.h / this.fullH };
+    const rect = {
+      x: region.x / this.fullW,
+      y: region.y / this.fullH,
+      w: region.w / this.fullW,
+      h: region.h / this.fullH,
+    };
     this.detail = { texture, rect, level };
     this.requestDraw();
   }
@@ -552,7 +628,8 @@ export class PreviewRenderer {
   hit(cssX: number, cssY: number) {
     const dpr = window.devicePixelRatio || 1;
     const r = this.layout(this.paneW * dpr, this.canvas.clientHeight * dpr);
-    const x = this.paneX(cssX) * dpr, y = cssY * dpr;
+    const x = this.paneX(cssX) * dpr,
+      y = cssY * dpr;
     return x >= r.x && y >= r.y && x <= r.x + r.w && y <= r.y + r.h;
   }
 
@@ -578,16 +655,36 @@ export class PreviewRenderer {
   }
 
   /** View uniforms (xform, quad, tex, frame) to draw `quad` of the frame from a texture holding `tex` of the source. */
-  private viewBlock(cw: number, ch: number, img: { x: number; y: number; w: number; h: number }, quad: Rect, tex: Rect, overlay = 0, maskOnly = false) {
+  private viewBlock(
+    cw: number,
+    ch: number,
+    img: { x: number; y: number; w: number; h: number },
+    quad: Rect,
+    tex: Rect,
+    overlay = 0,
+    maskOnly = false,
+  ) {
     const x = img.x + quad.x * img.w;
     const y = img.y + quad.y * img.h;
     const w = quad.w * img.w;
     const h = quad.h * img.h;
     return new Float32Array([
-      w / cw, h / ch, ((x + w / 2) / cw) * 2 - 1, 1 - ((y + h / 2) / ch) * 2,
-      quad.x, quad.y, quad.w, quad.h,
-      tex.x, tex.y, tex.w, tex.h,
-      this.fullW, this.fullH, overlay, maskOnly ? 1 : 0,
+      w / cw,
+      h / ch,
+      ((x + w / 2) / cw) * 2 - 1,
+      1 - ((y + h / 2) / ch) * 2,
+      quad.x,
+      quad.y,
+      quad.w,
+      quad.h,
+      tex.x,
+      tex.y,
+      tex.w,
+      tex.h,
+      this.fullW,
+      this.fullH,
+      overlay,
+      maskOnly ? 1 : 0,
     ]);
   }
 
@@ -596,20 +693,37 @@ export class PreviewRenderer {
     const s = this.scale;
     if (!this.onNeedDetail || s <= (this.imageW / this.fullW) * 1.05) return;
     // Visible part of the frame, then the source area it reads.
-    const vx0 = Math.max(0, -img.x / img.w), vy0 = Math.max(0, -img.y / img.h);
-    const vx1 = Math.min(1, (cw - img.x) / img.w), vy1 = Math.min(1, (ch - img.y) / img.h);
+    const vx0 = Math.max(0, -img.x / img.w),
+      vy0 = Math.max(0, -img.y / img.h);
+    const vx1 = Math.min(1, (cw - img.x) / img.w),
+      vy1 = Math.min(1, (ch - img.y) / img.h);
     if (vx1 <= vx0 || vy1 <= vy0) return;
-    const pts = [toSource(this.out, vx0, vy0), toSource(this.out, vx1, vy0), toSource(this.out, vx0, vy1), toSource(this.out, vx1, vy1)];
+    const pts = [
+      toSource(this.out, vx0, vy0),
+      toSource(this.out, vx1, vy0),
+      toSource(this.out, vx0, vy1),
+      toSource(this.out, vx1, vy1),
+    ];
     const lm = this.lensMargin;
-    const u0 = Math.max(0, Math.min(...pts.map((p) => p[0])) - lm), u1 = Math.min(1, Math.max(...pts.map((p) => p[0])) + lm);
-    const w0 = Math.max(0, Math.min(...pts.map((p) => p[1])) - lm), w1 = Math.min(1, Math.max(...pts.map((p) => p[1])) + lm);
+    const u0 = Math.max(0, Math.min(...pts.map((p) => p[0])) - lm),
+      u1 = Math.min(1, Math.max(...pts.map((p) => p[0])) + lm);
+    const w0 = Math.max(0, Math.min(...pts.map((p) => p[1])) - lm),
+      w1 = Math.min(1, Math.max(...pts.map((p) => p[1])) + lm);
     if (u1 <= u0 || w1 <= w0) return;
     const level = s >= 1 ? 0 : Math.floor(Math.log2(1 / s));
     const d = this.detail;
-    if (d && d.level === level && d.rect.x <= u0 + 1e-6 && d.rect.y <= w0 + 1e-6 && d.rect.x + d.rect.w >= u1 - 1e-6 && d.rect.y + d.rect.h >= w1 - 1e-6) {
+    if (
+      d &&
+      d.level === level &&
+      d.rect.x <= u0 + 1e-6 &&
+      d.rect.y <= w0 + 1e-6 &&
+      d.rect.x + d.rect.w >= u1 - 1e-6 &&
+      d.rect.y + d.rect.h >= w1 - 1e-6
+    ) {
       return;
     }
-    const mx = (u1 - u0) * DETAIL_MARGIN, my = (w1 - w0) * DETAIL_MARGIN;
+    const mx = (u1 - u0) * DETAIL_MARGIN,
+      my = (w1 - w0) * DETAIL_MARGIN;
     const x0 = Math.floor(Math.max(0, u0 - mx) * this.fullW);
     const y0 = Math.floor(Math.max(0, w0 - my) * this.fullH);
     const x1 = Math.ceil(Math.min(1, u1 + mx) * this.fullW);
@@ -677,13 +791,21 @@ export class PreviewRenderer {
       // The preview covers the whole frame; full-res pixels (when zoomed in) draw on top,
       // wherever their texture has data.
       gl.bindBuffer(gl.UNIFORM_BUFFER, this.viewUbo);
-      gl.bufferData(gl.UNIFORM_BUFFER, this.viewBlock(pw, h, pane, whole, whole, overlay), gl.DYNAMIC_DRAW);
+      gl.bufferData(
+        gl.UNIFORM_BUFFER,
+        this.viewBlock(pw, h, pane, whole, whole, overlay),
+        gl.DYNAMIC_DRAW,
+      );
       gl.activeTexture(gl.TEXTURE0);
       gl.bindTexture(gl.TEXTURE_2D, this.texture);
       gl.drawArrays(gl.TRIANGLES, 0, 6);
 
       if (this.detail && this.scale > this.imageW / this.fullW) {
-        gl.bufferData(gl.UNIFORM_BUFFER, this.viewBlock(pw, h, pane, whole, this.detail.rect, overlay), gl.DYNAMIC_DRAW);
+        gl.bufferData(
+          gl.UNIFORM_BUFFER,
+          this.viewBlock(pw, h, pane, whole, this.detail.rect, overlay),
+          gl.DYNAMIC_DRAW,
+        );
         gl.bindTexture(gl.TEXTURE_2D, this.detail.texture);
         gl.drawArrays(gl.TRIANGLES, 0, 6);
       }
@@ -728,14 +850,19 @@ export class PreviewRenderer {
 
   private computeHistogram() {
     const gl = this.gl;
-    if (!this.histFbo || !this.histPixels || !this.texture || !this.hasParams || !this.onHistogram) return;
+    if (!this.histFbo || !this.histPixels || !this.texture || !this.hasParams || !this.onHistogram)
+      return;
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.histFbo);
     gl.viewport(0, 0, this.histW, this.histH);
     gl.clearColor(0, 0, 0, 1);
     gl.clear(gl.COLOR_BUFFER_BIT);
     gl.bindBuffer(gl.UNIFORM_BUFFER, this.viewUbo);
     const whole = { x: 0, y: 0, w: 1, h: 1 };
-    gl.bufferData(gl.UNIFORM_BUFFER, this.viewBlock(1, 1, { x: 0, y: 0, w: 1, h: 1 }, whole, whole), gl.DYNAMIC_DRAW);
+    gl.bufferData(
+      gl.UNIFORM_BUFFER,
+      this.viewBlock(1, 1, { x: 0, y: 0, w: 1, h: 1 }, whole, whole),
+      gl.DYNAMIC_DRAW,
+    );
     gl.useProgram(this.program);
     gl.bindBufferBase(gl.UNIFORM_BUFFER, PARAMS_BINDING, this.paramsUbo);
     gl.bindBufferBase(gl.UNIFORM_BUFFER, VIEW_BINDING, this.viewUbo);
@@ -759,7 +886,9 @@ export class PreviewRenderer {
       total: this.histW * this.histH,
     };
     for (let i = 0; i < px.length; i += 4) {
-      const r = px[i], g = px[i + 1], b = px[i + 2];
+      const r = px[i],
+        g = px[i + 1],
+        b = px[i + 2];
       h.r[r]++;
       h.g[g]++;
       h.b[b]++;
@@ -796,13 +925,24 @@ export class PreviewRenderer {
 }
 
 function emptyBrush(gl: WebGL2RenderingContext): BrushSlot {
-  const slot: BrushSlot = { texture: gl.createTexture()!, w: 0, h: 0, layers: 0, data: new Uint8Array(0) };
+  const slot: BrushSlot = {
+    texture: gl.createTexture()!,
+    w: 0,
+    h: 0,
+    layers: 0,
+    data: new Uint8Array(0),
+  };
   uploadBrush(gl, slot, null);
   return slot;
 }
 
 /** Replace a slot's rasters (null: none), or with `reupload`, send its CPU copy again. */
-function uploadBrush(gl: WebGL2RenderingContext, slot: BrushSlot, layers: BrushLayers | null, reupload = false) {
+function uploadBrush(
+  gl: WebGL2RenderingContext,
+  slot: BrushSlot,
+  layers: BrushLayers | null,
+  reupload = false,
+) {
   if (!reupload) {
     if (layers && layers.layers > 0) {
       slot.w = layers.width;
@@ -819,9 +959,16 @@ function uploadBrush(gl: WebGL2RenderingContext, slot: BrushSlot, layers: BrushL
   gl.bindTexture(gl.TEXTURE_2D_ARRAY, slot.texture);
   gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
   gl.texImage3D(
-    gl.TEXTURE_2D_ARRAY, 0, gl.R8,
-    empty ? 1 : slot.w, empty ? 1 : slot.h, empty ? 1 : slot.layers,
-    0, gl.RED, gl.UNSIGNED_BYTE, empty ? new Uint8Array(1) : slot.data,
+    gl.TEXTURE_2D_ARRAY,
+    0,
+    gl.R8,
+    empty ? 1 : slot.w,
+    empty ? 1 : slot.h,
+    empty ? 1 : slot.layers,
+    0,
+    gl.RED,
+    gl.UNSIGNED_BYTE,
+    empty ? new Uint8Array(1) : slot.data,
   );
   gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
   gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
@@ -832,7 +979,8 @@ function uploadBrush(gl: WebGL2RenderingContext, slot: BrushSlot, layers: BrushL
 function identityCurve(gl: WebGL2RenderingContext): WebGLTexture {
   const t = gl.createTexture()!;
   const ramp = new Float32Array(CURVE_SIZE * 4);
-  for (let i = 0; i < CURVE_SIZE; i++) ramp.fill(i / (CURVE_SIZE - 1), i * 4, i * 4 + 3), (ramp[i * 4 + 3] = 1);
+  for (let i = 0; i < CURVE_SIZE; i++)
+    (ramp.fill(i / (CURVE_SIZE - 1), i * 4, i * 4 + 3), (ramp[i * 4 + 3] = 1));
   gl.bindTexture(gl.TEXTURE_2D, t);
   gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA16F, CURVE_SIZE, 1, 0, gl.RGBA, gl.FLOAT, ramp);
   setLinearClamp(gl);

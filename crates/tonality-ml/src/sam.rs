@@ -21,7 +21,10 @@ pub fn encode(encoder: &Path, img: &RgbImage) -> Result<Tensor32> {
         img.clone()
     } else {
         let s = SAM_EDGE as f32 / img.width().max(img.height()) as f32;
-        let (w, h) = ((img.width() as f32 * s).round() as u32, (img.height() as f32 * s).round() as u32);
+        let (w, h) = (
+            (img.width() as f32 * s).round() as u32,
+            (img.height() as f32 * s).round() as u32,
+        );
         imageops::resize(img, w, h, imageops::FilterType::Triangle)
     };
     // HWC, RGB 0..255: the graph normalises and pads itself.
@@ -32,10 +35,18 @@ pub fn encode(encoder: &Path, img: &RgbImage) -> Result<Tensor32> {
 
 /// The object inside `lasso` (closed loop, 0..1 across the image), as a `w × h` 0..1 mask.
 /// `w × h` is the encoded image's size (long side [`SAM_EDGE`]).
-pub fn decode(decoder: &Path, embedding: &Tensor32, lasso: &[[f32; 2]], w: u32, h: u32) -> Result<Vec<f32>> {
-    let (x0, y0, x1, y1) = lasso.iter().fold((1f32, 1f32, 0f32, 0f32), |(a, b, c, d), p| {
-        (a.min(p[0]), b.min(p[1]), c.max(p[0]), d.max(p[1]))
-    });
+pub fn decode(
+    decoder: &Path,
+    embedding: &Tensor32,
+    lasso: &[[f32; 2]],
+    w: u32,
+    h: u32,
+) -> Result<Vec<f32>> {
+    let (x0, y0, x1, y1) = lasso
+        .iter()
+        .fold((1f32, 1f32, 0f32, 0f32), |(a, b, c, d), p| {
+            (a.min(p[0]), b.min(p[1]), c.max(p[0]), d.max(p[1]))
+        });
     let (fw, fh) = (w as f32, h as f32);
     let (cx, cy) = interior_point(lasso);
     // Box corners (labels 2, 3) and a positive point (1).
@@ -44,19 +55,29 @@ pub fn decode(decoder: &Path, embedding: &Tensor32, lasso: &[[f32; 2]], w: u32, 
         ("image_embeddings", embedding.clone()),
         ("point_coords", Tensor32::new([1, 3, 2], coords)),
         ("point_labels", Tensor32::new([1, 3], vec![2.0, 3.0, 1.0])),
-        ("mask_input", Tensor32::new([1, 1, 256, 256], vec![0.0; 256 * 256])),
+        (
+            "mask_input",
+            Tensor32::new([1, 1, 256, 256], vec![0.0; 256 * 256]),
+        ),
         ("has_mask_input", Tensor32::new([1], vec![0.0])),
         ("orig_im_size", Tensor32::new([2], vec![fh, fw])),
     ];
     let masks = run(decoder, inputs, &["masks"])?.remove(0);
     let limit = polygon_mask(lasso, w, h, 0.03);
-    Ok(masks.data.iter().zip(&limit).map(|(&l, &k)| k / (1.0 + (-l).exp())).collect())
+    Ok(masks
+        .data
+        .iter()
+        .zip(&limit)
+        .map(|(&l, &k)| k / (1.0 + (-l).exp()))
+        .collect())
 }
 
 /// A point well inside the loop: its centroid if that's inside, else the inside sample nearest it.
 fn interior_point(lasso: &[[f32; 2]]) -> (f32, f32) {
     let n = lasso.len().max(1) as f32;
-    let c = lasso.iter().fold([0.0, 0.0], |a, p| [a[0] + p[0] / n, a[1] + p[1] / n]);
+    let c = lasso
+        .iter()
+        .fold([0.0, 0.0], |a, p| [a[0] + p[0] / n, a[1] + p[1] / n]);
     if inside(lasso, c[0], c[1]) {
         return (c[0], c[1]);
     }
@@ -90,14 +111,18 @@ fn inside(poly: &[[f32; 2]], x: f32, y: f32) -> bool {
 pub fn polygon_mask(poly: &[[f32; 2]], w: u32, h: u32, grow: f32) -> Vec<f32> {
     let long = w.max(h) as f32;
     let g = grow * long;
-    let pts: Vec<[f32; 2]> = poly.iter().map(|p| [p[0] * w as f32, p[1] * h as f32]).collect();
+    let pts: Vec<[f32; 2]> = poly
+        .iter()
+        .map(|p| [p[0] * w as f32, p[1] * h as f32])
+        .collect();
     let seg_dist = |x: f32, y: f32| -> f32 {
         let n = pts.len();
         (0..n)
             .map(|i| {
                 let (a, b) = (pts[i], pts[(i + 1) % n]);
                 let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
-                let t = (((x - a[0]) * dx + (y - a[1]) * dy) / (dx * dx + dy * dy).max(1e-9)).clamp(0.0, 1.0);
+                let t = (((x - a[0]) * dx + (y - a[1]) * dy) / (dx * dx + dy * dy).max(1e-9))
+                    .clamp(0.0, 1.0);
                 ((x - a[0] - t * dx).powi(2) + (y - a[1] - t * dy).powi(2)).sqrt()
             })
             .fold(f32::MAX, f32::min)
@@ -113,7 +138,11 @@ pub fn polygon_mask(poly: &[[f32; 2]], w: u32, h: u32, grow: f32) -> Vec<f32> {
                 1.0
             } else {
                 let d = seg_dist(px, py);
-                if d <= g { 1.0 } else { (1.0 - (d - g) / g).max(0.0) }
+                if d <= g {
+                    1.0
+                } else {
+                    (1.0 - (d - g) / g).max(0.0)
+                }
             };
         }
     }
@@ -139,7 +168,16 @@ mod tests {
     fn interior_point_handles_concave_loops() {
         assert_eq!(interior_point(&SQUARE), (0.5, 0.5));
         // A "C" whose centroid falls in the gap.
-        let c = [[0.1, 0.1], [0.9, 0.1], [0.9, 0.3], [0.3, 0.3], [0.3, 0.7], [0.9, 0.7], [0.9, 0.9], [0.1, 0.9]];
+        let c = [
+            [0.1, 0.1],
+            [0.9, 0.1],
+            [0.9, 0.3],
+            [0.3, 0.3],
+            [0.3, 0.7],
+            [0.9, 0.7],
+            [0.9, 0.9],
+            [0.1, 0.9],
+        ];
         let (x, y) = interior_point(&c);
         assert!(inside(&c, x, y));
     }

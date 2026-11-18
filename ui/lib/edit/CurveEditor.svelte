@@ -37,11 +37,13 @@
   const histPath = $derived.by(() => {
     const h = histogram;
     if (!h) return "";
-    const src = channel === "rgb" ? h.y : h[channel === "red" ? "r" : channel === "green" ? "g" : "b"];
+    const src =
+      channel === "rgb" ? h.y : h[channel === "red" ? "r" : channel === "green" ? "g" : "b"];
     let peak = 1;
     for (let i = 1; i < 255; i++) peak = Math.max(peak, src[i]);
     let d = `M0,${size}`;
-    for (let i = 0; i < 256; i++) d += `L${((i / 255) * size).toFixed(1)},${(size - Math.min(1, Math.sqrt(src[i] / peak)) * size * 0.9).toFixed(1)}`;
+    for (let i = 0; i < 256; i++)
+      d += `L${((i / 255) * size).toFixed(1)},${(size - Math.min(1, Math.sqrt(src[i] / peak)) * size * 0.9).toFixed(1)}`;
     return d + `L${size},${size}Z`;
   });
 
@@ -54,7 +56,10 @@
   }
 
   function emit(pts: Point[]) {
-    oninput({ ...value, [channel]: isIdentity(pts) ? [] : pts.map(([x, y]) => [round(x), round(y)]) });
+    oninput({
+      ...value,
+      [channel]: isIdentity(pts) ? [] : pts.map(([x, y]) => [round(x), round(y)]),
+    });
   }
   const round = (v: number) => Math.round(v * 10000) / 10000;
 
@@ -91,7 +96,9 @@
   function onMove(e: PointerEvent) {
     if (!drag) return;
     const [x, y] = toUnit(e);
-    const pts = (value[channel].length ? (value[channel] as Point[]) : IDENTITY).map((q) => [...q] as Point);
+    const pts = (value[channel].length ? (value[channel] as Point[]) : IDENTITY).map(
+      (q) => [...q] as Point,
+    );
     const i = drag.index;
     const last = pts.length - 1;
     const interior = i > 0 && i < last;
@@ -136,7 +143,12 @@
         {c.label}{#if edited(c.id)}<span class="dot"></span>{/if}
       </button>
     {/each}
-    <button class="reset" onclick={resetChannel} disabled={!edited(channel)} title="Reset this curve">Reset</button>
+    <button
+      class="reset"
+      onclick={resetChannel}
+      disabled={!edited(channel)}
+      title="Reset this curve">Reset</button
+    >
   </div>
 
   <div class="graph" bind:clientWidth={size} style:height="{size}px">

@@ -16,12 +16,23 @@ fn main() {
         let p = tonality_raw::decode_preview(Path::new(raw), 1024).unwrap();
         let (w, h) = mask_size(p.full_width, p.full_height);
         let img = input::neutral_srgb_sized(&p.pixels, p.width, p.height, &p.color, w, h);
-        let name = Path::new(raw).file_stem().unwrap().to_string_lossy().into_owned();
-        let (maps, pw, ph) = scene::detect(model, scene::SceneModel::ADE_512, &img, &[scene::ade::SKY]).unwrap();
+        let name = Path::new(raw)
+            .file_stem()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        let (maps, pw, ph) =
+            scene::detect(model, scene::SceneModel::ADE_512, &img, &[scene::ade::SKY]).unwrap();
         let t = Instant::now();
         let r = refine::sky_raster(&maps[0], pw, ph, &img);
-        println!("{name}: sky refine {:.0} ms", t.elapsed().as_secs_f32() * 1e3);
+        println!(
+            "{name}: sky refine {:.0} ms",
+            t.elapsed().as_secs_f32() * 1e3
+        );
         img.save(out.join(format!("{name}-input.png"))).unwrap();
-        GrayImage::from_raw(w, h, r).unwrap().save(out.join(format!("{name}-sky.png"))).unwrap();
+        GrayImage::from_raw(w, h, r)
+            .unwrap()
+            .save(out.join(format!("{name}-sky.png")))
+            .unwrap();
     }
 }

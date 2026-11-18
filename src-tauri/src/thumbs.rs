@@ -22,7 +22,10 @@ const EDGE: u32 = 640;
 fn pool() -> &'static rayon::ThreadPool {
     static POOL: OnceLock<rayon::ThreadPool> = OnceLock::new();
     POOL.get_or_init(|| {
-        let n = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4).clamp(2, 6);
+        let n = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(4)
+            .clamp(2, 6);
         rayon::ThreadPoolBuilder::new()
             .num_threads(n)
             .thread_name(|i| format!("thumb-{i}"))
@@ -35,9 +38,23 @@ fn pool() -> &'static rayon::ThreadPool {
 fn respond(responder: UriSchemeResponder, status: StatusCode, body: Vec<u8>) {
     let resp = Response::builder()
         .status(status)
-        .header(header::CONTENT_TYPE, if status.is_success() { "image/jpeg" } else { "text/plain" })
+        .header(
+            header::CONTENT_TYPE,
+            if status.is_success() {
+                "image/jpeg"
+            } else {
+                "text/plain"
+            },
+        )
         // Errors aren't cached: a thumbnail that failed (still importing, say) is retried.
-        .header(header::CACHE_CONTROL, if status.is_success() { "max-age=31536000, immutable" } else { "no-store" })
+        .header(
+            header::CACHE_CONTROL,
+            if status.is_success() {
+                "max-age=31536000, immutable"
+            } else {
+                "no-store"
+            },
+        )
         .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
         .body(body)
         .unwrap();
@@ -46,7 +63,9 @@ fn respond(responder: UriSchemeResponder, status: StatusCode, body: Vec<u8>) {
 
 /// Width / height of a JPEG, from its header.
 fn jpeg_aspect(bytes: &[u8]) -> Option<f32> {
-    let (w, h) = image::ImageReader::with_format(Cursor::new(bytes), image::ImageFormat::Jpeg).into_dimensions().ok()?;
+    let (w, h) = image::ImageReader::with_format(Cursor::new(bytes), image::ImageFormat::Jpeg)
+        .into_dimensions()
+        .ok()?;
     (w > 0 && h > 0).then(|| w as f32 / h as f32)
 }
 
@@ -54,11 +73,20 @@ fn jpeg_aspect(bytes: &[u8]) -> Option<f32> {
 /// (headers only), so the grid doesn't reflow as they load. Photos without one learn theirs
 /// when it's first made.
 pub fn backfill_aspects(store: &Store, catalog: &mut tonality_core::Catalog) {
-    let Ok(missing) = catalog.images_without_aspect() else { return };
+    let Ok(missing) = catalog.images_without_aspect() else {
+        return;
+    };
     for (id, hash) in missing {
-        let size = [store.edited_thumb_path(&hash), store.thumb_path(&hash, EDGE)].into_iter().find_map(|p| {
+        let size = [
+            store.edited_thumb_path(&hash),
+            store.thumb_path(&hash, EDGE),
+        ]
+        .into_iter()
+        .find_map(|p| {
             let f = std::io::BufReader::new(std::fs::File::open(p).ok()?);
-            image::ImageReader::with_format(f, image::ImageFormat::Jpeg).into_dimensions().ok()
+            image::ImageReader::with_format(f, image::ImageFormat::Jpeg)
+                .into_dimensions()
+                .ok()
         });
         if let Some((w, h)) = size.filter(|&(w, h)| w > 0 && h > 0) {
             let _ = catalog.set_aspect(id, w as f32 / h as f32, true);
@@ -69,7 +97,9 @@ pub fn backfill_aspects(store: &Store, catalog: &mut tonality_core::Catalog) {
 /// Make (or find) the cached thumbnail of a just-imported original; its shape, for the grid.
 pub fn warm(store: &Store, original: &Path, hash: &str) -> Option<f32> {
     let cache = store.thumb_path(hash, EDGE);
-    let bytes = std::fs::read(&cache).ok().or_else(|| generate(original, &cache).ok())?;
+    let bytes = std::fs::read(&cache)
+        .ok()
+        .or_else(|| generate(original, &cache).ok())?;
     jpeg_aspect(&bytes)
 }
 
@@ -122,19 +152,29 @@ pub async fn library_save_edited(
             std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
         }
         let tmp = crate::store::temp_path(&dest);
-        std::fs::write(&tmp, bytes).and_then(|_| std::fs::rename(&tmp, &dest)).map_err(|e| {
-            let _ = std::fs::remove_file(&tmp);
-            e.to_string()
-        })
+        std::fs::write(&tmp, bytes)
+            .and_then(|_| std::fs::rename(&tmp, &dest))
+            .map_err(|e| {
+                let _ = std::fs::remove_file(&tmp);
+                e.to_string()
+            })
     })
     .await
 }
 
-pub fn handle<R: Runtime>(ctx: UriSchemeContext<'_, R>, request: Request<Vec<u8>>, responder: UriSchemeResponder) {
+pub fn handle<R: Runtime>(
+    ctx: UriSchemeContext<'_, R>,
+    request: Request<Vec<u8>>,
+    responder: UriSchemeResponder,
+) {
     let app = ctx.app_handle().clone();
     let id: Option<i64> = request.uri().path().trim_matches('/').parse().ok();
     let Some(id) = id else {
-        return respond(responder, StatusCode::BAD_REQUEST, b"bad thumbnail id".to_vec());
+        return respond(
+            responder,
+            StatusCode::BAD_REQUEST,
+            b"bad thumbnail id".to_vec(),
+        );
     };
     // Everything below (even the catalog lookup, which can wait on the catalog lock behind an
     // import) runs on the pool: this handler is called on the UI thread.
@@ -152,7 +192,9 @@ pub fn handle<R: Runtime>(ctx: UriSchemeContext<'_, R>, request: Request<Vec<u8>
         // Photos catalogued before shapes were recorded learn theirs from the first thumbnail.
         let learn = |bytes: &[u8]| {
             if let Some(a) = jpeg_aspect(bytes) {
-                let _ = app.state::<CatalogState>().with(|c| c.set_aspect(id, a, true));
+                let _ = app
+                    .state::<CatalogState>()
+                    .with(|c| c.set_aspect(id, a, true));
             }
         };
         if let Ok(bytes) = std::fs::read(&edited) {

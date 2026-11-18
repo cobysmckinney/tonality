@@ -13,7 +13,11 @@
   let { onpicked }: Props = $props();
 
   const shapes: { kind: MaskKind; label: string; title: string }[] = [
-    { kind: "linear", label: "Linear Gradient", title: "A gradual fade across the photo, like a sky" },
+    {
+      kind: "linear",
+      label: "Linear Gradient",
+      title: "A gradual fade across the photo, like a sky",
+    },
     { kind: "radial", label: "Radial Gradient", title: "An ellipse, soft at its edge" },
     { kind: "brush", label: "Brush", title: "Paint where it applies" },
   ];
@@ -42,7 +46,9 @@
   <span class="eyebrow">Draw</span>
   {#each shapes as s (s.kind)}
     <button onclick={() => shape(s.kind)} disabled={full} title={s.title}>
-      <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"><path d={SHAPE_ICON[s.kind]} /></svg>
+      <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"
+        ><path d={SHAPE_ICON[s.kind]} /></svg
+      >
       {s.label}
     </button>
   {/each}
@@ -54,7 +60,9 @@
       disabled={full}
       title={d.title}
     >
-      <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"><path d={AI_ICON[d.id]} /></svg>
+      <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"
+        ><path d={AI_ICON[d.id]} /></svg
+      >
       {d.id === "object" ? "Select Object" : AI_LABEL[d.id]}
     </button>
   {/each}

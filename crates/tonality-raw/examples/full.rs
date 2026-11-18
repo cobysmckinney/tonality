@@ -20,7 +20,8 @@ fn main() {
         let mut img = image::RgbImage::new(r.width, r.height);
         for (i, p) in img.pixels_mut().enumerate() {
             for c in 0..3 {
-                let v = half::f16::from_bits(r.pixels[i * 3 + c]).to_f32() * [2.0, 1.0, 1.6][c] * 3.0;
+                let v =
+                    half::f16::from_bits(r.pixels[i * 3 + c]).to_f32() * [2.0, 1.0, 1.6][c] * 3.0;
                 p.0[c] = (v.clamp(0.0, 1.0).powf(1.0 / 2.2) * 255.0) as u8;
             }
         }

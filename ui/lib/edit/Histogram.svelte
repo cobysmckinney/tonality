@@ -61,8 +61,13 @@
 
 <div class="hist" bind:clientWidth={width}>
   <canvas bind:this={canvas} style:height="{H}px"></canvas>
-  <span class="clip lo" class:on={clip.lo >= 0.001} title="Shadows clipped {pct(clip.lo) || '0%'}"></span>
-  <span class="clip hi" class:on={clip.hi >= 0.001} title="Highlights clipped {pct(clip.hi) || '0%'}"></span>
+  <span class="clip lo" class:on={clip.lo >= 0.001} title="Shadows clipped {pct(clip.lo) || '0%'}"
+  ></span>
+  <span
+    class="clip hi"
+    class:on={clip.hi >= 0.001}
+    title="Highlights clipped {pct(clip.hi) || '0%'}"
+  ></span>
 </div>
 
 <style>

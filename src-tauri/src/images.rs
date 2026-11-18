@@ -85,14 +85,24 @@ pub struct Images {
 }
 
 impl Images {
-    pub fn open(&self, id: ImageId, path: &Path, name: String, max_edge: usize) -> Result<ImageInfo, String> {
+    pub fn open(
+        &self,
+        id: ImageId,
+        path: &Path,
+        name: String,
+        max_edge: usize,
+    ) -> Result<ImageInfo, String> {
         // Before decoding: a slower decode of the photo opened before must not claim "latest"
         // after this one has.
         self.latest.store(id, Ordering::Relaxed);
         let preview = match self.get(id) {
             Some(p) => p,
             None => {
-                let p = Arc::new(Rawler.decode_preview(path, max_edge).map_err(|e| e.to_string())?);
+                let p = Arc::new(
+                    Rawler
+                        .decode_preview(path, max_edge)
+                        .map_err(|e| e.to_string())?,
+                );
                 let mut cache = self.previews.lock().unwrap();
                 cache.retain(|(i, _)| *i != id);
                 cache.push((id, p.clone()));
@@ -143,7 +153,8 @@ impl Images {
                                         // At low priority (it's ahead of need), on threads of its
                                         // own: a zoom that ends up waiting for it shouldn't also
                                         // wait for detection or thumbnails on the shared pool.
-                                        let _ = crate::priority::decode_pool().install(|| me.full(id, &path));
+                                        let _ = crate::priority::decode_pool()
+                                            .install(|| me.full(id, &path));
                                     }
                                     continue;
                                 }
@@ -162,7 +173,12 @@ impl Images {
     }
 
     pub fn get(&self, id: ImageId) -> Option<Arc<Preview>> {
-        self.previews.lock().unwrap().iter().find(|(i, _)| *i == id).map(|(_, p)| p.clone())
+        self.previews
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|(i, _)| *i == id)
+            .map(|(_, p)| p.clone())
     }
 
     /// The full-resolution image, decoding it if needed. Concurrent callers for the same image
@@ -179,7 +195,13 @@ impl Images {
                 }
             }
         };
-        let res = slot.get_or_init(|| tonality_raw::decode_full(path).map(Arc::new).map_err(|e| e.to_string())).clone();
+        let res = slot
+            .get_or_init(|| {
+                tonality_raw::decode_full(path)
+                    .map(Arc::new)
+                    .map_err(|e| e.to_string())
+            })
+            .clone();
         if res.is_err() {
             // Don't keep a failure (a busy disk, say): the next request tries again.
             let mut cur = self.full.lock().unwrap();

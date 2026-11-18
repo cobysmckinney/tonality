@@ -18,11 +18,18 @@ export function turnedSize(crop: Crop, w: number, h: number): [number, number] {
  */
 export function fits(rect: Rect, angle: number, tw: number, th: number, eps = 1e-4): boolean {
   const a = (-angle * Math.PI) / 180;
-  const c = Math.cos(a), s = Math.sin(a);
+  const c = Math.cos(a),
+    s = Math.sin(a);
   const [x, y, w, h] = rect;
   if (w <= 0 || h <= 0 || x < -eps || y < -eps || x + w > 1 + eps || y + h > 1 + eps) return false;
-  for (const [fx, fy] of [[x, y], [x + w, y], [x, y + h], [x + w, y + h]]) {
-    const dx = (fx - 0.5) * tw, dy = (fy - 0.5) * th;
+  for (const [fx, fy] of [
+    [x, y],
+    [x + w, y],
+    [x, y + h],
+    [x + w, y + h],
+  ]) {
+    const dx = (fx - 0.5) * tw,
+      dy = (fy - 0.5) * th;
     const sx = (tw / 2 + c * dx - s * dy) / tw;
     const sy = (th / 2 + s * dx + c * dy) / th;
     if (sx < -eps || sx > 1 + eps || sy < -eps || sy > 1 + eps) return false;
@@ -33,10 +40,12 @@ export function fits(rect: Rect, angle: number, tw: number, th: number, eps = 1e
 /** Scale `rect` about its centre (keeping its shape) until it fits; also pulls it inside the frame. */
 export function shrinkToFit(rect: Rect, angle: number, tw: number, th: number): Rect {
   const [x, y, w, h] = rect;
-  const cx = Math.min(1, Math.max(0, x + w / 2)), cy = Math.min(1, Math.max(0, y + h / 2));
+  const cx = Math.min(1, Math.max(0, x + w / 2)),
+    cy = Math.min(1, Math.max(0, y + h / 2));
   const at = (k: number): Rect => [cx - (w * k) / 2, cy - (h * k) / 2, w * k, h * k];
   if (fits(at(1), angle, tw, th)) return at(1);
-  let lo = 0, hi = 1;
+  let lo = 0,
+    hi = 1;
   for (let i = 0; i < 30; i++) {
     const mid = (lo + hi) / 2;
     if (fits(at(mid), angle, tw, th)) lo = mid;
@@ -49,7 +58,8 @@ export function shrinkToFit(rect: Rect, angle: number, tw: number, th: number): 
 export function towards(from: Rect, to: Rect, angle: number, tw: number, th: number): Rect {
   if (fits(to, angle, tw, th)) return to;
   const lerp = (t: number) => from.map((v, i) => v + (to[i] - v) * t) as Rect;
-  let lo = 0, hi = 1;
+  let lo = 0,
+    hi = 1;
   for (let i = 0; i < 24; i++) {
     const mid = (lo + hi) / 2;
     if (fits(lerp(mid), angle, tw, th)) lo = mid;
@@ -61,9 +71,11 @@ export function towards(from: Rect, to: Rect, angle: number, tw: number, th: num
 /** The largest rect of pixel aspect `ratio` (w/h), centred on `rect`'s centre, that fits. */
 export function withAspect(rect: Rect, ratio: number, angle: number, tw: number, th: number): Rect {
   const [x, y, w, h] = rect;
-  const cx = x + w / 2, cy = y + h / 2;
+  const cx = x + w / 2,
+    cy = y + h / 2;
   // Pick the shape (in frame fractions) for the ratio, as large as the current area allows.
-  let nw = w, nh = (w * tw) / ratio / th;
+  let nw = w,
+    nh = (w * tw) / ratio / th;
   if (nh > 1) {
     nh = 1;
     nw = (ratio * th) / tw;
@@ -94,7 +106,8 @@ export function flip(crop: Crop): Crop {
 
 /** The angle (degrees) that makes the line a→b (screen px) horizontal or vertical, whichever is nearer. */
 export function levelAngle(ax: number, ay: number, bx: number, by: number): number | null {
-  const dx = bx - ax, dy = by - ay;
+  const dx = bx - ax,
+    dy = by - ay;
   if (Math.hypot(dx, dy) < 10) return null;
   let deg = (Math.atan2(dy, dx) * 180) / Math.PI; // -180..180
   // Fold onto the nearest axis: -45..45 from horizontal or vertical.

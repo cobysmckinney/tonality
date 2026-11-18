@@ -29,21 +29,26 @@ export function stampSegment(
   const long = Math.max(w, h);
   const r = f32(Math.max(f32(s.radius * long), 0.5));
   const inner = f32(Math.min(f32(r * f32(1 - Math.min(1, Math.max(0, s.feather)))), r - 1));
-  const ax = f32(a[0] * w), ay = f32(a[1] * h);
-  const bx = f32(b[0] * w), by = f32(b[1] * h);
+  const ax = f32(a[0] * w),
+    ay = f32(a[1] * h);
+  const bx = f32(b[0] * w),
+    by = f32(b[1] * h);
   const x0 = Math.max(0, Math.floor(Math.min(ax, bx) - r - 1));
   const y0 = Math.max(0, Math.floor(Math.min(ay, by) - r - 1));
   const x1 = Math.min(w, Math.ceil(Math.max(ax, bx) + r + 1));
   const y1 = Math.min(h, Math.ceil(Math.max(ay, by) + r + 1));
   if (x1 <= x0 || y1 <= y0) return null;
-  const dx = f32(bx - ax), dy = f32(by - ay);
+  const dx = f32(bx - ax),
+    dy = f32(by - ay);
   const len2 = f32(dx * dx + dy * dy);
   const strength = Math.min(1, Math.max(0, s.strength));
   for (let y = y0; y < y1; y++) {
     for (let x = x0; x < x1; x++) {
-      const px = f32(x + 0.5 - ax), py = f32(y + 0.5 - ay);
+      const px = f32(x + 0.5 - ax),
+        py = f32(y + 0.5 - ay);
       const t = len2 > 0 ? Math.min(1, Math.max(0, f32(f32(px * dx + py * dy) / len2))) : 0;
-      const ex = f32(px - t * dx), ey = f32(py - t * dy);
+      const ex = f32(px - t * dx),
+        ey = f32(py - t * dy);
       const d = f32(Math.sqrt(ex * ex + ey * ey));
       if (d >= r) continue;
       const v = strength * (1 - smoothstep(inner, r, d));

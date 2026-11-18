@@ -56,9 +56,21 @@ pub fn invert(m: &Mat3) -> Option<Mat3> {
     }
     let s = 1.0 / det;
     Some([
-        [(e * i - f * h) * s, (c * h - b * i) * s, (b * f - c * e) * s],
-        [(f * g - d * i) * s, (a * i - c * g) * s, (c * d - a * f) * s],
-        [(d * h - e * g) * s, (b * g - a * h) * s, (a * e - b * d) * s],
+        [
+            (e * i - f * h) * s,
+            (c * h - b * i) * s,
+            (b * f - c * e) * s,
+        ],
+        [
+            (f * g - d * i) * s,
+            (a * i - c * g) * s,
+            (c * d - a * f) * s,
+        ],
+        [
+            (d * h - e * g) * s,
+            (b * g - a * h) * s,
+            (a * e - b * d) * s,
+        ],
     ])
 }
 
@@ -125,7 +137,11 @@ pub fn white_xy(temperature: f32, tint: f32) -> (f32, f32) {
     // Locus normal from a finite difference in mired space (one mired hotter, or cooler at the
     // hot end; the sign is fixed below).
     let mired = 1e6 / temperature;
-    let other = if 1e6 / (mired - 1.0) <= 25000.0 { mired - 1.0 } else { mired + 1.0 };
+    let other = if 1e6 / (mired - 1.0) <= 25000.0 {
+        mired - 1.0
+    } else {
+        mired + 1.0
+    };
     let (x2, y2) = planckian_xy(1e6 / other);
     let (u2, v2) = xy_to_uv(x2, y2);
     let (du, dv) = (u2 - u, v2 - v);
@@ -213,7 +229,9 @@ impl CameraColor {
     pub fn as_shot_temperature_tint(&self) -> (f32, f32) {
         let wb = self.as_shot_wb;
         let cam_white = [1.0 / wb[0], 1.0 / wb[1], 1.0 / wb[2]];
-        let Some(cam_to_xyz) = invert(&self.xyz_to_cam) else { return (6500.0, 0.0) };
+        let Some(cam_to_xyz) = invert(&self.xyz_to_cam) else {
+            return (6500.0, 0.0);
+        };
         let xyz = mul_vec(&cam_to_xyz, cam_white);
         let s = xyz[0] + xyz[1] + xyz[2];
         if !(s.is_finite() && s > 0.0) {
@@ -261,12 +279,20 @@ mod tests {
     fn planckian_d65_is_close_to_6504k() {
         let (x, y) = planckian_xy(6504.0);
         // D65 sits slightly above the locus; xy should be within ~0.005.
-        assert!((x - 0.3127).abs() < 0.005 && (y - 0.3290).abs() < 0.01, "{x} {y}");
+        assert!(
+            (x - 0.3127).abs() < 0.005 && (y - 0.3290).abs() < 0.01,
+            "{x} {y}"
+        );
     }
 
     #[test]
     fn temperature_tint_round_trips() {
-        for &(t, tint) in &[(2800.0, 0.0), (5000.0, 20.0), (6500.0, -15.0), (9000.0, 40.0)] {
+        for &(t, tint) in &[
+            (2800.0, 0.0),
+            (5000.0, 20.0),
+            (6500.0, -15.0),
+            (9000.0, 40.0),
+        ] {
             let (x, y) = white_xy(t, tint);
             let (t2, tint2) = temperature_tint(x, y);
             assert!((t - t2).abs() / t < 0.01, "temp {t} -> {t2}");
@@ -289,7 +315,10 @@ mod tests {
         let a = cc.as_shot_multipliers();
         let b = cc.wb_for(t, tint);
         for i in 0..3 {
-            assert!((a[i] - b[i]).abs() / a[i] < 0.01, "{a:?} vs {b:?} at {t}K/{tint}");
+            assert!(
+                (a[i] - b[i]).abs() / a[i] < 0.01,
+                "{a:?} vs {b:?} at {t}K/{tint}"
+            );
         }
     }
 }

@@ -3,7 +3,16 @@
   import type { Crop } from "$lib/bindings/Crop";
   import type { ImageInfo } from "$lib/bindings/ImageInfo";
   import Slider from "$lib/design/Slider.svelte";
-  import { ASPECTS, FULL, flip, shrinkToFit, turn, turnedSize, withAspect, type Rect } from "./crop";
+  import {
+    ASPECTS,
+    FULL,
+    flip,
+    shrinkToFit,
+    turn,
+    turnedSize,
+    withAspect,
+    type Rect,
+  } from "./crop";
   import { session } from "./session.svelte";
   import { untrack } from "svelte";
 
@@ -28,11 +37,13 @@
   // ---- aspect ----
   let preset = $state<string>("Free");
   // Starts as the crop box is, so the icons and labels match what's on screen.
-  let portrait = $state(untrack(() => {
-    const [tw, th] = turnedSize(session.edit!.crop, image.fullWidth, image.fullHeight);
-    const r = session.edit!.crop.rect;
-    return r[2] * tw < r[3] * th;
-  }));
+  let portrait = $state(
+    untrack(() => {
+      const [tw, th] = turnedSize(session.edit!.crop, image.fullWidth, image.fullHeight);
+      const r = session.edit!.crop.rect;
+      return r[2] * tw < r[3] * th;
+    }),
+  );
   // Rotating with [ ] (in Edit) turns the locked aspect: follow it.
   $effect(() => {
     const a = session.cropAspect;
@@ -82,7 +93,8 @@
   function apply() {
     const ratio = ratioFor(preset, portrait);
     session.cropAspect = ratio;
-    if (ratio !== null) set({ ...crop, rect: withAspect(crop.rect as Rect, ratio, crop.angle, ...turned) });
+    if (ratio !== null)
+      set({ ...crop, rect: withAspect(crop.rect as Rect, ratio, crop.angle, ...turned) });
   }
 
   function swap() {
@@ -130,7 +142,9 @@
           disabled={square(preset)}
           title="Landscape"
         >
-          <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><rect x="2" y="4.5" width="12" height="7" rx="1.2" /></svg>
+          <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"
+            ><rect x="2" y="4.5" width="12" height="7" rx="1.2" /></svg
+          >
         </button>
         <button
           role="radio"
@@ -140,7 +154,9 @@
           disabled={square(preset)}
           title="Portrait"
         >
-          <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><rect x="4.5" y="2" width="7" height="12" rx="1.2" /></svg>
+          <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"
+            ><rect x="4.5" y="2" width="7" height="12" rx="1.2" /></svg
+          >
         </button>
       </div>
     </div>
@@ -152,13 +168,27 @@
           aria-checked={preset === a.label}
           class:active={preset === a.label}
           onclick={() => choose(a.label)}
-          title={a.label === "Free" ? "Any shape" : a.label === "Original" ? "The photo's own shape" : `${labelFor(a.label, portrait)}`}
+          title={a.label === "Free"
+            ? "Any shape"
+            : a.label === "Original"
+              ? "The photo's own shape"
+              : `${labelFor(a.label, portrait)}`}
         >
           <svg viewBox="0 0 28 28" width="28" height="28" aria-hidden="true">
-            <rect x={r.x} y={r.y} width={r.w} height={r.h} rx="1.5" class:dashed={a.label === "Free"} />
+            <rect
+              x={r.x}
+              y={r.y}
+              width={r.w}
+              height={r.h}
+              rx="1.5"
+              class:dashed={a.label === "Free"}
+            />
             {#if a.label === "Original"}
               <!-- A little landscape: the photo as shot. -->
-              <path d="M{r.x + 2.5} {r.y + r.h - 2.5}l{r.w * 0.28} {-r.h * 0.38}l{r.w * 0.18} {r.h * 0.2}l{r.w * 0.14} {-r.h * 0.14}l{r.w * 0.22} {r.h * 0.32}" />
+              <path
+                d="M{r.x + 2.5} {r.y + r.h - 2.5}l{r.w * 0.28} {-r.h * 0.38}l{r.w * 0.18} {r.h *
+                  0.2}l{r.w * 0.14} {-r.h * 0.14}l{r.w * 0.22} {r.h * 0.32}"
+              />
             {/if}
           </svg>
           <span>{labelFor(a.label, portrait)}</span>
@@ -184,22 +214,33 @@
         base = null;
       }}
     />
-    <button class="tool" class:active={level} onclick={ontogglelevel} title="Draw along something that should be level or upright (or Ctrl+drag)">
+    <button
+      class="tool"
+      class:active={level}
+      onclick={ontogglelevel}
+      title="Draw along something that should be level or upright (or Ctrl+drag)"
+    >
       Level by drawing a line
     </button>
   </div>
 
   <div class="group row">
     <button class="tool icon" onclick={() => rotate(-1)} title="Rotate left ([)">
-      <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"><path d="M3.5 6.5A5 5 0 1 1 4 11M3.5 2.5v4h4" /></svg>
+      <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"
+        ><path d="M3.5 6.5A5 5 0 1 1 4 11M3.5 2.5v4h4" /></svg
+      >
       Left
     </button>
     <button class="tool icon" onclick={() => rotate(1)} title="Rotate right (])">
-      <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"><path d="M12.5 6.5A5 5 0 1 0 12 11M12.5 2.5v4h-4" /></svg>
+      <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"
+        ><path d="M12.5 6.5A5 5 0 1 0 12 11M12.5 2.5v4h-4" /></svg
+      >
       Right
     </button>
     <button class="tool icon" onclick={() => set(flip(crop))} title="Flip horizontally">
-      <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"><path d="M8 1.5v13M6 4 2 12h4ZM10 4l4 8h-4Z" /></svg>
+      <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"
+        ><path d="M8 1.5v13M6 4 2 12h4ZM10 4l4 8h-4Z" /></svg
+      >
       Flip
     </button>
   </div>

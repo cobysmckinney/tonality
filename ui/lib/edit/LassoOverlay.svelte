@@ -44,7 +44,8 @@
   function onUp() {
     if (!drawing) return;
     drawing = false;
-    const xs = points.map((p) => p[0]), ys = points.map((p) => p[1]);
+    const xs = points.map((p) => p[0]),
+      ys = points.map((p) => p[1]);
     const big = Math.max(...xs) - Math.min(...xs) > 12 && Math.max(...ys) - Math.min(...ys) > 12;
     if (points.length < 6 || !big) {
       points = [];
@@ -55,7 +56,13 @@
     const step = Math.max(1, Math.floor(points.length / 64));
     const lasso = points
       .filter((_, i) => i % step === 0)
-      .map((p) => toUv(framing, [(p[0] - frame.x) / frame.w, (p[1] - frame.y) / frame.h]).map(r4) as [number, number]);
+      .map(
+        (p) =>
+          toUv(framing, [(p[0] - frame.x) / frame.w, (p[1] - frame.y) / frame.h]).map(r4) as [
+            number,
+            number,
+          ],
+      );
     ondone(lasso);
   }
 
@@ -71,7 +78,9 @@
     if (!busy) points = [];
   });
 
-  const d = $derived(points.length ? `M${points.map((p) => p.join(",")).join("L")}${drawing ? "" : "Z"}` : "");
+  const d = $derived(
+    points.length ? `M${points.map((p) => p.join(",")).join("L")}${drawing ? "" : "Z"}` : "",
+  );
 </script>
 
 <svelte:window onkeydowncapture={onKey} />

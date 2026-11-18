@@ -25,9 +25,12 @@ fn embedded(path: &Path, max_edge: u32) -> Result<Option<RgbImage>> {
     let params = RawDecodeParams::default();
     // Smallest candidate that is still big enough; fall back to the largest available.
     let mut best: Option<DynamicImage> = None;
-    for img in [decoder.thumbnail_image(&src, &params), decoder.preview_image(&src, &params)]
-        .into_iter()
-        .filter_map(|r| r.ok().flatten())
+    for img in [
+        decoder.thumbnail_image(&src, &params),
+        decoder.preview_image(&src, &params),
+    ]
+    .into_iter()
+    .filter_map(|r| r.ok().flatten())
     {
         let long = img.width().max(img.height());
         let good = long >= max_edge;
@@ -35,7 +38,8 @@ fn embedded(path: &Path, max_edge: u32) -> Result<Option<RgbImage>> {
             None => true,
             Some(b) => {
                 let blong = b.width().max(b.height());
-                (good && (blong < max_edge || long < blong)) || (!good && blong < max_edge && long > blong)
+                (good && (blong < max_edge || long < blong))
+                    || (!good && blong < max_edge && long > blong)
             }
         };
         if better {
@@ -58,12 +62,23 @@ fn embedded(path: &Path, max_edge: u32) -> Result<Option<RgbImage>> {
 fn developed(path: &Path, max_edge: u32) -> Result<RgbImage> {
     let p = decode_preview(path, max_edge as usize)?;
     let wb = p.color.as_shot_multipliers();
-    let xyz_to_srgb = [[3.2406, -1.5372, -0.4986], [-0.9689, 1.8758, 0.0415], [0.0557, -0.2040, 1.0570]];
-    let m = mul(&mul(&xyz_to_srgb, &REC2020_TO_XYZ), &p.color.cam_to_working());
+    let xyz_to_srgb = [
+        [3.2406, -1.5372, -0.4986],
+        [-0.9689, 1.8758, 0.0415],
+        [0.0557, -0.2040, 1.0570],
+    ];
+    let m = mul(
+        &mul(&xyz_to_srgb, &REC2020_TO_XYZ),
+        &p.color.cam_to_working(),
+    );
     let encode = |v: f32| {
         let v = (v * 1.6).max(0.0);
         let v = v / (1.0 + v * 0.35); // soft shoulder
-        let v = if v <= 0.003_130_8 { v * 12.92 } else { 1.055 * v.powf(1.0 / 2.4) - 0.055 };
+        let v = if v <= 0.003_130_8 {
+            v * 12.92
+        } else {
+            1.055 * v.powf(1.0 / 2.4) - 0.055
+        };
         (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8
     };
     let mut out = RgbImage::new(p.width, p.height);
@@ -71,5 +86,9 @@ fn developed(path: &Path, max_edge: u32) -> Result<RgbImage> {
         let cam = [0, 1, 2].map(|i| (half::f16::from_bits(c[i]).to_f32() * wb[i]).min(1.0));
         px.0 = mul_vec(&m, cam).map(encode);
     }
-    Ok(imageops::thumbnail(&out, out.width().min(max_edge), out.height().min(max_edge)))
+    Ok(imageops::thumbnail(
+        &out,
+        out.width().min(max_edge),
+        out.height().min(max_edge),
+    ))
 }

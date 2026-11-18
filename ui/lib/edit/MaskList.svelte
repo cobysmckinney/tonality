@@ -11,7 +11,8 @@
   const masks = $derived(session.masks);
   const sel = $derived(session.selected);
   const progress = $derived(session.aiProgress);
-  const pct = (p: { done: number; total: number }) => Math.round((100 * p.done) / Math.max(p.total, 1));
+  const pct = (p: { done: number; total: number }) =>
+    Math.round((100 * p.done) / Math.max(p.total, 1));
 
   let adding = $state(false);
   let collapsed = $state(false);
@@ -82,10 +83,27 @@
 
 <svelte:window onpointerdown={onWindowPointerDown} onkeydowncapture={onWindowKey} />
 
-<div class="float" role="region" aria-label="Masks" onpointerleave={() => (session.maskHover = null)}>
+<div
+  class="float"
+  role="region"
+  aria-label="Masks"
+  onpointerleave={() => (session.maskHover = null)}
+>
   <header>
-    <button class="title" onclick={() => (collapsed = !collapsed)} aria-expanded={!collapsed} title={collapsed ? "Show masks" : "Hide masks"}>
-      <svg class="chev" class:open={!collapsed} viewBox="0 0 16 16" width="12" height="12" aria-hidden="true"><path d="m6 4 4 4-4 4" /></svg>
+    <button
+      class="title"
+      onclick={() => (collapsed = !collapsed)}
+      aria-expanded={!collapsed}
+      title={collapsed ? "Show masks" : "Hide masks"}
+    >
+      <svg
+        class="chev"
+        class:open={!collapsed}
+        viewBox="0 0 16 16"
+        width="12"
+        height="12"
+        aria-hidden="true"><path d="m6 4 4 4-4 4" /></svg
+      >
       Masks
       <span class="count">{masks.length}</span>
     </button>
@@ -96,9 +114,20 @@
         onclick={() => (adding = !adding)}
         disabled={!adding && masks.length >= MAX_MASKS}
         aria-expanded={adding}
-        title={adding ? "Cancel" : masks.length >= MAX_MASKS ? `Up to ${MAX_MASKS} masks per photo` : "Create a new mask"}
+        title={adding
+          ? "Cancel"
+          : masks.length >= MAX_MASKS
+            ? `Up to ${MAX_MASKS} masks per photo`
+            : "Create a new mask"}
       >
-        <svg class="plus" class:x={adding} viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M8 3v10M3 8h10" /></svg>
+        <svg
+          class="plus"
+          class:x={adding}
+          viewBox="0 0 16 16"
+          width="14"
+          height="14"
+          aria-hidden="true"><path d="M8 3v10M3 8h10" /></svg
+        >
       </button>
     </div>
   </header>
@@ -112,7 +141,11 @@
         {@const st = status(m)}
         {@const img = session.maskThumbs[i]}
         {@const drawn = m.enabled && shaderIndex(masks, i) !== null}
-        <li class:selected={sel === i} class:hidden={!m.enabled} onpointerenter={() => (session.maskHover = i)}>
+        <li
+          class:selected={sel === i}
+          class:hidden={!m.enabled}
+          onpointerenter={() => (session.maskHover = i)}
+        >
           <button
             class="pick"
             onclick={() => (session.maskIndex = i)}
@@ -123,19 +156,32 @@
               {#if drawn && img}
                 <canvas use:thumb={img}></canvas>
               {:else if !drawn}
-                <span class="off" title={m.enabled ? `Only the first ${MAX_MASKS} shown masks are drawn` : "Hidden"}>
-                  <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M2 2l12 12M6.3 4c.5-.2 1.1-.4 1.7-.4 4.5 0 7 4.4 7 4.4s-.7 1.2-2 2.4M4 5.3C2.2 6.5 1 8 1 8s2.5 4.5 7 4.5c1 0 2-.2 2.8-.6" /></svg>
+                <span
+                  class="off"
+                  title={m.enabled ? `Only the first ${MAX_MASKS} shown masks are drawn` : "Hidden"}
+                >
+                  <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"
+                    ><path
+                      d="M2 2l12 12M6.3 4c.5-.2 1.1-.4 1.7-.4 4.5 0 7 4.4 7 4.4s-.7 1.2-2 2.4M4 5.3C2.2 6.5 1 8 1 8s2.5 4.5 7 4.5c1 0 2-.2 2.8-.6"
+                    /></svg
+                  >
                 </span>
               {/if}
               <span class="kind" title={kindLabel(m)}>
-                <svg viewBox="0 0 16 16" width="10" height="10" aria-hidden="true"><path d={SHAPE_ICON[m.shape.kind]} /></svg>
+                <svg viewBox="0 0 16 16" width="10" height="10" aria-hidden="true"
+                  ><path d={SHAPE_ICON[m.shape.kind]} /></svg
+                >
               </span>
             </span>
             {#if renaming !== maskId(m)}
               <span class="text">
                 <span class="name">{m.name}</span>
                 {#if st?.state === "working"}
-                  <span class="state">{progress?.stage === "download" ? `Downloading ${pct(progress)}%` : "Detecting…"}</span>
+                  <span class="state"
+                    >{progress?.stage === "download"
+                      ? `Downloading ${pct(progress)}%`
+                      : "Detecting…"}</span
+                  >
                 {:else if st?.state === "empty"}
                   <span class="state warn">Nothing found</span>
                 {:else if st?.state === "error"}
@@ -163,15 +209,31 @@
             />
           {/if}
           <div class="actions">
-            <button class="icon" onclick={() => toggleShown(i)} title={m.enabled ? "Hide this mask's effect" : "Show this mask's effect"}>
+            <button
+              class="icon"
+              onclick={() => toggleShown(i)}
+              title={m.enabled ? "Hide this mask's effect" : "Show this mask's effect"}
+            >
               {#if m.enabled}
-                <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path d="M1 8s2.5-4.5 7-4.5S15 8 15 8s-2.5 4.5-7 4.5S1 8 1 8Z" /><circle cx="8" cy="8" r="2" /></svg>
+                <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"
+                  ><path d="M1 8s2.5-4.5 7-4.5S15 8 15 8s-2.5 4.5-7 4.5S1 8 1 8Z" /><circle
+                    cx="8"
+                    cy="8"
+                    r="2"
+                  /></svg
+                >
               {:else}
-                <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path d="M2 2l12 12M6.3 4c.5-.2 1.1-.4 1.7-.4 4.5 0 7 4.4 7 4.4s-.7 1.2-2 2.4M4 5.3C2.2 6.5 1 8 1 8s2.5 4.5 7 4.5c1 0 2-.2 2.8-.6" /></svg>
+                <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"
+                  ><path
+                    d="M2 2l12 12M6.3 4c.5-.2 1.1-.4 1.7-.4 4.5 0 7 4.4 7 4.4s-.7 1.2-2 2.4M4 5.3C2.2 6.5 1 8 1 8s2.5 4.5 7 4.5c1 0 2-.2 2.8-.6"
+                  /></svg
+                >
               {/if}
             </button>
             <button class="icon" onclick={() => session.deleteMask(i)} title="Delete (Del)">
-              <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" /></svg>
+              <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"
+                ><path d="M4 4l8 8M12 4l-8 8" /></svg
+              >
             </button>
           </div>
         </li>

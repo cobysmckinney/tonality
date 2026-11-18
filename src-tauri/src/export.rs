@@ -70,7 +70,8 @@ impl ExportColorSpace {
             Self::Srgb => &SRGB,
             Self::DisplayP3 => &P3,
         };
-        cell.get_or_init(|| ultrahdr_rs::jpeg::get_icc_profile_for_gamut(self.gamut())).clone()
+        cell.get_or_init(|| ultrahdr_rs::jpeg::get_icc_profile_for_gamut(self.gamut()))
+            .clone()
     }
 }
 
@@ -156,7 +157,8 @@ pub async fn export_images(
     // Off the async runtime: gathering reads the catalog (every version of every photo), and
     // rendering is long.
     tauri::async_runtime::spawn_blocking(move || {
-        std::fs::create_dir_all(&folder).map_err(|e| format!("cannot create {}: {e}", folder.display()))?;
+        std::fs::create_dir_all(&folder)
+            .map_err(|e| format!("cannot create {}: {e}", folder.display()))?;
         let jobs = gather(&app, &ids, &settings)?;
         run(jobs, settings, folder, images, app)
     })
@@ -184,14 +186,26 @@ fn gather(app: &AppHandle, ids: &[ImageId], settings: &ExportSettings) -> CmdRes
                     continue;
                 }
                 // The current branch exports what's on screen (HEAD may be behind the tip after undo).
-                let state = if current { co.state.clone() } else { c.state_at(b.tip)? };
+                let state = if current {
+                    co.state.clone()
+                } else {
+                    c.state_at(b.tip)?
+                };
                 // `IMG_1234.jpg` for main, `IMG_1234 — B&W.jpg` for other branches.
                 out.push(((b.name != "main").then(|| b.name.clone()), state));
             }
             Ok(out)
         })?;
-        let stem = Path::new(&name).file_stem().map_or(name.clone(), |s| s.to_string_lossy().into_owned());
-        jobs.push(Job { image: id, path: store.abs(&rel), hash, stem, versions });
+        let stem = Path::new(&name)
+            .file_stem()
+            .map_or(name.clone(), |s| s.to_string_lossy().into_owned());
+        jobs.push(Job {
+            image: id,
+            path: store.abs(&rel),
+            hash,
+            stem,
+            versions,
+        });
     }
     Ok(jobs)
 }
@@ -207,10 +221,21 @@ fn run(
     app: AppHandle,
 ) -> CmdResult<ExportSummary> {
     let total: usize = jobs.iter().map(|j| j.versions.len()).sum();
-    let mut summary = ExportSummary { written: vec![], failed: vec![], folder: folder.display().to_string() };
+    let mut summary = ExportSummary {
+        written: vec![],
+        failed: vec![],
+        folder: folder.display().to_string(),
+    };
     let mut done = 0usize;
     let emit = |done: f32, name: &str| {
-        let _ = app.emit("export-progress", Progress { done, total, name: name.to_string() });
+        let _ = app.emit(
+            "export-progress",
+            Progress {
+                done,
+                total,
+                name: name.to_string(),
+            },
+        );
     };
 
     for job in jobs {
@@ -218,7 +243,9 @@ fn run(
         // Reuse the decode of the photo open in Edit; decode others just for this export.
         let full: Result<Arc<FullImage>, String> = match images.cached_full(job.image) {
             Some(f) => Ok(f),
-            None => tonality_raw::decode_full(&job.path).map(Arc::new).map_err(|e| e.to_string()),
+            None => tonality_raw::decode_full(&job.path)
+                .map(Arc::new)
+                .map_err(|e| e.to_string()),
         };
         let full = match full {
             Ok(f) => f,
@@ -235,7 +262,14 @@ fn run(
             .versions
             .iter()
             .any(|(_, e)| tonality_render::presence::uses_maps(e))
-            .then(|| tonality_render::presence::presence_maps(&full.pixels, full.width, full.height, &full.color));
+            .then(|| {
+                tonality_render::presence::presence_maps(
+                    &full.pixels,
+                    full.width,
+                    full.height,
+                    &full.color,
+                )
+            });
 
         for (suffix, edit) in &job.versions {
             let label = match suffix {
@@ -244,8 +278,14 @@ fn run(
             };
             emit(done as f32, &label);
             let result = (|| -> Result<PathBuf, String> {
-                let mut params = DevelopParams::new(edit, &full.color, full.lens.as_ref(), full.width, full.height)
-                    .for_display(settings.color_space.display());
+                let mut params = DevelopParams::new(
+                    edit,
+                    &full.color,
+                    full.lens.as_ref(),
+                    full.width,
+                    full.height,
+                )
+                .for_display(settings.color_space.display());
                 if let Some(m) = &presence {
                     params = params.with_presence(m);
                 }
@@ -253,20 +293,39 @@ fn run(
                 let out_long = params.geo0[3].max(params.geo1[3]);
                 let full_long = full.width.max(full.height);
                 let src_long = match settings.long_edge {
-                    Some(edge) if (edge as f32) < out_long => ((full_long as f32 * edge as f32 / out_long).round() as u32).max(1),
+                    Some(edge) if (edge as f32) < out_long => {
+                        ((full_long as f32 * edge as f32 / out_long).round() as u32).max(1)
+                    }
                     _ => full_long,
                 };
                 let src = if src_long >= full_long {
-                    Source { width: full.width, height: full.height, pixels: &full.pixels, frame: [full.width, full.height] }
+                    Source {
+                        width: full.width,
+                        height: full.height,
+                        pixels: &full.pixels,
+                        frame: [full.width, full.height],
+                    }
                 } else {
                     if !scaled.iter().any(|(l, _)| *l == src_long) {
                         scaled.push((src_long, full.scaled(src_long)));
                     }
                     let (_, (w, h, px)) = scaled.iter().find(|(l, _)| *l == src_long).unwrap();
-                    Source { width: *w, height: *h, pixels: px, frame: [full.width, full.height] }
+                    Source {
+                        width: *w,
+                        height: *h,
+                        pixels: px,
+                        frame: [full.width, full.height],
+                    }
                 };
                 let store = app.state::<crate::store::Store>();
-                let mut layers = crate::ai::layers(&app, &job.hash, edit, full.width, full.height, full.lens.as_ref());
+                let mut layers = crate::ai::layers(
+                    &app,
+                    &job.hash,
+                    edit,
+                    full.width,
+                    full.height,
+                    full.lens.as_ref(),
+                );
                 if !layers.missing.is_empty() {
                     // AI masks whose raster isn't cached (another library, a cleared cache):
                     // detect them now from this decode.
@@ -284,26 +343,54 @@ fn run(
                     };
                     let mut ran: Vec<&str> = Vec::new();
                     for &i in &layers.missing {
-                        if let tonality_core::mask::MaskShape::Ai { target, model, .. } = &edit.masks[i].shape {
+                        if let tonality_core::mask::MaskShape::Ai { target, model, .. } =
+                            &edit.masks[i].shape
+                        {
                             // One scene pass caches both sky and people.
-                            let scene = matches!(target, tonality_core::mask::AiTarget::Sky | tonality_core::mask::AiTarget::People);
+                            let scene = matches!(
+                                target,
+                                tonality_core::mask::AiTarget::Sky
+                                    | tonality_core::mask::AiTarget::People
+                            );
                             if scene && ran.contains(&model.as_str()) {
                                 continue;
                             }
                             ran.push(model);
-                            crate::ai::detect(&app, &app.state::<crate::ai::Detector>(), &store, &photo, &edit.lens, target, model)?;
+                            crate::ai::detect(
+                                &app,
+                                &app.state::<crate::ai::Detector>(),
+                                &store,
+                                &photo,
+                                &edit.lens,
+                                target,
+                                model,
+                            )?;
                         }
                     }
-                    layers = crate::ai::layers(&app, &job.hash, edit, full.width, full.height, full.lens.as_ref());
+                    layers = crate::ai::layers(
+                        &app,
+                        &job.hash,
+                        edit,
+                        full.width,
+                        full.height,
+                        full.lens.as_ref(),
+                    );
                 }
                 let hdr = settings.ultra_hdr();
                 // With HDR the image and its gain map share the progress.
                 let share = if hdr { 0.45 } else { 0.9 };
                 let curve = curve_lut_rgba16f(edit);
-                let rendered = gpu()?.render(&src, &params, &curve, &layers, presence.as_ref(), |f| emit(done as f32 + f * share, &label))?;
+                let rendered =
+                    gpu()?.render(&src, &params, &curve, &layers, presence.as_ref(), |f| {
+                        emit(done as f32 + f * share, &label)
+                    })?;
                 let gain = if hdr {
                     let p = params.gain_map();
-                    Some(gpu()?.render(&src, &p, &curve, &layers, presence.as_ref(), |f| emit(done as f32 + share + f * share, &label))?)
+                    Some(
+                        gpu()?.render(&src, &p, &curve, &layers, presence.as_ref(), |f| {
+                            emit(done as f32 + share + f * share, &label)
+                        })?,
+                    )
                 } else {
                     None
                 };
@@ -323,11 +410,19 @@ fn run(
 }
 
 fn eight(pixels: &[u16]) -> Vec<u8> {
-    pixels.iter().map(|&v| ((v as u32 * 255 + 32767) / 65535) as u8).collect()
+    pixels
+        .iter()
+        .map(|&v| ((v as u32 * 255 + 32767) / 65535) as u8)
+        .collect()
 }
 
 /// `r` written to `target` as `s` says; `gain`: the Ultra HDR gain map render, for HDR JPEGs.
-fn write(r: &Rendered, gain: Option<&Rendered>, target: &Path, s: &ExportSettings) -> Result<(), String> {
+fn write(
+    r: &Rendered,
+    gain: Option<&Rendered>,
+    target: &Path,
+    s: &ExportSettings,
+) -> Result<(), String> {
     use image::codecs::{jpeg::JpegEncoder, png::PngEncoder, tiff::TiffEncoder};
     use image::{ExtendedColorType, ImageEncoder};
 
@@ -337,25 +432,40 @@ fn write(r: &Rendered, gain: Option<&Rendered>, target: &Path, s: &ExportSetting
     let icc = s.color_space.icc();
     let quality = s.quality.clamp(1, 100);
     let res = match (s.format, gain) {
-        (ExportFormat::Jpeg, Some(gain)) => ultra_hdr(r, gain, quality, s.color_space).and_then(|bytes| {
-            use std::io::Write;
-            out.write_all(&bytes).map_err(|e| e.to_string())
-        }),
+        (ExportFormat::Jpeg, Some(gain)) => {
+            ultra_hdr(r, gain, quality, s.color_space).and_then(|bytes| {
+                use std::io::Write;
+                out.write_all(&bytes).map_err(|e| e.to_string())
+            })
+        }
         (ExportFormat::Jpeg, None) => {
             let mut e = JpegEncoder::new_with_quality(&mut out, quality);
             e.set_icc_profile(icc).map_err(|e| e.to_string())?;
-            e.write_image(&eight(&r.pixels), r.width, r.height, ExtendedColorType::Rgb8).map_err(|e| e.to_string())
+            e.write_image(
+                &eight(&r.pixels),
+                r.width,
+                r.height,
+                ExtendedColorType::Rgb8,
+            )
+            .map_err(|e| e.to_string())
         }
         (ExportFormat::Png, _) => {
             let mut e = PngEncoder::new(&mut out);
             e.set_icc_profile(icc).map_err(|e| e.to_string())?;
-            e.write_image(&eight(&r.pixels), r.width, r.height, ExtendedColorType::Rgb8).map_err(|e| e.to_string())
+            e.write_image(
+                &eight(&r.pixels),
+                r.width,
+                r.height,
+                ExtendedColorType::Rgb8,
+            )
+            .map_err(|e| e.to_string())
         }
         (ExportFormat::Tiff, _) => {
             let bytes: Vec<u8> = r.pixels.iter().flat_map(|v| v.to_ne_bytes()).collect();
             let mut e = TiffEncoder::new(&mut out);
             e.set_icc_profile(icc).map_err(|e| e.to_string())?;
-            e.write_image(&bytes, r.width, r.height, ExtendedColorType::Rgb16).map_err(|e| e.to_string())
+            e.write_image(&bytes, r.width, r.height, ExtendedColorType::Rgb16)
+                .map_err(|e| e.to_string())
         }
     };
     let res = res.and_then(|_| {
@@ -375,7 +485,12 @@ fn write(r: &Rendered, gain: Option<&Rendered>, target: &Path, s: &ExportSetting
 /// An Ultra HDR JPEG: `r` as the SDR base image, and the gain map render at half size (as
 /// Apple's and Android's cameras store theirs), both at `quality`. The container (MPF, the
 /// Ultra HDR XMP and ISO 21496-1 metadata, the ICC profile) is `ultrahdr-rs`'s.
-fn ultra_hdr(r: &Rendered, gain: &Rendered, quality: u8, space: ExportColorSpace) -> Result<Vec<u8>, String> {
+fn ultra_hdr(
+    r: &Rendered,
+    gain: &Rendered,
+    quality: u8,
+    space: ExportColorSpace,
+) -> Result<Vec<u8>, String> {
     use image::codecs::jpeg::JpegEncoder;
     use image::{ExtendedColorType, ImageEncoder};
 
@@ -440,8 +555,16 @@ fn halve(r: &Rendered) -> (u32, u32, Vec<u16>) {
 
 /// File-name-safe version of a label (branch names may contain `/` and friends).
 fn sanitize(s: &str) -> String {
-    let cleaned: String =
-        s.chars().map(|c| if c.is_control() || r#"/\:*?"<>|"#.contains(c) { '-' } else { c }).collect();
+    let cleaned: String = s
+        .chars()
+        .map(|c| {
+            if c.is_control() || r#"/\:*?"<>|"#.contains(c) {
+                '-'
+            } else {
+                c
+            }
+        })
+        .collect();
     cleaned.trim().trim_matches('.').to_string()
 }
 
@@ -464,7 +587,11 @@ mod tests {
     fn writes_every_format() {
         let dir = std::env::temp_dir().join(format!("tonality-export-fmt-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        let r = Rendered { width: 4, height: 3, pixels: (0..36).map(|i| i * 1800).collect() };
+        let r = Rendered {
+            width: 4,
+            height: 3,
+            pixels: (0..36).map(|i| i * 1800).collect(),
+        };
         for space in [ExportColorSpace::Srgb, ExportColorSpace::DisplayP3] {
             for format in [ExportFormat::Jpeg, ExportFormat::Png, ExportFormat::Tiff] {
                 let s = settings(&dir, format, space, false);
@@ -481,11 +608,20 @@ mod tests {
                 std::fs::remove_file(&p).unwrap();
             }
         }
-        assert!(std::fs::read_dir(&dir).unwrap().all(|e| !e.unwrap().path().to_string_lossy().ends_with(".part")));
+        assert!(std::fs::read_dir(&dir).unwrap().all(|e| !e
+            .unwrap()
+            .path()
+            .to_string_lossy()
+            .ends_with(".part")));
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
-    fn settings(dir: &Path, format: ExportFormat, color_space: ExportColorSpace, hdr: bool) -> ExportSettings {
+    fn settings(
+        dir: &Path,
+        format: ExportFormat,
+        color_space: ExportColorSpace,
+        hdr: bool,
+    ) -> ExportSettings {
         ExportSettings {
             folder: dir.display().to_string(),
             format,
@@ -501,9 +637,15 @@ mod tests {
         use image::ImageDecoder;
         let f = std::io::BufReader::new(std::fs::File::open(p).unwrap());
         let icc = match format {
-            ExportFormat::Jpeg => image::codecs::jpeg::JpegDecoder::new(f).unwrap().icc_profile(),
-            ExportFormat::Png => image::codecs::png::PngDecoder::new(f).unwrap().icc_profile(),
-            ExportFormat::Tiff => image::codecs::tiff::TiffDecoder::new(f).unwrap().icc_profile(),
+            ExportFormat::Jpeg => image::codecs::jpeg::JpegDecoder::new(f)
+                .unwrap()
+                .icc_profile(),
+            ExportFormat::Png => image::codecs::png::PngDecoder::new(f)
+                .unwrap()
+                .icc_profile(),
+            ExportFormat::Tiff => image::codecs::tiff::TiffDecoder::new(f)
+                .unwrap()
+                .icc_profile(),
         };
         icc.unwrap().expect("an embedded profile")
     }
@@ -513,12 +655,28 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("tonality-export-uhdr-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let (w, h) = (9u32, 6u32);
-        let r = Rendered { width: w, height: h, pixels: (0..w * h * 3).map(|i| (i * 1200) as u16).collect() };
+        let r = Rendered {
+            width: w,
+            height: h,
+            pixels: (0..w * h * 3).map(|i| (i * 1200) as u16).collect(),
+        };
         // A gain map: 0 at the left, full at the right.
-        let gain = Rendered { width: w, height: h, pixels: (0..w * h * 3).map(|i| ((i / 3 % w) * 65535 / (w - 1)) as u16).collect() };
+        let gain = Rendered {
+            width: w,
+            height: h,
+            pixels: (0..w * h * 3)
+                .map(|i| ((i / 3 % w) * 65535 / (w - 1)) as u16)
+                .collect(),
+        };
         for space in [ExportColorSpace::Srgb, ExportColorSpace::DisplayP3] {
             let p = dir.join("hdr.jpg");
-            write(&r, Some(&gain), &p, &settings(&dir, ExportFormat::Jpeg, space, true)).unwrap();
+            write(
+                &r,
+                Some(&gain),
+                &p,
+                &settings(&dir, ExportFormat::Jpeg, space, true),
+            )
+            .unwrap();
             let bytes = std::fs::read(&p).unwrap();
             // Still an ordinary JPEG of the SDR image, with the space's profile.
             let img = image::load_from_memory(&bytes).unwrap();
@@ -526,15 +684,28 @@ mod tests {
             assert_eq!(icc_of(&p, ExportFormat::Jpeg), space.icc());
             // And an Ultra HDR one: the gain map at half size, the metadata as written.
             // No JFIF segment, in either image: MPF follows SOI directly.
-            assert!(bytes[..64].windows(5).all(|w| w != b"JFIF\0"), "JFIF in the primary");
+            assert!(
+                bytes[..64].windows(5).all(|w| w != b"JFIF\0"),
+                "JFIF in the primary"
+            );
             assert_eq!(&bytes[..4], &[0xFF, 0xD8, 0xFF, 0xE2]);
             let d = ultrahdr_rs::Decoder::new(&bytes).unwrap();
             assert!(d.is_ultrahdr());
             let m = d.metadata().unwrap();
-            assert!((m.gain_map_min[0] - GAIN_LOG2[0]).abs() < 1e-3 && (m.gain_map_max[2] - GAIN_LOG2[1]).abs() < 1e-3, "{m:?}");
-            assert!((m.alternate_hdr_headroom - HDR_RATIO.log2()).abs() < 1e-3, "{m:?}");
+            assert!(
+                (m.gain_map_min[0] - GAIN_LOG2[0]).abs() < 1e-3
+                    && (m.gain_map_max[2] - GAIN_LOG2[1]).abs() < 1e-3,
+                "{m:?}"
+            );
+            assert!(
+                (m.alternate_hdr_headroom - HDR_RATIO.log2()).abs() < 1e-3,
+                "{m:?}"
+            );
             let map_jpeg = d.gainmap_jpeg().unwrap();
-            assert!(!map_jpeg.windows(5).any(|w| w == b"JFIF\0"), "JFIF in the gain map");
+            assert!(
+                !map_jpeg.windows(5).any(|w| w == b"JFIF\0"),
+                "JFIF in the gain map"
+            );
             let map = image::load_from_memory(map_jpeg).unwrap().to_rgb8();
             assert_eq!(map.dimensions(), (w.div_ceil(2), h.div_ceil(2)));
             let (left, right) = (map.get_pixel(0, 1)[0], map.get_pixel(map.width() - 1, 1)[0]);
@@ -550,29 +721,81 @@ mod tests {
     #[test]
     #[ignore]
     fn export_real_photo() {
-        let (Ok(raw), Ok(out)) = (std::env::var("TONALITY_EXPORT_RAW"), std::env::var("TONALITY_EXPORT_OUT")) else {
+        let (Ok(raw), Ok(out)) = (
+            std::env::var("TONALITY_EXPORT_RAW"),
+            std::env::var("TONALITY_EXPORT_OUT"),
+        ) else {
             return;
         };
         let out = PathBuf::from(out);
         let full = tonality_raw::decode_full(raw.as_ref()).unwrap();
         let edit = EditState::default();
-        let maps = tonality_render::presence::presence_maps(&full.pixels, full.width, full.height, &full.color);
+        let maps = tonality_render::presence::presence_maps(
+            &full.pixels,
+            full.width,
+            full.height,
+            &full.color,
+        );
         let (w, h, px) = full.scaled(2400);
-        let src = Source { width: w, height: h, pixels: &px, frame: [full.width, full.height] };
+        let src = Source {
+            width: w,
+            height: h,
+            pixels: &px,
+            frame: [full.width, full.height],
+        };
         let layers = tonality_core::mask::brush_layers(&[], full.width, full.height);
         let gpu = Gpu::new().unwrap();
         for (space, format, hdr, name) in [
-            (ExportColorSpace::Srgb, ExportFormat::Jpeg, true, "srgb-hdr.jpg"),
-            (ExportColorSpace::DisplayP3, ExportFormat::Jpeg, true, "p3-hdr.jpg"),
-            (ExportColorSpace::DisplayP3, ExportFormat::Png, false, "p3.png"),
+            (
+                ExportColorSpace::Srgb,
+                ExportFormat::Jpeg,
+                true,
+                "srgb-hdr.jpg",
+            ),
+            (
+                ExportColorSpace::DisplayP3,
+                ExportFormat::Jpeg,
+                true,
+                "p3-hdr.jpg",
+            ),
+            (
+                ExportColorSpace::DisplayP3,
+                ExportFormat::Png,
+                false,
+                "p3.png",
+            ),
         ] {
-            let params = DevelopParams::new(&edit, &full.color, full.lens.as_ref(), full.width, full.height)
-                .for_display(space.display())
-                .with_presence(&maps);
+            let params = DevelopParams::new(
+                &edit,
+                &full.color,
+                full.lens.as_ref(),
+                full.width,
+                full.height,
+            )
+            .for_display(space.display())
+            .with_presence(&maps);
             let curve = curve_lut_rgba16f(&edit);
-            let r = gpu.render(&src, &params, &curve, &layers, Some(&maps), |_| {}).unwrap();
-            let g = hdr.then(|| gpu.render(&src, &params.gain_map(), &curve, &layers, Some(&maps), |_| {}).unwrap());
-            write(&r, g.as_ref(), &out.join(name), &settings(&out, format, space, hdr)).unwrap();
+            let r = gpu
+                .render(&src, &params, &curve, &layers, Some(&maps), |_| {})
+                .unwrap();
+            let g = hdr.then(|| {
+                gpu.render(
+                    &src,
+                    &params.gain_map(),
+                    &curve,
+                    &layers,
+                    Some(&maps),
+                    |_| {},
+                )
+                .unwrap()
+            });
+            write(
+                &r,
+                g.as_ref(),
+                &out.join(name),
+                &settings(&out, format, space, hdr),
+            )
+            .unwrap();
         }
     }
 
@@ -582,7 +805,8 @@ mod tests {
         assert!(settings(dir, ExportFormat::Jpeg, ExportColorSpace::Srgb, true).ultra_hdr());
         assert!(!settings(dir, ExportFormat::Png, ExportColorSpace::Srgb, true).ultra_hdr());
         // Settings saved before HDR existed still load.
-        let old = r#"{"folder":"/x","format":"jpeg","quality":90,"longEdge":null,"versions":"current"}"#;
+        let old =
+            r#"{"folder":"/x","format":"jpeg","quality":90,"longEdge":null,"versions":"current"}"#;
         let s: ExportSettings = serde_json::from_str(old).unwrap();
         assert_eq!((s.color_space, s.hdr), (ExportColorSpace::Srgb, false));
     }

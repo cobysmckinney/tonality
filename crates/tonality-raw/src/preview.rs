@@ -3,10 +3,10 @@ use std::path::Path;
 use half::f16;
 use image::{imageops, ImageBuffer, Rgb};
 use rawler::decoders::{Orientation, RawDecodeParams};
-use rawler::rawsource::RawSource;
-use rawler::imgop::xyz::Illuminant;
 use rawler::formats::tiff::Rational;
+use rawler::imgop::xyz::Illuminant;
 use rawler::rawimage::{RawImage, RawImageData, RawPhotometricInterpretation};
+use rawler::rawsource::RawSource;
 use rayon::prelude::*;
 use tonality_core::color::{CameraColor, Mat3};
 use tonality_core::lens::LensProfile;
@@ -49,15 +49,23 @@ impl Preview {
 pub fn decode_preview(path: &Path, max_edge: usize) -> Result<Preview> {
     let mut d = Decoded::open(path)?;
     let (_, _, cw, ch) = crop_rect(&d.raw);
-    let (full_width, full_height) =
-        if transposes(d.orientation) { (ch as u32, cw as u32) } else { (cw as u32, ch as u32) };
+    let (full_width, full_height) = if transposes(d.orientation) {
+        (ch as u32, cw as u32)
+    } else {
+        (cw as u32, ch as u32)
+    };
 
     let mut img = match &d.raw.photometric {
         RawPhotometricInterpretation::Cfa(cfg) if d.raw.cpp == 1 && cfg.cfa.is_rgb() => {
             superpixel(&d.raw, &cfg.cfa)?
         }
         RawPhotometricInterpretation::LinearRaw if d.raw.cpp == 3 => linear_rgb(&d.raw),
-        other => return Err(RawError::Unsupported(format!("{other:?} with {} cpp", d.raw.cpp))),
+        other => {
+            return Err(RawError::Unsupported(format!(
+                "{other:?} with {} cpp",
+                d.raw.cpp
+            )))
+        }
     };
     d.raw.data = RawImageData::Float(Vec::new()); // free the sensor data early
 
@@ -114,37 +122,50 @@ impl FullImage {
         let y0 = (y.min(self.height.saturating_sub(1)) / f) * f;
         let x1 = x.saturating_add(w).min(self.width);
         let y1 = y.saturating_add(h).min(self.height);
-        let (ow, oh) = ((x1.saturating_sub(x0) / f).max(1), (y1.saturating_sub(y0) / f).max(1));
+        let (ow, oh) = (
+            (x1.saturating_sub(x0) / f).max(1),
+            (y1.saturating_sub(y0) / f).max(1),
+        );
         let stride = self.width as usize * 3;
         let mut out = vec![0u16; ow as usize * oh as usize * 3];
-        out.par_chunks_mut(ow as usize * 3).enumerate().for_each(|(oy, row)| {
-            let sy = y0 as usize + oy * f as usize;
-            if f == 1 {
-                let start = sy * stride + x0 as usize * 3;
-                row.copy_from_slice(&self.pixels[start..start + row.len()]);
-                return;
-            }
-            for ox in 0..ow as usize {
-                let sx = x0 as usize + ox * f as usize;
-                let mut acc = [0f32; 3];
-                // Boxes at the image edge can be partly outside it: average what's inside.
-                let ys = sy..(sy + f as usize).min(self.height as usize);
-                let xs = sx..(sx + f as usize).min(self.width as usize);
-                let n = (ys.len() * xs.len()).max(1) as f32;
-                for yy in ys {
-                    for xx in xs.clone() {
-                        let i = yy * stride + xx * 3;
-                        for (c, a) in acc.iter_mut().enumerate() {
-                            *a += f16::from_bits(self.pixels[i + c]).to_f32();
+        out.par_chunks_mut(ow as usize * 3)
+            .enumerate()
+            .for_each(|(oy, row)| {
+                let sy = y0 as usize + oy * f as usize;
+                if f == 1 {
+                    let start = sy * stride + x0 as usize * 3;
+                    row.copy_from_slice(&self.pixels[start..start + row.len()]);
+                    return;
+                }
+                for ox in 0..ow as usize {
+                    let sx = x0 as usize + ox * f as usize;
+                    let mut acc = [0f32; 3];
+                    // Boxes at the image edge can be partly outside it: average what's inside.
+                    let ys = sy..(sy + f as usize).min(self.height as usize);
+                    let xs = sx..(sx + f as usize).min(self.width as usize);
+                    let n = (ys.len() * xs.len()).max(1) as f32;
+                    for yy in ys {
+                        for xx in xs.clone() {
+                            let i = yy * stride + xx * 3;
+                            for (c, a) in acc.iter_mut().enumerate() {
+                                *a += f16::from_bits(self.pixels[i + c]).to_f32();
+                            }
                         }
                     }
+                    for c in 0..3 {
+                        row[ox * 3 + c] = f16::from_f32(acc[c] / n).to_bits();
+                    }
                 }
-                for c in 0..3 {
-                    row[ox * 3 + c] = f16::from_f32(acc[c] / n).to_bits();
-                }
-            }
-        });
-        Region { x: x0, y: y0, w: ow * f, h: oh * f, width: ow, height: oh, pixels: out }
+            });
+        Region {
+            x: x0,
+            y: y0,
+            w: ow * f,
+            h: oh * f,
+            width: ow,
+            height: oh,
+            pixels: out,
+        }
     }
 }
 
@@ -157,15 +178,31 @@ impl FullImage {
         }
         let ratio = long as f32 / long_edge as f32;
         // Cheap power-of-two box reduction first, leaving at least 2× for the proper filter.
-        let level = if ratio >= 4.0 { (ratio / 2.0).log2().floor() as u32 } else { 0 };
+        let level = if ratio >= 4.0 {
+            (ratio / 2.0).log2().floor() as u32
+        } else {
+            0
+        };
         let s = long_edge as f32 / long as f32;
         let w = ((self.width as f32 * s).round() as u32).max(1);
         let h = ((self.height as f32 * s).round() as u32).max(1);
         let pixels = if level == 0 {
-            resample(&self.pixels, self.width as usize, self.height as usize, w as usize, h as usize)
+            resample(
+                &self.pixels,
+                self.width as usize,
+                self.height as usize,
+                w as usize,
+                h as usize,
+            )
         } else {
             let r = self.region(0, 0, self.width, self.height, level);
-            resample(&r.pixels, r.width as usize, r.height as usize, w as usize, h as usize)
+            resample(
+                &r.pixels,
+                r.width as usize,
+                r.height as usize,
+                w as usize,
+                h as usize,
+            )
         };
         (w, h, pixels)
     }
@@ -192,7 +229,9 @@ fn weights(src: usize, dst: usize) -> Vec<(usize, Vec<f32>)> {
             let center = (i as f32 + 0.5) * ratio;
             let lo = ((center - support).floor().max(0.0)) as usize;
             let hi = ((center + support).ceil() as usize).min(src);
-            let mut w: Vec<f32> = (lo..hi).map(|j| cubic((j as f32 + 0.5 - center) / scale)).collect();
+            let mut w: Vec<f32> = (lo..hi)
+                .map(|j| cubic((j as f32 + 0.5 - center) / scale))
+                .collect();
             let sum: f32 = w.iter().sum();
             if sum.abs() > 1e-8 {
                 w.iter_mut().for_each(|v| *v /= sum);
@@ -269,10 +308,15 @@ pub fn decode_full(path: &Path) -> Result<FullImage> {
             let pixels = PixF32::new_with(data, d.raw.width, d.raw.height);
             let roi = Rect::new(Point::new(cx, cy), Dim2::new(cw, ch));
             let out = match cfg.sensor {
-                SensorType::Bayer => PPGDemosaic::new().demosaic(&pixels, &cfg.cfa, &cfg.colors, roi),
-                SensorType::Xtrans => {
-                    XTransMarkesteijnDemosaic::new_pass_1().demosaic(&pixels, &cfg.cfa, &cfg.colors, roi)
+                SensorType::Bayer => {
+                    PPGDemosaic::new().demosaic(&pixels, &cfg.cfa, &cfg.colors, roi)
                 }
+                SensorType::Xtrans => XTransMarkesteijnDemosaic::new_pass_1().demosaic(
+                    &pixels,
+                    &cfg.cfa,
+                    &cfg.colors,
+                    roi,
+                ),
             };
             (out.width, out.height, out.data.into_flattened())
         }
@@ -280,15 +324,30 @@ pub fn decode_full(path: &Path) -> Result<FullImage> {
             let img = linear_rgb(&d.raw);
             (img.width() as usize, img.height() as usize, img.into_raw())
         }
-        other => return Err(RawError::Unsupported(format!("{other:?} with {} cpp", d.raw.cpp))),
+        other => {
+            return Err(RawError::Unsupported(format!(
+                "{other:?} with {} cpp",
+                d.raw.cpp
+            )))
+        }
     };
     drop(d.raw);
 
-    let halves: Vec<u16> = rgb.par_iter().map(|&v| f16::from_f32(v.clamp(-65504.0, 65504.0)).to_bits()).collect();
+    let halves: Vec<u16> = rgb
+        .par_iter()
+        .map(|&v| f16::from_f32(v.clamp(-65504.0, 65504.0)).to_bits())
+        .collect();
     drop(rgb);
-    let img = ImageBuffer::<Rgb<u16>, Vec<u16>>::from_raw(w as u32, h as u32, halves).expect("buffer size matches");
+    let img = ImageBuffer::<Rgb<u16>, Vec<u16>>::from_raw(w as u32, h as u32, halves)
+        .expect("buffer size matches");
     let img = orient(img, d.orientation);
-    Ok(FullImage { width: img.width(), height: img.height(), pixels: img.into_raw(), color: d.color, lens: profile(path) })
+    Ok(FullImage {
+        width: img.width(),
+        height: img.height(),
+        pixels: img.into_raw(),
+        color: d.color,
+        lens: profile(path),
+    })
 }
 
 /// A decoded (scaled, not demosaiced) RAW plus what's needed to develop it.
@@ -310,8 +369,16 @@ impl Decoded {
         // Not every decoder fills `RawImage::orientation` (e.g. Sony ARW), so prefer EXIF.
         let orientation = exif_orientation(decoder.as_ref(), &src).unwrap_or(raw.orientation);
         let color = camera_color(&raw);
-        let metadata = Metadata { make: raw.clean_make.clone(), model: raw.clean_model.clone() };
-        Ok(Self { raw, orientation, color, metadata })
+        let metadata = Metadata {
+            make: raw.clean_make.clone(),
+            model: raw.clean_model.clone(),
+        };
+        Ok(Self {
+            raw,
+            orientation,
+            color,
+            metadata,
+        })
     }
 }
 
@@ -352,18 +419,35 @@ fn scale(raw: &mut RawImage) {
     if std::env::var("TONALITY_DEBUG_BLACK").is_ok() {
         let neg = px.iter().filter(|v| **v < 0.0).count();
         let min = px.iter().copied().fold(f32::INFINITY, f32::min);
-        eprintln!("[scale] black {:?} white {:?} negatives {:.3}% min {min}", raw.blacklevel.as_vec(), raw.whitelevel.as_vec(), 100.0 * neg as f64 / px.len() as f64);
+        eprintln!(
+            "[scale] black {:?} white {:?} negatives {:.3}% min {min}",
+            raw.blacklevel.as_vec(),
+            raw.whitelevel.as_vec(),
+            100.0 * neg as f64 / px.len() as f64
+        );
     }
     raw.data = RawImageData::Float(px);
-    raw.blacklevel.levels.iter_mut().for_each(|x| *x = Rational::new(0, 1));
+    raw.blacklevel
+        .levels
+        .iter_mut()
+        .for_each(|x| *x = Rational::new(0, 1));
     raw.whitelevel.0.iter_mut().for_each(|x| *x = 1);
 }
 
 fn transposes(o: Orientation) -> bool {
-    matches!(o, Orientation::Transpose | Orientation::Rotate90 | Orientation::Transverse | Orientation::Rotate270)
+    matches!(
+        o,
+        Orientation::Transpose
+            | Orientation::Rotate90
+            | Orientation::Transverse
+            | Orientation::Rotate270
+    )
 }
 
-pub(crate) fn exif_orientation(decoder: &dyn rawler::decoders::Decoder, src: &RawSource) -> Option<Orientation> {
+pub(crate) fn exif_orientation(
+    decoder: &dyn rawler::decoders::Decoder,
+    src: &RawSource,
+) -> Option<Orientation> {
     decoder
         .raw_metadata(src, &RawDecodeParams::default())
         .ok()
@@ -391,7 +475,11 @@ fn crop_rect(raw: &RawImage) -> (usize, usize, usize, usize) {
 
 /// `(x, y, w, h)` limited to a `width × height` image (a damaged file can claim anything), and
 /// the whole image if nothing would be left.
-fn clamp_rect((x, y, w, h): (usize, usize, usize, usize), width: usize, height: usize) -> (usize, usize, usize, usize) {
+fn clamp_rect(
+    (x, y, w, h): (usize, usize, usize, usize),
+    width: usize,
+    height: usize,
+) -> (usize, usize, usize, usize) {
     let (x, y) = (x.min(width), y.min(height));
     let (w, h) = (w.min(width - x), h.min(height - y));
     if w == 0 || h == 0 {
@@ -413,26 +501,28 @@ fn superpixel(raw: &RawImage, cfa: &rawler::CFA) -> Result<RgbF32> {
     let (ow, oh) = (cw / block, ch / block);
     let mut out = vec![0f32; ow * oh * 3];
 
-    out.par_chunks_mut(ow * 3).enumerate().for_each(|(oy, row)| {
-        let y0 = cy + oy * block;
-        for ox in 0..ow {
-            let x0 = cx + ox * block;
-            let mut sum = [0f32; 3];
-            let mut n = [0u32; 3];
-            for y in y0..y0 + block {
-                for x in x0..x0 + block {
-                    let c = cfa.color_at(y, x);
-                    if c < 3 {
-                        sum[c] += data[y * stride + x];
-                        n[c] += 1;
+    out.par_chunks_mut(ow * 3)
+        .enumerate()
+        .for_each(|(oy, row)| {
+            let y0 = cy + oy * block;
+            for ox in 0..ow {
+                let x0 = cx + ox * block;
+                let mut sum = [0f32; 3];
+                let mut n = [0u32; 3];
+                for y in y0..y0 + block {
+                    for x in x0..x0 + block {
+                        let c = cfa.color_at(y, x);
+                        if c < 3 {
+                            sum[c] += data[y * stride + x];
+                            n[c] += 1;
+                        }
                     }
                 }
+                for c in 0..3 {
+                    row[ox * 3 + c] = if n[c] > 0 { sum[c] / n[c] as f32 } else { 0.0 };
+                }
             }
-            for c in 0..3 {
-                row[ox * 3 + c] = if n[c] > 0 { sum[c] / n[c] as f32 } else { 0.0 };
-            }
-        }
-    });
+        });
 
     Ok(RgbF32::from_raw(ow as u32, oh as u32, out).expect("buffer size matches"))
 }
@@ -475,7 +565,9 @@ fn camera_color(raw: &RawImage) -> CameraColor {
         Illuminant::A,
     ];
     let xyz_to_cam: Mat3 = match raw.color_matrix_find_first(preferred) {
-        Some((_, m)) if m.len() >= 9 => [[m[0], m[1], m[2]], [m[3], m[4], m[5]], [m[6], m[7], m[8]]],
+        Some((_, m)) if m.len() >= 9 => {
+            [[m[0], m[1], m[2]], [m[3], m[4], m[5]], [m[6], m[7], m[8]]]
+        }
         _ => [raw.xyz_to_cam[0], raw.xyz_to_cam[1], raw.xyz_to_cam[2]],
     };
     let wb = if raw.wb_coeffs[..3].iter().all(|v| v.is_finite() && *v > 0.0) {
@@ -484,7 +576,10 @@ fn camera_color(raw: &RawImage) -> CameraColor {
         let n = raw.neutralwb();
         [n[0], n[1], n[2]]
     };
-    CameraColor { xyz_to_cam, as_shot_wb: wb }
+    CameraColor {
+        xyz_to_cam,
+        as_shot_wb: wb,
+    }
 }
 
 #[cfg(test)]
@@ -494,10 +589,17 @@ mod tests {
     #[test]
     fn resample_matches_image_crate_catmull_rom() {
         let (sw, sh, dw, dh) = (97usize, 61usize, 40usize, 25usize);
-        let f: Vec<f32> = (0..sw * sh * 3).map(|i| ((i * 7919) % 1000) as f32 / 1000.0).collect();
+        let f: Vec<f32> = (0..sw * sh * 3)
+            .map(|i| ((i * 7919) % 1000) as f32 / 1000.0)
+            .collect();
         let halves: Vec<u16> = f.iter().map(|&v| f16::from_f32(v).to_bits()).collect();
         let ours = resample(&halves, sw, sh, dw, dh);
-        let img = RgbF32::from_raw(sw as u32, sh as u32, halves.iter().map(|&v| f16::from_bits(v).to_f32()).collect()).unwrap();
+        let img = RgbF32::from_raw(
+            sw as u32,
+            sh as u32,
+            halves.iter().map(|&v| f16::from_bits(v).to_f32()).collect(),
+        )
+        .unwrap();
         let theirs = imageops::resize(&img, dw as u32, dh as u32, imageops::FilterType::CatmullRom);
         let max = ours
             .iter()
@@ -507,7 +609,9 @@ mod tests {
         assert!(max < 0.02, "max difference {max}");
         // Flat stays flat.
         let flat = vec![f16::from_f32(0.5).to_bits(); sw * sh * 3];
-        assert!(resample(&flat, sw, sh, dw, dh).iter().all(|&v| (f16::from_bits(v).to_f32() - 0.5).abs() < 1e-3));
+        assert!(resample(&flat, sw, sh, dw, dh)
+            .iter()
+            .all(|&v| (f16::from_bits(v).to_f32() - 0.5).abs() < 1e-3));
     }
 
     #[test]
@@ -515,7 +619,10 @@ mod tests {
         assert_eq!(clamp_rect((10, 20, 100, 50), 200, 100), (10, 20, 100, 50));
         assert_eq!(clamp_rect((150, 80, 100, 50), 200, 100), (150, 80, 50, 20));
         assert_eq!(clamp_rect((500, 0, 10, 10), 200, 100), (0, 0, 200, 100));
-        assert_eq!(clamp_rect((0, 0, usize::MAX, usize::MAX), 200, 100), (0, 0, 200, 100));
+        assert_eq!(
+            clamp_rect((0, 0, usize::MAX, usize::MAX), 200, 100),
+            (0, 0, 200, 100)
+        );
     }
 
     fn image(w: u32, h: u32) -> FullImage {
@@ -523,14 +630,21 @@ mod tests {
         let mut pixels = Vec::new();
         for y in 0..h {
             for x in 0..w {
-                pixels.extend([f16::from_f32(x as f32).to_bits(), f16::from_f32(y as f32).to_bits(), 0]);
+                pixels.extend([
+                    f16::from_f32(x as f32).to_bits(),
+                    f16::from_f32(y as f32).to_bits(),
+                    0,
+                ]);
             }
         }
         FullImage {
             width: w,
             height: h,
             pixels,
-            color: CameraColor { xyz_to_cam: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]], as_shot_wb: [1.0; 3] },
+            color: CameraColor {
+                xyz_to_cam: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+                as_shot_wb: [1.0; 3],
+            },
             lens: None,
         }
     }
@@ -539,7 +653,10 @@ mod tests {
     fn region_is_clamped_and_exact_at_level_0() {
         let img = image(40, 30);
         let r = img.region(30, 20, 50, 50, 0);
-        assert_eq!((r.x, r.y, r.w, r.h, r.width, r.height), (30, 20, 10, 10, 10, 10));
+        assert_eq!(
+            (r.x, r.y, r.w, r.h, r.width, r.height),
+            (30, 20, 10, 10, 10, 10)
+        );
         assert_eq!(f16::from_bits(r.pixels[0]).to_f32(), 30.0);
         assert_eq!(f16::from_bits(r.pixels[1]).to_f32(), 20.0);
     }

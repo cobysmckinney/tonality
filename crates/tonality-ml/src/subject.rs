@@ -30,7 +30,10 @@ impl SubjectModel {
     };
     pub const ISNET: SubjectModel = SubjectModel {
         input: 1024,
-        norm: Normalize { mean: [0.5; 3], std: [1.0; 3] },
+        norm: Normalize {
+            mean: [0.5; 3],
+            std: [1.0; 3],
+        },
         input_name: "input_image",
         output_name: "1890",
         logits: false,
@@ -55,7 +58,9 @@ pub fn detect(model: &Path, m: SubjectModel, img: &RgbImage) -> Result<(Vec<f32>
         p.iter_mut().for_each(|v| *v = 1.0 / (1.0 + (-*v).exp()));
     }
     // Stretch to the full range (these models are often shy of 0 and 1).
-    let (lo, hi) = p.iter().fold((f32::MAX, f32::MIN), |(a, b), &v| (a.min(v), b.max(v)));
+    let (lo, hi) = p
+        .iter()
+        .fold((f32::MAX, f32::MIN), |(a, b), &v| (a.min(v), b.max(v)));
     if hi - lo > 1e-3 {
         p.iter_mut().for_each(|v| *v = (*v - lo) / (hi - lo));
     }

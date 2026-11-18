@@ -124,7 +124,13 @@
       }
     }
     flush(true);
-    return { headers, cells, rows, height: y - GAP + PAD, index: new Map(cells.map((c, i) => [c.img.id, i])) };
+    return {
+      headers,
+      cells,
+      rows,
+      height: y - GAP + PAD,
+      index: new Map(cells.map((c, i) => [c.img.id, i])),
+    };
   });
 
   /** First cell whose bottom is below `y` (cells are in top order). */
@@ -144,11 +150,14 @@
     const top = scroll - OVERSCAN;
     const bottom = scroll + height + OVERSCAN;
     const out: Cell[] = [];
-    for (let i = firstBelow(top); i < layout.cells.length && layout.cells[i].top < bottom; i++) out.push(layout.cells[i]);
+    for (let i = firstBelow(top); i < layout.cells.length && layout.cells[i].top < bottom; i++)
+      out.push(layout.cells[i]);
     return out;
   });
   const visibleHeaders = $derived(
-    layout.headers.filter((h) => h.top + HEADER > scroll - OVERSCAN && h.top < scroll + height + OVERSCAN),
+    layout.headers.filter(
+      (h) => h.top + HEADER > scroll - OVERSCAN && h.top < scroll + height + OVERSCAN,
+    ),
   );
 
   /** The photo an arrow key moves focus to from `id`. */
@@ -165,7 +174,13 @@
       // The photo in the next row up or down nearest this one's centre.
       const r = rows[c.row + (key === "ArrowUp" ? -1 : 1)];
       const mid = c.left + c.w / 2;
-      if (r) j = r.reduce((best, k) => (Math.abs(cells[k].left + cells[k].w / 2 - mid) < Math.abs(cells[best].left + cells[best].w / 2 - mid) ? k : best));
+      if (r)
+        j = r.reduce((best, k) =>
+          Math.abs(cells[k].left + cells[k].w / 2 - mid) <
+          Math.abs(cells[best].left + cells[best].w / 2 - mid)
+            ? k
+            : best,
+        );
     }
     return cells[j].img.id;
   }
@@ -187,7 +202,8 @@
       const top = layout.cells[i].top;
       const bottom = top + layout.cells[i].h;
       if (top < el.scrollTop + head) el.scrollTop = top - PAD - head;
-      else if (bottom > el.scrollTop + el.clientHeight) el.scrollTop = bottom - el.clientHeight + PAD;
+      else if (bottom > el.scrollTop + el.clientHeight)
+        el.scrollTop = bottom - el.clientHeight + PAD;
     });
   });
 
@@ -236,7 +252,11 @@
   <div class="canvas" style:height="{layout.height}px">
     {#each visibleHeaders as h (h.key)}
       <div class="header" style:transform="translateY({h.top}px)" style:height="{HEADER}px">
-        <button class="day" onclick={(e) => onselectday?.(h.ids, e)} title="Select this day's photos">
+        <button
+          class="day"
+          onclick={(e) => onselectday?.(h.ids, e)}
+          title="Select this day's photos"
+        >
           {h.label}
         </button>
         <span class="n">{h.ids.length}</span>

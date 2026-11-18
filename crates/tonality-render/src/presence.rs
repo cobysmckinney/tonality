@@ -59,18 +59,29 @@ impl Guide {
     pub fn new(color: &CameraColor) -> Self {
         let m = color.cam_to_working();
         let weights = [0, 1, 2].map(|j| (0..3).map(|i| LUMA_2020[i] * m[i][j]).sum());
-        Guide { weights, wb: color.as_shot_multipliers(), clip: 1.0 }
+        Guide {
+            weights,
+            wb: color.as_shot_multipliers(),
+            clip: 1.0,
+        }
     }
 
     pub fn luminance(&self, raw: [f32; 3]) -> f32 {
-        (0..3).map(|k| self.weights[k] * (raw[k] * self.wb[k]).clamp(0.0, self.clip)).sum()
+        (0..3)
+            .map(|k| self.weights[k] * (raw[k] * self.wb[k]).clamp(0.0, self.clip))
+            .sum()
     }
 }
 
 /// Whether `edit` needs the maps (Clarity or Dehaze, globally or in an enabled mask).
 pub fn uses_maps(edit: &tonality_core::EditState) -> bool {
     let e = &edit.effects;
-    e.clarity != 0.0 || e.dehaze != 0.0 || edit.masks.iter().any(|m| m.enabled && (m.adjust.clarity != 0.0 || m.adjust.dehaze != 0.0))
+    e.clarity != 0.0
+        || e.dehaze != 0.0
+        || edit
+            .masks
+            .iter()
+            .any(|m| m.enabled && (m.adjust.clarity != 0.0 || m.adjust.dehaze != 0.0))
 }
 
 /// Log2 luminance as the clarity guide sees it (floored, so black stays finite).
@@ -82,10 +93,20 @@ pub fn log_luminance(l: f32) -> f32 {
 pub fn presence_maps(pixels: &[u16], width: u32, height: u32, color: &CameraColor) -> PresenceMaps {
     let (w, h) = (width.max(1) as usize, height.max(1) as usize);
     let s = (MAP_EDGE as f32 / w.max(h) as f32).min(1.0);
-    let (mw, mh) = (((w as f32 * s).round() as usize).max(1), ((h as f32 * s).round() as usize).max(1));
+    let (mw, mh) = (
+        ((w as f32 * s).round() as usize).max(1),
+        ((h as f32 * s).round() as usize).max(1),
+    );
     let raw = downsample(pixels, w, h, mw, mh);
     let guide = Guide::new(color);
-    let to_working = mul(&color.cam_to_working(), &[[guide.wb[0], 0.0, 0.0], [0.0, guide.wb[1], 0.0], [0.0, 0.0, guide.wb[2]]]);
+    let to_working = mul(
+        &color.cam_to_working(),
+        &[
+            [guide.wb[0], 0.0, 0.0],
+            [0.0, guide.wb[1], 0.0],
+            [0.0, 0.0, guide.wb[2]],
+        ],
+    );
     let edge = mw.max(mh) as f32;
     let radius = |share: f32| ((share * edge).round() as usize).max(1);
 
@@ -99,11 +120,23 @@ pub fn presence_maps(pixels: &[u16], width: u32, height: u32, color: &CameraColo
         .iter()
         .map(|c| {
             let c = c.map(|v| v.max(0.0));
-            [0, 1, 2].map(|i| (0..3).map(|k| to_working[i][k] * c[k]).sum::<f32>().clamp(0.0, guide.clip.max(1.0)))
+            [0, 1, 2].map(|i| {
+                (0..3)
+                    .map(|k| to_working[i][k] * c[k])
+                    .sum::<f32>()
+                    .clamp(0.0, guide.clip.max(1.0))
+            })
         })
         .collect();
     let dr = radius(DARK_RADIUS);
-    let dark = min_filter(&rgb.iter().map(|c| c[0].min(c[1]).min(c[2])).collect::<Vec<_>>(), mw, mh, dr);
+    let dark = min_filter(
+        &rgb.iter()
+            .map(|c| c[0].min(c[1]).min(c[2]))
+            .collect::<Vec<_>>(),
+        mw,
+        mh,
+        dr,
+    );
     let mut order: Vec<usize> = (0..dark.len()).collect();
     order.sort_by(|&a, &b| dark[b].total_cmp(&dark[a]));
     let top = &order[..(dark.len() / 1000).max(1)];
@@ -120,23 +153,36 @@ pub fn presence_maps(pixels: &[u16], width: u32, height: u32, color: &CameraColo
     let a_rgb = mean(&|i| rgb[i]).map(|v| v.max(1e-4));
     let a_lum = guide.luminance(airlight).max(1e-6);
     let dark_norm = min_filter(
-        &rgb.iter().map(|c| (c[0] / a_rgb[0]).min(c[1] / a_rgb[1]).min(c[2] / a_rgb[2])).collect::<Vec<_>>(),
+        &rgb.iter()
+            .map(|c| (c[0] / a_rgb[0]).min(c[1] / a_rgb[1]).min(c[2] / a_rgb[2]))
+            .collect::<Vec<_>>(),
         mw,
         mh,
         dr,
     );
-    let t: Vec<f32> = dark_norm.iter().map(|&d| (1.0 - OMEGA * d).clamp(0.0, 1.0)).collect();
+    let t: Vec<f32> = dark_norm
+        .iter()
+        .map(|&d| (1.0 - OMEGA * d).clamp(0.0, 1.0))
+        .collect();
     let i_norm: Vec<f32> = lum.iter().map(|&l| l / a_lum).collect();
     let (ha, hb) = guided(&i_norm, &t, mw, mh, radius(HAZE_RADIUS), HAZE_EPS);
 
     let data = (0..mw * mh).map(|i| [ca[i], cb[i], ha[i], hb[i]]).collect();
-    PresenceMaps { width: mw as u32, height: mh as u32, data, airlight }
+    PresenceMaps {
+        width: mw as u32,
+        height: mh as u32,
+        data,
+        airlight,
+    }
 }
 
 impl PresenceMaps {
     /// RGBA16F little-endian bytes, for a texture upload.
     pub fn rgba16f(&self) -> Vec<u8> {
-        self.data.iter().flat_map(|p| p.iter().flat_map(|&v| f16::from_f32(v).to_le_bytes())).collect()
+        self.data
+            .iter()
+            .flat_map(|p| p.iter().flat_map(|&v| f16::from_f32(v).to_le_bytes()))
+            .collect()
     }
 }
 
@@ -179,7 +225,8 @@ fn box_mean(v: &[f32], w: usize, h: usize, r: usize) -> Vec<f32> {
         let (y0, y1) = (y.saturating_sub(r), (y + r + 1).min(h));
         for x in 0..w {
             let (x0, x1) = (x.saturating_sub(r), (x + r + 1).min(w));
-            let s = sat[y1 * (w + 1) + x1] - sat[y0 * (w + 1) + x1] - sat[y1 * (w + 1) + x0] + sat[y0 * (w + 1) + x0];
+            let s = sat[y1 * (w + 1) + x1] - sat[y0 * (w + 1) + x1] - sat[y1 * (w + 1) + x0]
+                + sat[y0 * (w + 1) + x0];
             out[y * w + x] = (s / ((y1 - y0) * (x1 - x0)) as f64) as f32;
         }
     }
@@ -192,14 +239,19 @@ fn min_filter(v: &[f32], w: usize, h: usize, r: usize) -> Vec<f32> {
     for y in 0..h {
         for x in 0..w {
             let (x0, x1) = (x.saturating_sub(r), (x + r + 1).min(w));
-            tmp[y * w + x] = v[y * w + x0..y * w + x1].iter().copied().fold(f32::INFINITY, f32::min);
+            tmp[y * w + x] = v[y * w + x0..y * w + x1]
+                .iter()
+                .copied()
+                .fold(f32::INFINITY, f32::min);
         }
     }
     let mut out = vec![0.0f32; w * h];
     for y in 0..h {
         let (y0, y1) = (y.saturating_sub(r), (y + r + 1).min(h));
         for x in 0..w {
-            out[y * w + x] = (y0..y1).map(|yy| tmp[yy * w + x]).fold(f32::INFINITY, f32::min);
+            out[y * w + x] = (y0..y1)
+                .map(|yy| tmp[yy * w + x])
+                .fold(f32::INFINITY, f32::min);
         }
     }
     out
@@ -230,7 +282,10 @@ mod tests {
     use super::*;
 
     fn color() -> CameraColor {
-        CameraColor { xyz_to_cam: tonality_core::color::IDENTITY, as_shot_wb: [1.0; 3] }
+        CameraColor {
+            xyz_to_cam: tonality_core::color::IDENTITY,
+            as_shot_wb: [1.0; 3],
+        }
     }
 
     fn image(w: usize, h: usize, f: impl Fn(usize, usize) -> [f32; 3]) -> Vec<u16> {
@@ -250,7 +305,10 @@ mod tests {
         let g = Guide::new(&color());
         let l = log_luminance(g.luminance([0.2; 3]));
         for p in &m.data {
-            assert!((p[0] * l + p[1] - l).abs() < 1e-3, "base equals the photo: {p:?}");
+            assert!(
+                (p[0] * l + p[1] - l).abs() < 1e-3,
+                "base equals the photo: {p:?}"
+            );
         }
     }
 
@@ -265,13 +323,24 @@ mod tests {
             let l = log_luminance(g.luminance([v; 3]));
             p[0] * l + p[1] - l
         };
-        assert!(at(60, 0.02).abs() < 0.2 && at(68, 0.32).abs() < 0.2, "{} {}", at(60, 0.02), at(68, 0.32));
+        assert!(
+            at(60, 0.02).abs() < 0.2 && at(68, 0.32).abs() < 0.2,
+            "{} {}",
+            at(60, 0.02),
+            at(68, 0.32)
+        );
     }
 
     #[test]
     fn airlight_is_the_haze_not_the_shadows() {
         // Hazy bright top (grey-blue), clear dark bottom with saturated colours.
-        let px = image(96, 96, |_, y| if y < 40 { [0.7, 0.75, 0.8] } else { [0.3, 0.05, 0.02] });
+        let px = image(96, 96, |_, y| {
+            if y < 40 {
+                [0.7, 0.75, 0.8]
+            } else {
+                [0.3, 0.05, 0.02]
+            }
+        });
         let m = presence_maps(&px, 96, 96, &color());
         assert!((m.airlight[2] - 0.8).abs() < 0.02, "{:?}", m.airlight);
         // Transmission: low in the haze, high in the clear part.
@@ -282,6 +351,10 @@ mod tests {
             p[2] * g.luminance(c) / a_lum + p[3]
         };
         assert!(t(10, [0.7, 0.75, 0.8]) < 0.2, "{}", t(10, [0.7, 0.75, 0.8]));
-        assert!(t(80, [0.3, 0.05, 0.02]) > 0.8, "{}", t(80, [0.3, 0.05, 0.02]));
+        assert!(
+            t(80, [0.3, 0.05, 0.02]) > 0.8,
+            "{}",
+            t(80, [0.3, 0.05, 0.02])
+        );
     }
 }

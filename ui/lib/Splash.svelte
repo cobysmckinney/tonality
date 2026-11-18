@@ -36,7 +36,9 @@
     if (skipped) return;
     skipped = true;
     // A short fade rather than a cut, so the app doesn't flash in.
-    overlay.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 160, fill: "forwards" }).finished.then(finish);
+    overlay
+      .animate([{ opacity: 1 }, { opacity: 0 }], { duration: 160, fill: "forwards" })
+      .finished.then(finish);
   }
 
   async function play() {
@@ -67,11 +69,14 @@
       const dx = to.left - from.left;
       const dy = to.top - from.top;
       running.push(
-        word.animate([{ transform: "none" }, { transform: `translate(${dx}px, ${dy}px) scale(${s})` }], {
-          duration: MOVE,
-          easing: EASE,
-          fill: "forwards",
-        }),
+        word.animate(
+          [{ transform: "none" }, { transform: `translate(${dx}px, ${dy}px) scale(${s})` }],
+          {
+            duration: MOVE,
+            easing: EASE,
+            fill: "forwards",
+          },
+        ),
       );
     }
     const fade = backdrop.animate([{ opacity: 1 }, { opacity: 0 }], {

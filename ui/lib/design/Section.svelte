@@ -14,7 +14,14 @@
     storeKey?: string;
     children: Snippet;
   }
-  let { title, open = $bindable(true), edited = false, onreset, storeKey, children }: Props = $props();
+  let {
+    title,
+    open = $bindable(true),
+    edited = false,
+    onreset,
+    storeKey,
+    children,
+  }: Props = $props();
 
   const key = () => `tonality.section.${storeKey ?? title}`;
   try {
@@ -37,7 +44,9 @@
 <section class:open>
   <div class="head">
     <button class="toggle" onclick={toggle} aria-expanded={open}>
-      <svg class="chev" viewBox="0 0 16 16" width="12" height="12" aria-hidden="true"><path d="m6 4 4 4-4 4" /></svg>
+      <svg class="chev" viewBox="0 0 16 16" width="12" height="12" aria-hidden="true"
+        ><path d="m6 4 4 4-4 4" /></svg
+      >
       <span class="title">{title}</span>
       {#if edited}<span class="dot" title="Edited"></span>{/if}
     </button>

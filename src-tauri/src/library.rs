@@ -37,24 +37,49 @@ pub struct LibraryOverview {
 }
 
 #[tauri::command]
-pub async fn library_overview(store: State<'_, Store>, catalog: State<'_, CatalogState>) -> CmdResult<LibraryOverview> {
-    let (total, imports, albums) = catalog.read(|c| Ok((c.image_count()?, c.imports()?, c.albums()?))).await?;
-    Ok(LibraryOverview { root: store.root().to_string_lossy().into_owned(), total, imports, albums })
+pub async fn library_overview(
+    store: State<'_, Store>,
+    catalog: State<'_, CatalogState>,
+) -> CmdResult<LibraryOverview> {
+    let (total, imports, albums) = catalog
+        .read(|c| Ok((c.image_count()?, c.imports()?, c.albums()?)))
+        .await?;
+    Ok(LibraryOverview {
+        root: store.root().to_string_lossy().into_owned(),
+        total,
+        imports,
+        albums,
+    })
 }
 
 #[tauri::command]
-pub async fn library_images(query: ImageQuery, catalog: State<'_, CatalogState>) -> CmdResult<Vec<ImageRow>> {
+pub async fn library_images(
+    query: ImageQuery,
+    catalog: State<'_, CatalogState>,
+) -> CmdResult<Vec<ImageRow>> {
     catalog.read(move |c| c.images(&query)).await
 }
 
 #[tauri::command]
-pub async fn library_set_rating(ids: Vec<ImageId>, rating: u8, catalog: State<'_, CatalogState>) -> CmdResult<()> {
-    catalog.change(ids.clone(), move |c| c.set_rating(&ids, rating)).await
+pub async fn library_set_rating(
+    ids: Vec<ImageId>,
+    rating: u8,
+    catalog: State<'_, CatalogState>,
+) -> CmdResult<()> {
+    catalog
+        .change(ids.clone(), move |c| c.set_rating(&ids, rating))
+        .await
 }
 
 #[tauri::command]
-pub async fn library_set_flag(ids: Vec<ImageId>, flag: i8, catalog: State<'_, CatalogState>) -> CmdResult<()> {
-    catalog.change(ids.clone(), move |c| c.set_flag(&ids, flag)).await
+pub async fn library_set_flag(
+    ids: Vec<ImageId>,
+    flag: i8,
+    catalog: State<'_, CatalogState>,
+) -> CmdResult<()> {
+    catalog
+        .change(ids.clone(), move |c| c.set_flag(&ids, flag))
+        .await
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -63,7 +88,11 @@ pub async fn library_set_flag(ids: Vec<ImageId>, flag: i8, catalog: State<'_, Ca
 // ---------------------------------------------------------------------------------------------
 
 #[tauri::command]
-pub async fn album_create(name: String, images: Vec<ImageId>, catalog: State<'_, CatalogState>) -> CmdResult<AlbumId> {
+pub async fn album_create(
+    name: String,
+    images: Vec<ImageId>,
+    catalog: State<'_, CatalogState>,
+) -> CmdResult<AlbumId> {
     catalog
         .change(images.clone(), move |c| {
             let id = c.create_album(&name)?;
@@ -74,9 +103,15 @@ pub async fn album_create(name: String, images: Vec<ImageId>, catalog: State<'_,
 }
 
 #[tauri::command]
-pub async fn album_rename(id: AlbumId, name: String, catalog: State<'_, CatalogState>) -> CmdResult<()> {
+pub async fn album_rename(
+    id: AlbumId,
+    name: String,
+    catalog: State<'_, CatalogState>,
+) -> CmdResult<()> {
     let members = catalog.read(move |c| c.album_members(id)).await?;
-    catalog.change(members, move |c| c.rename_album(id, &name)).await
+    catalog
+        .change(members, move |c| c.rename_album(id, &name))
+        .await
 }
 
 #[tauri::command]
@@ -86,13 +121,25 @@ pub async fn album_delete(id: AlbumId, catalog: State<'_, CatalogState>) -> CmdR
 }
 
 #[tauri::command]
-pub async fn album_add(id: AlbumId, images: Vec<ImageId>, catalog: State<'_, CatalogState>) -> CmdResult<u32> {
-    catalog.change(images.clone(), move |c| c.add_to_album(id, &images)).await
+pub async fn album_add(
+    id: AlbumId,
+    images: Vec<ImageId>,
+    catalog: State<'_, CatalogState>,
+) -> CmdResult<u32> {
+    catalog
+        .change(images.clone(), move |c| c.add_to_album(id, &images))
+        .await
 }
 
 #[tauri::command]
-pub async fn album_remove(id: AlbumId, images: Vec<ImageId>, catalog: State<'_, CatalogState>) -> CmdResult<()> {
-    catalog.change(images.clone(), move |c| c.remove_from_album(id, &images)).await
+pub async fn album_remove(
+    id: AlbumId,
+    images: Vec<ImageId>,
+    catalog: State<'_, CatalogState>,
+) -> CmdResult<()> {
+    catalog
+        .change(images.clone(), move |c| c.remove_from_album(id, &images))
+        .await
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -103,7 +150,9 @@ pub async fn album_remove(id: AlbumId, images: Vec<ImageId>, catalog: State<'_, 
 /// recursively, skipping hidden entries and symlinks).
 fn collect(paths: &[PathBuf]) -> Vec<PathBuf> {
     fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
-        let Ok(entries) = std::fs::read_dir(dir) else { return };
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
         let mut entries: Vec<_> = entries.flatten().collect();
         entries.sort_by_key(|e| e.file_name());
         for e in entries {
@@ -132,7 +181,11 @@ fn collect(paths: &[PathBuf]) -> Vec<PathBuf> {
 }
 
 fn import_name(paths: &[PathBuf]) -> (String, String) {
-    let name_of = |p: &Path| p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let name_of = |p: &Path| {
+        p.file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default()
+    };
     match paths {
         [p] if p.is_dir() => (name_of(p), p.to_string_lossy().into_owned()),
         [p, ..] => {
@@ -172,7 +225,11 @@ impl Importer<'_> {
         };
         let mut reserved = self.reserved.lock().unwrap();
         for n in 1.. {
-            let file = if n == 1 { format!("{dir}/{name}") } else { format!("{dir}/{stem} ({n}){ext}") };
+            let file = if n == 1 {
+                format!("{dir}/{name}")
+            } else {
+                format!("{dir}/{stem} ({n}){ext}")
+            };
             if !reserved.contains(&file)
                 && !self.store.abs(&file).exists()
                 && !self.catalog.with(|c| c.file_taken(&file))?
@@ -193,8 +250,14 @@ impl Importer<'_> {
 
     fn try_one(&self, src: &Path, hash: String) -> CmdResult<Outcome> {
         let meta = tonality_raw::read_meta(src).ok();
-        let name = src.file_name().map(|n| n.to_string_lossy().into_owned()).ok_or("no file name")?;
-        let file = self.reserve(&Store::originals_dir(meta.as_ref().and_then(|m| m.captured_at.as_deref())), &name)?;
+        let name = src
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .ok_or("no file name")?;
+        let file = self.reserve(
+            &Store::originals_dir(meta.as_ref().and_then(|m| m.captured_at.as_deref())),
+            &name,
+        )?;
         let dest = self.store.abs(&file);
         let part = crate::store::temp_path(&dest);
 
@@ -271,7 +334,10 @@ pub async fn library_import(paths: Vec<String>, app: AppHandle) -> CmdResult<Imp
         let total = files.len() as u32;
         let _ = app.emit("import-progress", ImportProgress { done: 0, total });
         if files.is_empty() {
-            return Ok(ImportSummary { error: Some("No RAW files found".into()), ..Default::default() });
+            return Ok(ImportSummary {
+                error: Some("No RAW files found".into()),
+                ..Default::default()
+            });
         }
 
         let (name, source) = import_name(&paths);
@@ -291,15 +357,22 @@ pub async fn library_import(paths: Vec<String>, app: AppHandle) -> CmdResult<Imp
         // Pass 1: hash everything. Duplicates (already in the library, or the same file twice in
         // this import) are settled here, before anything is copied, and deterministically: the
         // first file in folder order wins.
-        let hashes: Vec<Result<String, String>> =
-            pool.install(|| files.par_iter().map(|f| hash_file(f).map_err(|e| e.to_string())).collect());
+        let hashes: Vec<Result<String, String>> = pool.install(|| {
+            files
+                .par_iter()
+                .map(|f| hash_file(f).map_err(|e| e.to_string()))
+                .collect()
+        });
         let mut seen = HashSet::new();
         let mut work = Vec::new(); // (index, file, hash) to copy
         let mut outcomes: Vec<Option<Outcome>> = Vec::with_capacity(files.len());
         for (i, (f, h)) in files.iter().zip(hashes).enumerate() {
             outcomes.push(match h {
                 Err(e) => Some(Outcome::Failed(format!("{}: {e}", f.display()))),
-                Ok(h) if !seen.insert(h.clone()) || catalog.with(|c| c.image_by_hash(&h))?.is_some() => {
+                Ok(h)
+                    if !seen.insert(h.clone())
+                        || catalog.with(|c| c.image_by_hash(&h))?.is_some() =>
+                {
                     Some(Outcome::Duplicate(h))
                 }
                 Ok(h) => {
@@ -380,7 +453,12 @@ pub async fn library_recover(app: AppHandle) -> CmdResult<ImportSummary> {
         let root = store.root().to_path_buf();
         let rel = |p: &Path| -> Option<String> {
             let r = p.strip_prefix(&root).ok()?;
-            Some(r.components().map(|c| c.as_os_str().to_string_lossy()).collect::<Vec<_>>().join("/"))
+            Some(
+                r.components()
+                    .map(|c| c.as_os_str().to_string_lossy())
+                    .collect::<Vec<_>>()
+                    .join("/"),
+            )
         };
         let mut untracked = Vec::new();
         for f in collect(&[root.join("originals")]) {
@@ -396,11 +474,15 @@ pub async fn library_recover(app: AppHandle) -> CmdResult<ImportSummary> {
         }
         let total = untracked.len() as u32;
         let _ = app.emit("import-progress", ImportProgress { done: 0, total });
-        let import = catalog.with(|c| c.begin_import("Recovered", &root.join("originals").to_string_lossy()))?;
+        let import = catalog
+            .with(|c| c.begin_import("Recovered", &root.join("originals").to_string_lossy()))?;
         for (i, (path, file)) in untracked.into_iter().enumerate() {
             let added = (|| -> CmdResult<Option<ImageId>> {
                 let hash = hash_file(&path).map_err(|e| e.to_string())?;
-                let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                let name = path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default();
                 let aspect = crate::thumbs::warm(&store, &path, &hash);
                 let new = NewImage {
                     hash,
@@ -430,7 +512,13 @@ pub async fn library_recover(app: AppHandle) -> CmdResult<ImportSummary> {
                     s.error.get_or_insert(e);
                 }
             }
-            let _ = app.emit("import-progress", ImportProgress { done: i as u32 + 1, total });
+            let _ = app.emit(
+                "import-progress",
+                ImportProgress {
+                    done: i as u32 + 1,
+                    total,
+                },
+            );
         }
         s.import = catalog.with(|c| c.finish_import(import))?;
         Ok(s)

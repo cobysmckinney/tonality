@@ -15,7 +15,11 @@
   ];
   const spaces: { id: ExportColorSpace; label: string; hint: string }[] = [
     { id: "srgb", label: "sRGB", hint: "Looks the same everywhere" },
-    { id: "displayP3", label: "Display P3", hint: "Wider colour, for phones, Macs and wide-gamut screens" },
+    {
+      id: "displayP3",
+      label: "Display P3",
+      hint: "Wider colour, for phones, Macs and wide-gamut screens",
+    },
   ];
   const sizes: { label: string; value: number | null }[] = [
     { label: "Full", value: null },
@@ -25,7 +29,12 @@
   ];
 
   async function pickFolder() {
-    const p = await open({ directory: true, multiple: false, title: "Export to", defaultPath: s.folder || undefined });
+    const p = await open({
+      directory: true,
+      multiple: false,
+      title: "Export to",
+      defaultPath: s.folder || undefined,
+    });
     if (typeof p === "string") exporter.settings.folder = p;
   }
 
@@ -36,13 +45,20 @@
     if (e.key === "Escape") {
       e.preventDefault();
       exporter.close();
-    } else if (e.key === "Enter" && !exporter.running && !exporter.result && !(e.target instanceof HTMLInputElement)) {
+    } else if (
+      e.key === "Enter" &&
+      !exporter.running &&
+      !exporter.result &&
+      !(e.target instanceof HTMLInputElement)
+    ) {
       e.preventDefault();
       exporter.run();
     }
   }
 
-  const pct = $derived(exporter.progress?.total ? (100 * exporter.progress.done) / exporter.progress.total : 0);
+  const pct = $derived(
+    exporter.progress?.total ? (100 * exporter.progress.done) / exporter.progress.total : 0,
+  );
   const folderName = (p: string) => p.split(/[\\/]/).filter(Boolean).pop() ?? p;
 </script>
 
@@ -52,13 +68,21 @@
   <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
   <div class="scrim" onclick={() => exporter.close()}>
     <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-    <div class="dialog" role="dialog" aria-modal="true" aria-label="Export" tabindex="-1" onclick={(e) => e.stopPropagation()}>
+    <div
+      class="dialog"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Export"
+      tabindex="-1"
+      onclick={(e) => e.stopPropagation()}
+    >
       <h2>Export {count === 1 ? "photo" : `${count} photos`}</h2>
 
       {#if exporter.result}
         {@const r = exporter.result}
         <p class="done">
-          {r.written.length} file{r.written.length === 1 ? "" : "s"} written to <strong>{folderName(r.folder)}</strong>
+          {r.written.length} file{r.written.length === 1 ? "" : "s"} written to
+          <strong>{folderName(r.folder)}</strong>
         </p>
         {#if r.failed.length}
           <ul class="failed">
@@ -67,7 +91,9 @@
         {/if}
         <div class="actions">
           {#if r.written.length}
-            <button class="ghost" onclick={() => revealItemInDir(r.written[0])}>Show in Folder</button>
+            <button class="ghost" onclick={() => revealItemInDir(r.written[0])}
+              >Show in Folder</button
+            >
           {/if}
           <button class="primary" onclick={() => exporter.close()}>Done</button>
         </div>
@@ -75,8 +101,14 @@
         <div class="row">
           <span class="label">Versions</span>
           <div class="seg">
-            <button class:active={s.versions === "current"} onclick={() => (exporter.settings.versions = "current")}>Current</button>
-            <button class:active={s.versions === "all"} onclick={() => (exporter.settings.versions = "all")}>All branches</button>
+            <button
+              class:active={s.versions === "current"}
+              onclick={() => (exporter.settings.versions = "current")}>Current</button
+            >
+            <button
+              class:active={s.versions === "all"}
+              onclick={() => (exporter.settings.versions = "all")}>All branches</button
+            >
           </div>
         </div>
         <p class="hint">
@@ -89,7 +121,11 @@
           <span class="label">Format</span>
           <div class="seg">
             {#each formats as f (f.id)}
-              <button class:active={s.format === f.id} onclick={() => (exporter.settings.format = f.id)} title={f.hint}>{f.label}</button>
+              <button
+                class:active={s.format === f.id}
+                onclick={() => (exporter.settings.format = f.id)}
+                title={f.hint}>{f.label}</button
+              >
             {/each}
           </div>
         </div>
@@ -98,7 +134,11 @@
           <span class="label">Colour</span>
           <div class="seg">
             {#each spaces as c (c.id)}
-              <button class:active={s.colorSpace === c.id} onclick={() => (exporter.settings.colorSpace = c.id)} title={c.hint}>{c.label}</button>
+              <button
+                class:active={s.colorSpace === c.id}
+                onclick={() => (exporter.settings.colorSpace = c.id)}
+                title={c.hint}>{c.label}</button
+              >
             {/each}
           </div>
         </div>
@@ -107,13 +147,18 @@
           <div class="row">
             <span class="label">HDR</span>
             <div class="seg">
-              <button class:active={!s.hdr} onclick={() => (exporter.settings.hdr = false)}>Off</button>
-              <button class:active={s.hdr} onclick={() => (exporter.settings.hdr = true)}>Ultra HDR</button>
+              <button class:active={!s.hdr} onclick={() => (exporter.settings.hdr = false)}
+                >Off</button
+              >
+              <button class:active={s.hdr} onclick={() => (exporter.settings.hdr = true)}
+                >Ultra HDR</button
+              >
             </div>
           </div>
           {#if s.hdr}
             <p class="hint">
-              HDR screens show highlights up to 10× brighter (1,000 nits); others show the photo as it is here.
+              HDR screens show highlights up to 10× brighter (1,000 nits); others show the photo as
+              it is here.
             </p>
           {/if}
           <div class="row">
@@ -133,14 +178,19 @@
           <span class="label">Long edge</span>
           <div class="seg">
             {#each sizes as z (z.label)}
-              <button class:active={s.longEdge === z.value} onclick={() => (exporter.settings.longEdge = z.value)}>{z.label}</button>
+              <button
+                class:active={s.longEdge === z.value}
+                onclick={() => (exporter.settings.longEdge = z.value)}>{z.label}</button
+              >
             {/each}
           </div>
         </div>
 
         <div class="row">
           <span class="label">Folder</span>
-          <button class="folder" onclick={pickFolder} title={s.folder}>{s.folder ? folderName(s.folder) : "Choose…"}</button>
+          <button class="folder" onclick={pickFolder} title={s.folder}
+            >{s.folder ? folderName(s.folder) : "Choose…"}</button
+          >
         </div>
 
         {#if exporter.running}
@@ -152,8 +202,14 @@
         {#if exporter.error}<p class="error">{exporter.error}</p>{/if}
 
         <div class="actions">
-          <button class="ghost" onclick={() => exporter.close()} disabled={exporter.running}>Cancel</button>
-          <button class="primary" onclick={() => exporter.run()} disabled={exporter.running || !s.folder}>
+          <button class="ghost" onclick={() => exporter.close()} disabled={exporter.running}
+            >Cancel</button
+          >
+          <button
+            class="primary"
+            onclick={() => exporter.run()}
+            disabled={exporter.running || !s.folder}
+          >
             {exporter.running ? "Exporting…" : "Export"}
           </button>
         </div>

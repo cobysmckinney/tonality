@@ -22,12 +22,18 @@ fn normalise(points: &[Point]) -> Vec<Point> {
 /// Tangents for monotone cubic interpolation.
 fn tangents(p: &[Point]) -> Vec<f32> {
     let n = p.len();
-    let d: Vec<f32> = (0..n - 1).map(|i| (p[i + 1][1] - p[i][1]) / (p[i + 1][0] - p[i][0])).collect();
+    let d: Vec<f32> = (0..n - 1)
+        .map(|i| (p[i + 1][1] - p[i][1]) / (p[i + 1][0] - p[i][0]))
+        .collect();
     let mut m = vec![0.0; n];
     m[0] = d[0];
     m[n - 1] = d[n - 2];
     for i in 1..n - 1 {
-        m[i] = if d[i - 1] * d[i] <= 0.0 { 0.0 } else { (d[i - 1] + d[i]) / 2.0 };
+        m[i] = if d[i - 1] * d[i] <= 0.0 {
+            0.0
+        } else {
+            (d[i - 1] + d[i]) / 2.0
+        };
     }
     // Fritsch–Carlson: limit tangents so each segment stays monotone.
     for i in 0..n - 1 {
@@ -93,7 +99,11 @@ pub const LUT_SIZE: usize = 1024;
 /// `LUT_SIZE` RGB entries: each channel's curve applied after the master curve.
 pub fn curve_lut(c: &crate::edit::ToneCurve) -> Vec<[f32; 3]> {
     let master = Curve::new(&c.rgb);
-    let chans = [Curve::new(&c.red), Curve::new(&c.green), Curve::new(&c.blue)];
+    let chans = [
+        Curve::new(&c.red),
+        Curve::new(&c.green),
+        Curve::new(&c.blue),
+    ];
     (0..LUT_SIZE)
         .map(|i| {
             let m = master.eval(i as f32 / (LUT_SIZE - 1) as f32);

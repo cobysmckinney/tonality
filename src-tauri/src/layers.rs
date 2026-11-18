@@ -24,7 +24,10 @@ struct Lru<K, V> {
 
 impl<K: PartialEq, V: Clone> Lru<K, V> {
     fn new(cap: usize) -> Self {
-        Self { cap, items: Vec::new() }
+        Self {
+            cap,
+            items: Vec::new(),
+        }
     }
 
     fn get(&mut self, k: &K) -> Option<V> {
@@ -76,11 +79,18 @@ struct Inner {
 
 impl Inner {
     fn new() -> Self {
-        Self { rasters: Lru::new(RASTERS), layers: Vec::new(), generation: 0 }
+        Self {
+            rasters: Lru::new(RASTERS),
+            layers: Vec::new(),
+            generation: 0,
+        }
     }
 
     fn exact(&mut self, base: &Base, strokes: &[Stroke]) -> Option<Arc<Vec<u8>>> {
-        let i = self.layers.iter().position(|l| l.base == *base && *l.strokes == strokes)?;
+        let i = self
+            .layers
+            .iter()
+            .position(|l| l.base == *base && *l.strokes == strokes)?;
         let l = self.layers.remove(i);
         let data = l.data.clone();
         self.layers.push(l);
@@ -91,13 +101,18 @@ impl Inner {
     fn prefix(&self, base: &Base, strokes: &[Stroke]) -> Option<(usize, Arc<Vec<u8>>)> {
         self.layers
             .iter()
-            .filter(|l| l.base == *base && l.strokes.len() < strokes.len() && strokes.starts_with(&l.strokes))
+            .filter(|l| {
+                l.base == *base
+                    && l.strokes.len() < strokes.len()
+                    && strokes.starts_with(&l.strokes)
+            })
             .max_by_key(|l| l.strokes.len())
             .map(|l| (l.strokes.len(), l.data.clone()))
     }
 
     fn put(&mut self, layer: Layer) {
-        self.layers.retain(|l| !(l.base == layer.base && l.strokes == layer.strokes));
+        self.layers
+            .retain(|l| !(l.base == layer.base && l.strokes == layer.strokes));
         self.layers.push(layer);
         if self.layers.len() > LAYERS {
             self.layers.remove(0);
@@ -127,7 +142,9 @@ impl LayerCache {
         let inner = g.as_mut().unwrap();
         inner.generation += 1;
         inner.rasters.items.retain(|(p, _)| p != path);
-        inner.layers.retain(|l| l.base.ai.as_ref().is_none_or(|(p, _)| p != path));
+        inner
+            .layers
+            .retain(|l| l.base.ai.as_ref().is_none_or(|(p, _)| p != path));
     }
 
     /// Every raster layer of `masks` for a photo of `(w, h)` (contents `hash`). `raster(mask)` names
@@ -143,7 +160,13 @@ impl LayerCache {
     ) -> BrushLayers {
         let size = mask_size(w, h);
         let geo = geometry(table);
-        let mut out = BrushLayers { width: size.0, height: size.1, layers: 0, data: Vec::new(), missing: Vec::new() };
+        let mut out = BrushLayers {
+            width: size.0,
+            height: size.1,
+            layers: 0,
+            data: Vec::new(),
+            missing: Vec::new(),
+        };
         for (i, m) in masks.iter().enumerate() {
             let strokes = match &m.shape {
                 MaskShape::Brush { strokes } => strokes,
@@ -151,7 +174,11 @@ impl LayerCache {
                 _ => continue,
             };
             let path = raster(m);
-            let base = Base { photo: hash.to_string(), size, ai: path.clone().map(|p| (p, geo.clone())) };
+            let base = Base {
+                photo: hash.to_string(),
+                size,
+                ai: path.clone().map(|p| (p, geo.clone())),
+            };
             out.layers += 1;
 
             let (exact, start, generation) = {
@@ -159,7 +186,11 @@ impl LayerCache {
                 let inner = g.as_mut().unwrap();
                 let exact = inner.exact(&base, strokes);
                 // Otherwise start from a layer these strokes extend, or from scratch.
-                let start = if exact.is_none() { inner.prefix(&base, strokes) } else { None };
+                let start = if exact.is_none() {
+                    inner.prefix(&base, strokes)
+                } else {
+                    None
+                };
                 (exact, start, inner.generation)
             };
             if let Some(data) = exact {
@@ -179,7 +210,11 @@ impl LayerCache {
                     let found = path.is_none() || src.is_some();
                     let built = mask_layers(std::slice::from_ref(m), w, h, |_, _| {
                         let src = src.as_ref()?;
-                        Some(if geo.is_empty() { src.to_vec() } else { warp_to_uv(src, size.0, size.1, table, w, h) })
+                        Some(if geo.is_empty() {
+                            src.to_vec()
+                        } else {
+                            warp_to_uv(src, size.0, size.1, table, w, h)
+                        })
                     });
                     (built.data, found)
                 }
@@ -188,7 +223,11 @@ impl LayerCache {
                 let mut g = self.lock();
                 let inner = g.as_mut().unwrap();
                 if inner.generation == generation {
-                    inner.put(Layer { base, strokes: Arc::new(strokes.clone()), data: Arc::new(data.clone()) });
+                    inner.put(Layer {
+                        base,
+                        strokes: Arc::new(strokes.clone()),
+                        data: Arc::new(data.clone()),
+                    });
                 }
             } else {
                 // Not cached: it changes once the raster is detected.
@@ -226,15 +265,26 @@ mod tests {
     use tonality_core::mask::AiTarget;
 
     fn mask(shape: MaskShape) -> Mask {
-        Mask { shape, ..Mask::default() }
+        Mask {
+            shape,
+            ..Mask::default()
+        }
     }
 
     fn stroke(x: f32) -> Stroke {
-        Stroke { points: vec![[x, 0.5]], radius: 0.05, ..Stroke::default() }
+        Stroke {
+            points: vec![[x, 0.5]],
+            radius: 0.05,
+            ..Stroke::default()
+        }
     }
 
     fn ai(refine: Vec<Stroke>) -> Mask {
-        mask(MaskShape::Ai { target: AiTarget::Subject, model: "subject@1".into(), refine })
+        mask(MaskShape::Ai {
+            target: AiTarget::Subject,
+            model: "subject@1".into(),
+            refine,
+        })
     }
 
     #[test]
@@ -247,12 +297,23 @@ mod tests {
             loads.set(loads.get() + 1);
             Some(src.clone())
         };
-        let raster = |m: &Mask| matches!(m.shape, MaskShape::Ai { .. }).then(|| PathBuf::from("subject.png"));
+        let raster = |m: &Mask| {
+            matches!(m.shape, MaskShape::Ai { .. }).then(|| PathBuf::from("subject.png"))
+        };
         let table = LensTable::identity();
         let cache = LayerCache::default();
-        let fresh = |masks: &[Mask]| mask_layers(masks, w, h, |_, m| matches!(m.shape, MaskShape::Ai { .. }).then(|| src.clone()));
+        let fresh = |masks: &[Mask]| {
+            mask_layers(masks, w, h, |_, m| {
+                matches!(m.shape, MaskShape::Ai { .. }).then(|| src.clone())
+            })
+        };
 
-        let mut masks = vec![mask(MaskShape::Brush { strokes: vec![stroke(0.2)] }), ai(vec![stroke(0.7)])];
+        let mut masks = vec![
+            mask(MaskShape::Brush {
+                strokes: vec![stroke(0.2)],
+            }),
+            ai(vec![stroke(0.7)]),
+        ];
         let a = cache.layers("h", &masks, (w, h), &table, raster, load);
         assert_eq!(a.data, fresh(&masks).data);
         assert_eq!((a.layers, a.missing.len(), loads.get()), (2, 0, 1));
@@ -269,7 +330,14 @@ mod tests {
         assert_eq!(loads.get(), 1, "the raster is decoded once");
 
         // A different photo doesn't share layers.
-        let c = cache.layers("other", &masks, (w, h), &table, |m| matches!(m.shape, MaskShape::Ai { .. }).then(|| PathBuf::from("other.png")), |_| None);
+        let c = cache.layers(
+            "other",
+            &masks,
+            (w, h),
+            &table,
+            |m| matches!(m.shape, MaskShape::Ai { .. }).then(|| PathBuf::from("other.png")),
+            |_| None,
+        );
         assert_eq!(c.missing, vec![1]);
     }
 
@@ -280,14 +348,26 @@ mod tests {
         let masks = vec![ai(vec![])];
         let raster = |_: &Mask| Some(PathBuf::from("sky.png"));
         let table = LensTable::identity();
-        assert_eq!(cache.layers("h", &masks, (w, h), &table, raster, |_| None).missing, vec![0]);
+        assert_eq!(
+            cache
+                .layers("h", &masks, (w, h), &table, raster, |_| None)
+                .missing,
+            vec![0]
+        );
         let (lw, lh) = mask_size(w, h);
-        let l = cache.layers("h", &masks, (w, h), &table, raster, |_| Some(vec![200; (lw * lh) as usize]));
+        let l = cache.layers("h", &masks, (w, h), &table, raster, |_| {
+            Some(vec![200; (lw * lh) as usize])
+        });
         assert!(l.missing.is_empty() && l.data.iter().all(|&v| v == 200));
 
         cache.forget(Path::new("sky.png"));
-        let l = cache.layers("h", &masks, (w, h), &table, raster, |_| Some(vec![9; (lw * lh) as usize]));
-        assert!(l.data.iter().all(|&v| v == 9), "a regenerated raster replaces the old one");
+        let l = cache.layers("h", &masks, (w, h), &table, raster, |_| {
+            Some(vec![9; (lw * lh) as usize])
+        });
+        assert!(
+            l.data.iter().all(|&v| v == 9),
+            "a regenerated raster replaces the old one"
+        );
 
         // Regenerated while being loaded: the stale load is returned but not kept.
         let stale = |_: &Path| {
@@ -295,8 +375,17 @@ mod tests {
             Some(vec![1; (lw * lh) as usize])
         };
         cache.forget(Path::new("sky.png"));
-        assert!(cache.layers("h", &masks, (w, h), &table, raster, stale).data.iter().all(|&v| v == 1));
-        let l = cache.layers("h", &masks, (w, h), &table, raster, |_| Some(vec![7; (lw * lh) as usize]));
-        assert!(l.data.iter().all(|&v| v == 7), "the stale load wasn't cached");
+        assert!(cache
+            .layers("h", &masks, (w, h), &table, raster, stale)
+            .data
+            .iter()
+            .all(|&v| v == 1));
+        let l = cache.layers("h", &masks, (w, h), &table, raster, |_| {
+            Some(vec![7; (lw * lh) as usize])
+        });
+        assert!(
+            l.data.iter().all(|&v| v == 7),
+            "the stale load wasn't cached"
+        );
     }
 }

@@ -10,6 +10,7 @@
     "check": "svelte-check --tsconfig ./tsconfig.json",
     "test": "vitest run",
     "format": "prettier --write ui",
+    "format:check": "prettier --check ui",
     "bindings": "cargo test -p tonality-core export_bindings",
     "tauri": "tauri"
   },

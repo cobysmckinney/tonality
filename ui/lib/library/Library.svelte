@@ -16,7 +16,8 @@
   const view = $derived(library.view);
   const inAlbum = $derived(view.kind === "album");
   const grouped = $derived(library.query.sort === "captureTime");
-  const is = (v: View) => v.kind === view.kind && (v.kind === "all" || ("id" in view && view.id === v.id));
+  const is = (v: View) =>
+    v.kind === view.kind && (v.kind === "all" || ("id" in view && view.id === v.id));
 
   function onKey(e: KeyboardEvent) {
     if (e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement) return;
@@ -62,7 +63,11 @@
   function importDate(ms: number): string {
     const d = new Date(ms);
     const sameYear = d.getFullYear() === new Date().getFullYear();
-    return d.toLocaleDateString(undefined, { month: "short", day: "numeric", year: sameYear ? undefined : "numeric" });
+    return d.toLocaleDateString(undefined, {
+      month: "short",
+      day: "numeric",
+      year: sameYear ? undefined : "numeric",
+    });
   }
 
   const flagFilters: { label: string; value: number | null; title: string }[] = [
@@ -90,7 +95,9 @@
   function date(s: string | null | undefined): string {
     if (!s) return "";
     const d = new Date(s);
-    return isNaN(d.getTime()) ? s : d.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+    return isNaN(d.getTime())
+      ? s
+      : d.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
   }
 
   const focused = $derived(library.focused);
@@ -168,10 +175,17 @@
         disabled={!!library.importing}
         title="Import a folder (Ctrl+Shift+I)"
       >
-        <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M8 2v8M5 7l3 3 3-3M3 11v2h10v-2" /></svg>
+        <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"
+          ><path d="M8 2v8M5 7l3 3 3-3M3 11v2h10v-2" /></svg
+        >
         Import Folder…
       </button>
-      <button class="btn" onclick={() => library.importFiles()} disabled={!!library.importing} title="Import photos (Ctrl+O)">
+      <button
+        class="btn"
+        onclick={() => library.importFiles()}
+        disabled={!!library.importing}
+        title="Import photos (Ctrl+O)"
+      >
         Files…
       </button>
     </div>
@@ -179,10 +193,16 @@
     {#if library.importing}
       <div class="progress">
         <div class="bar">
-          <div style:width="{library.importing.total ? (100 * library.importing.done) / library.importing.total : 0}%"></div>
+          <div
+            style:width="{library.importing.total
+              ? (100 * library.importing.done) / library.importing.total
+              : 0}%"
+          ></div>
         </div>
         <span>
-          {library.importing.total ? `Copying ${library.importing.done} of ${library.importing.total}` : "Looking for photos…"}
+          {library.importing.total
+            ? `Copying ${library.importing.done} of ${library.importing.total}`
+            : "Looking for photos…"}
         </span>
       </div>
     {:else if library.restoring?.total}
@@ -197,15 +217,25 @@
     <nav>
       <div class="group">
         <div class="eyebrow head">Library</div>
-        <button class="item" class:active={is({ kind: "all" })} onclick={() => library.show({ kind: "all" })}>
+        <button
+          class="item"
+          class:active={is({ kind: "all" })}
+          onclick={() => library.show({ kind: "all" })}
+        >
           <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"
-            ><rect x="2" y="2" width="5" height="5" rx="1.2" /><rect x="9" y="2" width="5" height="5" rx="1.2" /><rect
-              x="2"
+            ><rect x="2" y="2" width="5" height="5" rx="1.2" /><rect
+              x="9"
+              y="2"
+              width="5"
+              height="5"
+              rx="1.2"
+            /><rect x="2" y="9" width="5" height="5" rx="1.2" /><rect
+              x="9"
               y="9"
               width="5"
               height="5"
               rx="1.2"
-            /><rect x="9" y="9" width="5" height="5" rx="1.2" /></svg
+            /></svg
           >
           <span class="label">All Photos</span>
           <span class="count">{library.total}</span>
@@ -216,7 +246,9 @@
         <div class="eyebrow head">
           Albums
           <button class="icon-btn add" onclick={() => newAlbum()} title="New album">
-            <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path d="M8 3v10M3 8h10" /></svg>
+            <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"
+              ><path d="M8 3v10M3 8h10" /></svg
+            >
           </button>
         </div>
 
@@ -229,7 +261,9 @@
               use:focusSelect
               onblur={finishNaming}
               onkeydown={nameKey}
-              placeholder={newWith.length ? `Album for ${newWith.length} photo${newWith.length === 1 ? "" : "s"}` : "Album name"}
+              placeholder={newWith.length
+                ? `Album for ${newWith.length} photo${newWith.length === 1 ? "" : "s"}`
+                : "Album name"}
               maxlength="120"
               spellcheck="false"
             />
@@ -240,7 +274,11 @@
           {#if naming === a.id}
             <div class="item naming">
               <span class="cover">
-                {#if a.cover !== null}<img use:thumbnail={thumbKey(a.cover, a.coverHead)} alt="" draggable="false" />{/if}
+                {#if a.cover !== null}<img
+                    use:thumbnail={thumbKey(a.cover, a.coverHead)}
+                    alt=""
+                    draggable="false"
+                  />{/if}
               </span>
               <input
                 class="field"
@@ -261,17 +299,33 @@
                 ondblclick={() => startRename(a.id, a.name)}
               >
                 <span class="cover">
-                  {#if a.cover !== null}<img use:thumbnail={thumbKey(a.cover, a.coverHead)} alt="" draggable="false" />{/if}
+                  {#if a.cover !== null}<img
+                      use:thumbnail={thumbKey(a.cover, a.coverHead)}
+                      alt=""
+                      draggable="false"
+                    />{/if}
                 </span>
                 <span class="label">{a.name}</span>
                 <span class="count">{a.count}</span>
               </button>
               <div class="album-actions">
-                <button class="icon-btn" onclick={() => startRename(a.id, a.name)} title="Rename album">
-                  <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true"><path d="M10.5 2.5l3 3L6 13H3v-3z" /></svg>
+                <button
+                  class="icon-btn"
+                  onclick={() => startRename(a.id, a.name)}
+                  title="Rename album"
+                >
+                  <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true"
+                    ><path d="M10.5 2.5l3 3L6 13H3v-3z" /></svg
+                  >
                 </button>
-                <button class="icon-btn danger" onclick={() => library.deleteAlbum(a.id)} title="Delete album (photos stay in the library)">
-                  <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true"><path d="M3 4.5h10M6.5 4.5V3h3v1.5M4.5 4.5l.6 8.5h5.8l.6-8.5" /></svg>
+                <button
+                  class="icon-btn danger"
+                  onclick={() => library.deleteAlbum(a.id)}
+                  title="Delete album (photos stay in the library)"
+                >
+                  <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true"
+                    ><path d="M3 4.5h10M6.5 4.5V3h3v1.5M4.5 4.5l.6 8.5h5.8l.6-8.5" /></svg
+                  >
                 </button>
               </div>
             </div>
@@ -288,9 +342,18 @@
 
       {#if library.imports.length}
         <div class="group">
-          <button class="eyebrow head toggle" onclick={() => (importsOpen = !importsOpen)} aria-expanded={importsOpen}>
-            <svg class="chev" class:open={importsOpen} viewBox="0 0 16 16" width="10" height="10" aria-hidden="true"
-              ><path d="m6 4 4 4-4 4" /></svg
+          <button
+            class="eyebrow head toggle"
+            onclick={() => (importsOpen = !importsOpen)}
+            aria-expanded={importsOpen}
+          >
+            <svg
+              class="chev"
+              class:open={importsOpen}
+              viewBox="0 0 16 16"
+              width="10"
+              height="10"
+              aria-hidden="true"><path d="m6 4 4 4-4 4" /></svg
             >
             Recent Imports
           </button>
@@ -333,7 +396,9 @@
           <div class="menu" bind:this={menuRoot}>
             <button class="btn" class:on={menuOpen} onclick={() => (menuOpen = !menuOpen)}>
               <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"
-                ><rect x="2" y="4" width="12" height="9" rx="1.5" /><path d="M5 2h6M8 6.5v4M6 8.5h4" /></svg
+                ><rect x="2" y="4" width="12" height="9" rx="1.5" /><path
+                  d="M5 2h6M8 6.5v4M6 8.5h4"
+                /></svg
               >
               Add to Album
             </button>
@@ -348,24 +413,38 @@
                     }}
                   >
                     <span class="cover">
-                      {#if a.cover !== null}<img use:thumbnail={thumbKey(a.cover, a.coverHead)} alt="" draggable="false" />{/if}
+                      {#if a.cover !== null}<img
+                          use:thumbnail={thumbKey(a.cover, a.coverHead)}
+                          alt=""
+                          draggable="false"
+                        />{/if}
                     </span>
                     <span class="label">{a.name}</span>
                     <span class="count">{a.count}</span>
                   </button>
                 {/each}
                 <button role="menuitem" class="new" onclick={() => newAlbum(library.targets())}>
-                  <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path d="M8 3v10M3 8h10" /></svg>
+                  <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"
+                    ><path d="M8 3v10M3 8h10" /></svg
+                  >
                   New Album with {selCount === 1 ? "this photo" : `${selCount} photos`}…
                 </button>
               </div>
             {/if}
           </div>
-          <button class="btn" onclick={() => library.resetHistory()} title="Take the selected photos back to as-shot, deleting all their versions and steps">
+          <button
+            class="btn"
+            onclick={() => library.resetHistory()}
+            title="Take the selected photos back to as-shot, deleting all their versions and steps"
+          >
             Reset History…
           </button>
           {#if inAlbum}
-            <button class="btn" onclick={() => library.removeFromAlbum()} title="Remove from this album (Delete). The photos stay in your library.">
+            <button
+              class="btn"
+              onclick={() => library.removeFromAlbum()}
+              title="Remove from this album (Delete). The photos stay in your library."
+            >
               Remove
             </button>
           {/if}
@@ -377,15 +456,18 @@
             <button
               class:on={library.query.minRating >= n}
               onclick={() => library.setQuery({ minRating: library.query.minRating === n ? 0 : n })}
-              title={library.query.minRating === n ? "Clear rating filter" : `${n}+ stars`}>★</button
+              title={library.query.minRating === n ? "Clear rating filter" : `${n}+ stars`}
+              >★</button
             >
           {/each}
         </div>
 
         <div class="seg" role="group" aria-label="Flag filter">
           {#each flagFilters as f (f.label)}
-            <button class:active={library.query.flag === f.value} onclick={() => library.setQuery({ flag: f.value })} title={f.title}
-              >{f.label}</button
+            <button
+              class:active={library.query.flag === f.value}
+              onclick={() => library.setQuery({ flag: f.value })}
+              title={f.title}>{f.label}</button
             >
           {/each}
         </div>
@@ -393,7 +475,8 @@
         <div class="sort">
           <select
             value={library.query.sort}
-            onchange={(e) => library.setQuery({ sort: e.currentTarget.value as ImageQuery["sort"] })}
+            onchange={(e) =>
+              library.setQuery({ sort: e.currentTarget.value as ImageQuery["sort"] })}
             aria-label="Sort"
           >
             <option value="captureTime">By date</option>
@@ -449,12 +532,24 @@
           {#if library.total === 0}
             <div class="mark"><Logo kind="mark" height={64} /></div>
             <p class="big">Your library is empty</p>
-            <p class="dim">Import a folder or drop RAW files here. tonality keeps its own copy,<br />so the originals can stay wherever they are, or go.</p>
-            <button class="btn primary" onclick={() => library.importFolder()} disabled={!!library.importing}>Import Folder…</button>
+            <p class="dim">
+              Import a folder or drop RAW files here. tonality keeps its own copy,<br />so the
+              originals can stay wherever they are, or go.
+            </p>
+            <button
+              class="btn primary"
+              onclick={() => library.importFolder()}
+              disabled={!!library.importing}>Import Folder…</button
+            >
           {:else if inAlbum && library.query.minRating === 0 && library.query.flag === null}
             <p class="big">This album is empty</p>
-            <p class="dim">Go to All Photos, select some, and drag them onto<br />“{library.viewName}” in the sidebar — or use Add to Album.</p>
-            <button class="btn" onclick={() => library.show({ kind: "all" })}>Browse All Photos</button>
+            <p class="dim">
+              Go to All Photos, select some, and drag them onto<br />“{library.viewName}” in the
+              sidebar — or use Add to Album.
+            </p>
+            <button class="btn" onclick={() => library.show({ kind: "all" })}
+              >Browse All Photos</button
+            >
           {:else}
             <p class="dim">No photos match these filters.</p>
           {/if}
@@ -472,8 +567,12 @@
           <span class="dim">{date(focused.meta.capturedAt)}</span>
         {/if}
       {:else}
-        <span class="dim">Click to select · Enter to edit · 1–5 rate · P pick · X reject · Drag onto an album to add</span>
-        {#if library.root}<span class="dim end" title="Your library folder">{library.root}</span>{/if}
+        <span class="dim"
+          >Click to select · Enter to edit · 1–5 rate · P pick · X reject · Drag onto an album to
+          add</span
+        >
+        {#if library.root}<span class="dim end" title="Your library folder">{library.root}</span
+          >{/if}
       {/if}
     </footer>
   </section>
@@ -483,12 +582,19 @@
   {@const d = library.drag}
   <div class="ghost" style:transform="translate({d.x + 14}px, {d.y + 14}px)">
     <span class="stack">
-      <img use:thumbnail={thumbKey(d.ids[0], library.images.find((i) => i.id === d.ids[0])?.head ?? null)} alt="" />
+      <img
+        use:thumbnail={thumbKey(
+          d.ids[0],
+          library.images.find((i) => i.id === d.ids[0])?.head ?? null,
+        )}
+        alt=""
+      />
     </span>
     <span>
       {d.ids.length} photo{d.ids.length === 1 ? "" : "s"}
       <span class="to">
-        {#if d.over !== null}→ {library.albums.find((a) => a.id === d.over)?.name}{:else}Drop on an album{/if}
+        {#if d.over !== null}→ {library.albums.find((a) => a.id === d.over)?.name}{:else}Drop on an
+          album{/if}
       </span>
     </span>
   </div>

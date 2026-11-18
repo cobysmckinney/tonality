@@ -70,9 +70,16 @@ pub fn ensure(dir: &Path, file: &ModelFile, progress: &mut dyn FnMut(u64, u64)) 
             progress(done, file.size);
         }
         out.sync_all()?;
-        let got = hash.finalize().iter().map(|b| format!("{b:02x}")).collect::<String>();
+        let got = hash
+            .finalize()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<String>();
         if got != file.sha256 {
-            return Err(MlError::Download(format!("{}: checksum mismatch", file.name)));
+            return Err(MlError::Download(format!(
+                "{}: checksum mismatch",
+                file.name
+            )));
         }
         std::fs::rename(&part, &dest)?;
         verified.push(dest.clone());

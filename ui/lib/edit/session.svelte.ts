@@ -13,7 +13,16 @@ import type { Panel } from "$lib/bindings/Panel";
 import type { Mask } from "$lib/bindings/Mask";
 import { invalidateThumb } from "$lib/library/thumbs";
 import { dropLibraryThumbs, scheduleLibraryThumb } from "./versions";
-import { MAX_MASKS, aiKey, masksOf, newAiMask, newMask, type AiPreset, type BrushTool, type MaskKind } from "./masks";
+import {
+  MAX_MASKS,
+  aiKey,
+  masksOf,
+  newAiMask,
+  newMask,
+  type AiPreset,
+  type BrushTool,
+  type MaskKind,
+} from "./masks";
 
 /** Where an AI mask's detection stands (keyed by `aiKey`). */
 export type AiStatus =
@@ -189,7 +198,13 @@ class EditSession {
   async detect(m: Mask) {
     const key = aiKey(m);
     const id = this.image?.id;
-    if (!key || id === undefined || m.shape.kind !== "ai" || this.aiStatus.get(key)?.state === "working") return;
+    if (
+      !key ||
+      id === undefined ||
+      m.shape.kind !== "ai" ||
+      this.aiStatus.get(key)?.state === "working"
+    )
+      return;
     const { target, model } = $state.snapshot(m.shape);
     this.aiStatus.set(key, { state: "working" });
     // Statuses are per photo (cleared on open): a result for one we've left is dropped.
@@ -300,7 +315,9 @@ class EditSession {
           if (this.opening !== id) continue;
           const pixels = await api.previewPixels(info.id);
           if (this.opening !== id) continue;
-          console.info(`[tonality] opened ${info.name} ${info.width}×${info.height} in ${Math.round(performance.now() - t0)}ms`);
+          console.info(
+            `[tonality] opened ${info.name} ${info.width}×${info.height} in ${Math.round(performance.now() - t0)}ms`,
+          );
           this.pixels = pixels;
           this.compare = null;
           this.applying = null;
@@ -346,7 +363,10 @@ class EditSession {
         if (applyState) this.edit = r.state;
         if (moved) scheduleLibraryThumb(id, r.state);
         const cmp = this.compare;
-        if (cmp && (!r.view.branches.some((b) => b.name === cmp.branch) || cmp.branch === r.view.head.branch)) {
+        if (
+          cmp &&
+          (!r.view.branches.some((b) => b.name === cmp.branch) || cmp.branch === r.view.head.branch)
+        ) {
           this.compare = null;
         }
       } catch (e) {
@@ -374,7 +394,8 @@ class EditSession {
     const state = this.restoring ? null : $state.snapshot(this.edit);
     // Don't overwrite `edit` with the reply: the user may already be dragging again.
     return this.run((id) => {
-      const s = state ?? (this.edit && this.history?.imageId === id ? $state.snapshot(this.edit) : null);
+      const s =
+        state ?? (this.edit && this.history?.imageId === id ? $state.snapshot(this.edit) : null);
       return s ? api.history.commit(id, s, key) : api.history.open(id);
     }, false);
   }
@@ -383,13 +404,15 @@ class EditSession {
   redo = () => this.run((id) => api.history.redo(id), true);
   checkout = (commit: number) => this.run((id) => api.history.checkout(id, commit), true);
   switchBranch = (name: string) => this.run((id) => api.history.switchBranch(id, name), true);
-  branch = (at: number, name: string | null = null) => this.run((id) => api.history.branch(id, at, name), true);
+  branch = (at: number, name: string | null = null) =>
+    this.run((id) => api.history.branch(id, at, name), true);
   renameBranch = (old: string, name: string) => {
     if (this.compare?.branch === old) this.compare.branch = name.trim();
     return this.run((id) => api.history.rename(id, old, name), true);
   };
   deleteBranch = (name: string) => this.run((id) => api.history.deleteBranch(id, name), true);
-  applyFrom = (source: string, panels: Panel[]) => this.run((id) => api.history.applyFrom(id, source, panels), true);
+  applyFrom = (source: string, panels: Panel[]) =>
+    this.run((id) => api.history.applyFrom(id, source, panels), true);
 
   /**
    * The open photo's history was reset (here or from the Library): load the fresh one, and

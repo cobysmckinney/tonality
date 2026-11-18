@@ -46,10 +46,18 @@ fn rec2020(m: &Mat3, c: [f32; 3]) -> [f64; 3] {
 
 /// Develops a row of pixels, one per camera value, through camera → Rec.2020 `m`, with every
 /// adjustment off except what `tweak` sets. Display code values, 0–1.
-fn develop(gpu: &Gpu, m: &Mat3, cam: &[[f32; 3]], tweak: impl FnOnce(&mut DevelopParams)) -> Vec<[f64; 3]> {
+fn develop(
+    gpu: &Gpu,
+    m: &Mat3,
+    cam: &[[f32; 3]],
+    tweak: impl FnOnce(&mut DevelopParams),
+) -> Vec<[f64; 3]> {
     let (w, h) = (cam.len() as u32, 1u32);
     let edit = EditState::default();
-    let color = CameraColor { xyz_to_cam: tonality_core::color::IDENTITY, as_shot_wb: [1.0; 3] };
+    let color = CameraColor {
+        xyz_to_cam: tonality_core::color::IDENTITY,
+        as_shot_wb: [1.0; 3],
+    };
     let mut params = DevelopParams::new(&edit, &color, None, w, h);
     params.wb = [1.0, 1.0, 1.0, 1e6]; // no sensor clip: scene values above 1 go straight to AgX
     params.cam = m.map(|r| [r[0], r[1], r[2], 0.0]);
@@ -59,11 +67,30 @@ fn develop(gpu: &Gpu, m: &Mat3, cam: &[[f32; 3]], tweak: impl FnOnce(&mut Develo
     params.grain = [0.0; 4];
     params.vignette = [0.0; 4];
     tweak(&mut params);
-    let pixels: Vec<u16> = cam.iter().flat_map(|c| c.map(|v| f16::from_f32(v).to_bits())).collect();
-    let src = Source { width: w, height: h, pixels: &pixels, frame: [w, h] };
-    let out = gpu.render(&src, &params, &curve_lut_rgba16f(&edit), &brush_layers(&[], w, h), None, |_| {}).unwrap();
+    let pixels: Vec<u16> = cam
+        .iter()
+        .flat_map(|c| c.map(|v| f16::from_f32(v).to_bits()))
+        .collect();
+    let src = Source {
+        width: w,
+        height: h,
+        pixels: &pixels,
+        frame: [w, h],
+    };
+    let out = gpu
+        .render(
+            &src,
+            &params,
+            &curve_lut_rgba16f(&edit),
+            &brush_layers(&[], w, h),
+            None,
+            |_| {},
+        )
+        .unwrap();
     assert_eq!((out.width, out.height), (w, h));
-    (0..cam.len()).map(|i| [0, 1, 2].map(|k| out.pixels[i * 3 + k] as f64 / 65535.0)).collect()
+    (0..cam.len())
+        .map(|i| [0, 1, 2].map(|k| out.pixels[i * 3 + k] as f64 / 65535.0))
+        .collect()
 }
 
 fn gpu() -> Option<Gpu> {
@@ -72,18 +99,34 @@ fn gpu() -> Option<Gpu> {
 
 /// The reference colours, as camera values and as the Rec.2020 colours the shader receives.
 fn reference_colours() -> (Mat3, Vec<[f32; 3]>, Vec<[f64; 3]>) {
-    let reference: Reference =
-        serde_json::from_str(include_str!("../../tonality-core/tests/data/agx_reference.json")).unwrap();
+    let reference: Reference = serde_json::from_str(include_str!(
+        "../../tonality-core/tests/data/agx_reference.json"
+    ))
+    .unwrap();
     let m = invert(&REC2020_TO_XYZ).unwrap();
-    let cam: Vec<[f32; 3]> = reference.rows.iter().filter_map(|r| camera(&m, r.input)).collect();
+    let cam: Vec<[f32; 3]> = reference
+        .rows
+        .iter()
+        .filter_map(|r| camera(&m, r.input))
+        .collect();
     let inputs: Vec<[f64; 3]> = cam.iter().map(|&c| rec2020(&m, c)).collect();
-    let negative = inputs.iter().filter(|c| c.iter().any(|&v| v < -1e-4)).count();
-    assert!(negative >= 10, "only {negative} colours outside Rec.2020 reach the test");
+    let negative = inputs
+        .iter()
+        .filter(|c| c.iter().any(|&v| v < -1e-4))
+        .count();
+    assert!(
+        negative >= 10,
+        "only {negative} colours outside Rec.2020 reach the test"
+    );
     (m, cam, inputs)
 }
 
 /// Largest difference between the shader's output and `want`, and the input it was at.
-fn worst(inputs: &[[f64; 3]], out: &[[f64; 3]], want: impl Fn([f64; 3]) -> [f64; 3]) -> (f64, [f64; 3]) {
+fn worst(
+    inputs: &[[f64; 3]],
+    out: &[[f64; 3]],
+    want: impl Fn([f64; 3]) -> [f64; 3],
+) -> (f64, [f64; 3]) {
     let mut worst = (0.0f64, [0.0f64; 3]);
     for (c, got) in inputs.iter().zip(out) {
         let want = want(*c);
@@ -105,7 +148,11 @@ fn shader_agx_matches_the_cpu_reference() {
         let out = develop(&gpu, &m, &cam, |p| *p = p.for_display(display));
         let agx = Agx::sdr(display);
         let (d, at) = worst(&inputs, &out, |c| agx.display(c));
-        eprintln!("GPU ({}) vs CPU, {display:?}, {} colours: worst {d:.6} at {at:?}", gpu.adapter, inputs.len());
+        eprintln!(
+            "GPU ({}) vs CPU, {display:?}, {} colours: worst {d:.6} at {at:?}",
+            gpu.adapter,
+            inputs.len()
+        );
         assert!(d < 1e-3, "{display:?}: worst {d} at {at:?}");
     }
 }
@@ -116,7 +163,13 @@ fn shader_agx_matches_the_cpu_reference() {
 fn shader_gain_map_matches_the_cpu_reference() {
     let Some(gpu) = gpu() else { return };
     let (m, cam, inputs) = reference_colours();
-    let linear = |v: f64| if v <= 0.04045 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) };
+    let linear = |v: f64| {
+        if v <= 0.04045 {
+            v / 12.92
+        } else {
+            ((v + 0.055) / 1.055).powf(2.4)
+        }
+    };
     for display in [Display::Srgb, Display::DisplayP3] {
         let out = develop(&gpu, &m, &cam, |p| *p = p.for_display(display).gain_map());
         let (sdr, hdr) = (Agx::sdr(display), Agx::hdr(display));
@@ -147,7 +200,10 @@ fn colours_outside_rec2020_survive_tone() {
     let colours = [[0.0, -0.01, 0.1], [0.0, -0.0115, 0.13], [0.0, 0.0, 0.1]];
     let cam: Vec<[f32; 3]> = colours.iter().map(|&c| camera(&m, c).unwrap()).collect();
     let y = |c: [f64; 3]| 0.2627 * c[0] + 0.6780 * c[1] + 0.0593 * c[2];
-    assert!(y(rec2020(&m, cam[0])) < 0.0 && y(rec2020(&m, cam[1])) < 0.0, "test colours have negative luminance");
+    assert!(
+        y(rec2020(&m, cam[0])) < 0.0 && y(rec2020(&m, cam[1])) < 0.0,
+        "test colours have negative luminance"
+    );
     // Display luminance, in code values (Rec.709 weights): how bright the pixel looks.
     let shown = |c: [f64; 3]| 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
     for (contrast, shadows) in [(0.0, 0.0), (-1.0, 0.0), (-1.0, 1.0)] {

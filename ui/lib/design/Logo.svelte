@@ -19,7 +19,7 @@
 
 <svg
   viewBox="0 0 {art.width} {art.height}"
-  height={height}
+  {height}
   width={(height * art.width) / art.height}
   role={label ? "img" : undefined}
   aria-label={label || undefined}

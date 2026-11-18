@@ -27,7 +27,12 @@
     const source = session.applying;
     if (!source || !chosen.size) return;
     session.applying = null;
-    await session.applyFrom(source, panels.map((p) => p.id).filter((p) => chosen.has(p))).catch(() => {});
+    await session
+      .applyFrom(
+        source,
+        panels.map((p) => p.id).filter((p) => chosen.has(p)),
+      )
+      .catch(() => {});
   }
 
   function onKey(e: KeyboardEvent) {
@@ -47,7 +52,14 @@
   <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
   <div class="scrim" onclick={() => (session.applying = null)}>
     <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-    <div class="dialog" role="dialog" aria-modal="true" aria-label="Copy settings" tabindex="-1" onclick={(e) => e.stopPropagation()}>
+    <div
+      class="dialog"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Copy settings"
+      tabindex="-1"
+      onclick={(e) => e.stopPropagation()}
+    >
       <h2>Copy settings from “{session.applying}”</h2>
       <p class="hint">Onto “{session.history?.head.branch}”, as one step you can undo.</p>
       <div class="grid">
@@ -59,7 +71,8 @@
         {/each}
       </div>
       <div class="actions">
-        <button class="link" onclick={() => (chosen = new Set(panels.map((p) => p.id)))}>All</button>
+        <button class="link" onclick={() => (chosen = new Set(panels.map((p) => p.id)))}>All</button
+        >
         <span class="spacer"></span>
         <button class="ghost" onclick={() => (session.applying = null)}>Cancel</button>
         <button class="primary" onclick={apply} disabled={!chosen.size}>Copy</button>

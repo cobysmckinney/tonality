@@ -64,7 +64,9 @@ export function layoutGraph(view: HistoryView): GraphLayout {
 
   const headBranch = view.branches.find((b) => b.name === view.head.branch);
   const behindHead = new Set(lineage(parents, view.head.commit));
-  const ahead = new Set(headBranch ? lineage(parents, headBranch.tip).filter((id) => !behindHead.has(id)) : []);
+  const ahead = new Set(
+    headBranch ? lineage(parents, headBranch.tip).filter((id) => !behindHead.has(id)) : [],
+  );
 
   const ordered = [...view.commits].sort((a, b) => b.id - a.id);
   const rowOf = new Map(ordered.map((c, i) => [c.id, i]));
@@ -89,7 +91,13 @@ export function layoutGraph(view: HistoryView): GraphLayout {
     if (p == null) continue;
     const toRow = rowOf.get(p);
     if (toRow === undefined) continue;
-    edges.push({ fromRow: r.row, fromLane: r.lane, toRow, toLane: laneOf.get(p) ?? 0, color: r.color });
+    edges.push({
+      fromRow: r.row,
+      fromLane: r.lane,
+      toRow,
+      toLane: laneOf.get(p) ?? 0,
+      color: r.color,
+    });
   }
 
   return { rows, edges, lanes: Math.max(lanes, 1), branchColor };

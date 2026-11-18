@@ -79,4 +79,3 @@ class Exporter {
 }
 
 export const exporter = new Exporter();
-

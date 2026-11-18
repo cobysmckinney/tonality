@@ -12,21 +12,34 @@
 
 <header>
   <div class="left">
-    <div class="brand" data-brand-wordmark style:visibility={app.splash ? "hidden" : null}><Logo height={21} label="tonality" /></div>
+    <div class="brand" data-brand-wordmark style:visibility={app.splash ? "hidden" : null}>
+      <Logo height={21} label="tonality" />
+    </div>
     {#if app.mode === "edit"}<BranchMenu />{/if}
   </div>
 
   <nav class="seg modes" aria-label="Mode">
     {#each modes as m (m.id)}
-      <button class:active={app.mode === m.id} onclick={() => (app.mode = m.id)} title="{m.label} ({m.key})">
+      <button
+        class:active={app.mode === m.id}
+        onclick={() => (app.mode = m.id)}
+        title="{m.label} ({m.key})"
+      >
         {m.label}
       </button>
     {/each}
   </nav>
 
   <div class="right">
-    <button class="btn" onclick={exportCurrent} disabled={!exportCount()} title="Export (Ctrl+Shift+E)">
-      <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M8 10V2M5 5l3-3 3 3M3 9v4h10V9" /></svg>
+    <button
+      class="btn"
+      onclick={exportCurrent}
+      disabled={!exportCount()}
+      title="Export (Ctrl+Shift+E)"
+    >
+      <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"
+        ><path d="M8 10V2M5 5l3-3 3 3M3 9v4h10V9" /></svg
+      >
       Export
     </button>
   </div>

@@ -25,8 +25,20 @@
     /** A drag started (true) or ended (false), to show the mask while working. */
     oninteract?: (active: boolean) => void;
   }
-  let { mask, frame, framing, fullW, fullH, brush, passthrough = false, onchange, oncommit, onpaint, onstroke, oninteract }: Props =
-    $props();
+  let {
+    mask,
+    frame,
+    framing,
+    fullW,
+    fullH,
+    brush,
+    passthrough = false,
+    onchange,
+    oncommit,
+    onpaint,
+    onstroke,
+    oninteract,
+  }: Props = $props();
 
   const nm = $derived(norm(fullW, fullH));
   /** Long-edge units per CSS pixel. */
@@ -36,7 +48,8 @@
     const f = toFrame(framing, uv);
     return [frame.x + f[0] * frame.w, frame.y + f[1] * frame.h];
   };
-  const toSource = (x: number, y: number): Vec2 => toUv(framing, [(x - frame.x) / frame.w, (y - frame.y) / frame.h]);
+  const toSource = (x: number, y: number): Vec2 =>
+    toUv(framing, [(x - frame.x) / frame.w, (y - frame.y) / frame.h]);
   const qOf = (uv: Vec2): Vec2 => [uv[0] * nm[0], uv[1] * nm[1]];
   const uvOf = (q: Vec2): Vec2 => [q[0] / nm[0], q[1] / nm[1]];
   const r4 = (v: number) => Math.round(v * 1e4) / 1e4;
@@ -54,11 +67,17 @@
   // ---- geometry on screen ----
   const linear = $derived.by(() => {
     if (mask.shape.kind !== "linear") return null;
-    const a = toScreen(mask.shape.from as Vec2), b = toScreen(mask.shape.to as Vec2);
+    const a = toScreen(mask.shape.from as Vec2),
+      b = toScreen(mask.shape.to as Vec2);
     const m: Vec2 = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
     const len = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1;
     const p: Vec2 = [(-(b[1] - a[1]) / len) * 5000, ((b[0] - a[0]) / len) * 5000];
-    const line = (c: Vec2) => ({ x1: c[0] - p[0], y1: c[1] - p[1], x2: c[0] + p[0], y2: c[1] + p[1] });
+    const line = (c: Vec2) => ({
+      x1: c[0] - p[0],
+      y1: c[1] - p[1],
+      x2: c[0] + p[0],
+      y2: c[1] + p[1],
+    });
     return { a, b, m, lines: [line(a), line(m), line(b)] };
   });
 
@@ -67,10 +86,14 @@
     if (s.kind !== "radial") return null;
     const c = qOf(s.center as Vec2);
     const t = (s.angle * Math.PI) / 180;
-    const U: Vec2 = [Math.cos(t), Math.sin(t)], V: Vec2 = [-Math.sin(t), Math.cos(t)];
+    const U: Vec2 = [Math.cos(t), Math.sin(t)],
+      V: Vec2 = [-Math.sin(t), Math.cos(t)];
     const at = (k: number, sc = 1): Vec2 => {
       const [rx, ry] = s.radius;
-      const q: Vec2 = [c[0] + sc * (rx * Math.cos(k) * U[0] + ry * Math.sin(k) * V[0]), c[1] + sc * (rx * Math.cos(k) * U[1] + ry * Math.sin(k) * V[1])];
+      const q: Vec2 = [
+        c[0] + sc * (rx * Math.cos(k) * U[0] + ry * Math.sin(k) * V[0]),
+        c[1] + sc * (rx * Math.cos(k) * U[1] + ry * Math.sin(k) * V[1]),
+      ];
       return toScreen(uvOf(q));
     };
     const path = (sc: number) => {
@@ -81,9 +104,14 @@
       }
       return d + "Z";
     };
-    const knobQ: Vec2 = [c[0] - V[0] * (s.radius[1] + 22 * unit), c[1] - V[1] * (s.radius[1] + 22 * unit)];
+    const knobQ: Vec2 = [
+      c[0] - V[0] * (s.radius[1] + 22 * unit),
+      c[1] - V[1] * (s.radius[1] + 22 * unit),
+    ];
     return {
-      c, U, V,
+      c,
+      U,
+      V,
       centre: toScreen(s.center as Vec2),
       outer: path(1),
       inner: path(Math.max(0.02, 1 - s.feather)),
@@ -175,8 +203,10 @@
     const uv = toSource(x, y);
     if (d.kind === "paint") {
       // A new point every so often along the stroke: segments are swept, so this is smooth.
-      const q0 = qOf(d.last), q1 = qOf(uv);
-      if (Math.hypot(q1[0] - q0[0], q1[1] - q0[1]) < Math.max(d.stroke.radius * 0.15, unit * 2)) return;
+      const q0 = qOf(d.last),
+        q1 = qOf(uv);
+      if (Math.hypot(q1[0] - q0[0], q1[1] - q0[1]) < Math.max(d.stroke.radius * 0.15, unit * 2))
+        return;
       d.stroke.points.push(round(uv));
       onpaint(d.stroke, d.last, uv);
       d.last = uv;
@@ -196,10 +226,14 @@
       const q = qOf(uv);
       const dq: Vec2 = [q[0] - c[0], q[1] - c[1]];
       const t = (s.angle * Math.PI) / 180;
-      const U: Vec2 = [Math.cos(t), Math.sin(t)], V: Vec2 = [-Math.sin(t), Math.cos(t)];
+      const U: Vec2 = [Math.cos(t), Math.sin(t)],
+        V: Vec2 = [-Math.sin(t), Math.cos(t)];
       const min = 4 * unit;
       if (d.kind === "move-radial") {
-        onchange({ ...start, shape: { ...s, center: round([s.center[0] + delta[0], s.center[1] + delta[1]]) } });
+        onchange({
+          ...start,
+          shape: { ...s, center: round([s.center[0] + delta[0], s.center[1] + delta[1]]) },
+        });
       } else if (d.kind === "rx") {
         const rx = Math.max(min, Math.abs(dq[0] * U[0] + dq[1] * U[1]));
         onchange({ ...start, shape: { ...s, radius: [r4(rx), s.radius[1]] } });
@@ -246,7 +280,9 @@
   aria-label="Mask"
 >
   <defs>
-    <clipPath id="mask-frame"><rect x={frame.x} y={frame.y} width={frame.w} height={frame.h} /></clipPath>
+    <clipPath id="mask-frame"
+      ><rect x={frame.x} y={frame.y} width={frame.w} height={frame.h} /></clipPath
+    >
   </defs>
   {#if linear}
     <g clip-path="url(#mask-frame)">
@@ -263,7 +299,13 @@
     <path class="guide-dark" d={radial.outer} />
     <path class="guide" d={radial.outer} />
     <path class="guide feather" d={radial.inner} />
-    <line class="guide" x1={radial.top[0]} y1={radial.top[1]} x2={radial.knob[0]} y2={radial.knob[1]} />
+    <line
+      class="guide"
+      x1={radial.top[0]}
+      y1={radial.top[1]}
+      x2={radial.knob[0]}
+      y2={radial.knob[1]}
+    />
     {#each radial.handles as h, i (i)}
       <circle class="handle" cx={h.p[0]} cy={h.p[1]} r="5" />
     {/each}
@@ -273,10 +315,21 @@
     <circle class="brush-dark" cx={pointer[0]} cy={pointer[1]} r={brushR} />
     <circle class="brush" cx={pointer[0]} cy={pointer[1]} r={brushR} />
     {#if brush.feather > 0.02}
-      <circle class="brush inner" cx={pointer[0]} cy={pointer[1]} r={brushR * (1 - brush.feather)} />
+      <circle
+        class="brush inner"
+        cx={pointer[0]}
+        cy={pointer[1]}
+        r={brushR * (1 - brush.feather)}
+      />
     {/if}
     <line class="brush" x1={pointer[0] - 4} y1={pointer[1]} x2={pointer[0] + 4} y2={pointer[1]} />
-    {#if !erasing}<line class="brush" x1={pointer[0]} y1={pointer[1] - 4} x2={pointer[0]} y2={pointer[1] + 4} />{/if}
+    {#if !erasing}<line
+        class="brush"
+        x1={pointer[0]}
+        y1={pointer[1] - 4}
+        x2={pointer[0]}
+        y2={pointer[1] + 4}
+      />{/if}
   {/if}
 </svg>
 

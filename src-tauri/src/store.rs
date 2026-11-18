@@ -50,12 +50,20 @@ impl Store {
     }
 
     pub fn thumb_path(&self, hash: &str, edge: u32) -> PathBuf {
-        self.root.join("cache").join("thumbs").join(&hash[..2]).join(format!("{}-{edge}.jpg", &hash[2..]))
+        self.root
+            .join("cache")
+            .join("thumbs")
+            .join(&hash[..2])
+            .join(format!("{}-{edge}.jpg", &hash[2..]))
     }
 
     /// Thumbnail of an image's current edited version (rendered by Edit).
     pub fn edited_thumb_path(&self, hash: &str) -> PathBuf {
-        self.root.join("cache").join("edited").join(&hash[..2]).join(format!("{}.jpg", &hash[2..]))
+        self.root
+            .join("cache")
+            .join("edited")
+            .join(&hash[..2])
+            .join(format!("{}.jpg", &hash[2..]))
     }
 
     /// Library-relative folder for a photo captured at `captured_at` (ISO 8601).
@@ -72,7 +80,10 @@ impl Store {
 pub fn temp_path(dest: &Path) -> PathBuf {
     static NEXT: AtomicU64 = AtomicU64::new(0);
     let n = NEXT.fetch_add(1, Ordering::Relaxed);
-    let name = dest.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let name = dest
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
     dest.with_file_name(format!(".{name}.{}-{n}.part", std::process::id()))
 }
 

@@ -3,16 +3,16 @@ mod export;
 mod history;
 mod images;
 mod layers;
-mod priority;
 mod library;
+mod priority;
 mod sidecar;
 mod store;
 mod thumbs;
 
 use images::{ImageInfo, Images};
+use store::Store;
 use tauri::ipc::Response;
 use tauri::{AppHandle, Manager, State};
-use store::Store;
 use tonality_core::{Catalog, EditState, ImageId};
 use tonality_render::{DevelopParams, GlslProgram};
 
@@ -43,7 +43,12 @@ fn wb_presets() -> Vec<WbPresetInfo> {
         .iter()
         .map(|&p| {
             let (temperature, tint) = p.values();
-            WbPresetInfo { preset: p, label: p.label().into(), temperature, tint }
+            WbPresetInfo {
+                preset: p,
+                label: p.label().into(),
+                temperature,
+                tint,
+            }
         })
         .collect()
 }
@@ -51,13 +56,17 @@ fn wb_presets() -> Vec<WbPresetInfo> {
 /// Dev convenience: `TONALITY_OPEN=/path/to/file.ARW npm run tauri dev` imports a file and opens it.
 #[tauri::command]
 fn startup_path() -> Option<String> {
-    std::env::var("TONALITY_OPEN").ok().filter(|p| !p.is_empty())
+    std::env::var("TONALITY_OPEN")
+        .ok()
+        .filter(|p| !p.is_empty())
 }
 
 /// Dev convenience: `TONALITY_IMPORT=/path/to/folder` imports a folder into the Library on launch.
 #[tauri::command]
 fn startup_import() -> Option<String> {
-    std::env::var("TONALITY_IMPORT").ok().filter(|p| !p.is_empty())
+    std::env::var("TONALITY_IMPORT")
+        .ok()
+        .filter(|p| !p.is_empty())
 }
 
 /// Dev: frontend console messages, mirrored to the terminal.
@@ -73,13 +82,17 @@ fn dev_snapshot_path() -> Option<String> {
     if !cfg!(debug_assertions) {
         return None;
     }
-    std::env::var("TONALITY_SNAPSHOT").ok().filter(|p| !p.is_empty())
+    std::env::var("TONALITY_SNAPSHOT")
+        .ok()
+        .filter(|p| !p.is_empty())
 }
 
 /// Dev/test hook: `TONALITY_ZOOM=1` opens images at that zoom (and snapshots once full-res pixels arrive).
 #[tauri::command]
 fn dev_zoom() -> Option<f32> {
-    std::env::var("TONALITY_ZOOM").ok().and_then(|z| z.parse().ok())
+    std::env::var("TONALITY_ZOOM")
+        .ok()
+        .and_then(|z| z.parse().ok())
 }
 
 /// Dev/test hook (debug builds only): contents of the JS file at `TONALITY_DEV_SCRIPT`, run by
@@ -89,7 +102,9 @@ fn dev_script() -> Option<String> {
     if !cfg!(debug_assertions) {
         return None;
     }
-    let p = std::env::var("TONALITY_DEV_SCRIPT").ok().filter(|p| !p.is_empty())?;
+    let p = std::env::var("TONALITY_DEV_SCRIPT")
+        .ok()
+        .filter(|p| !p.is_empty())?;
     std::fs::read_to_string(p).ok()
 }
 
@@ -97,14 +112,23 @@ fn dev_script() -> Option<String> {
 #[tauri::command]
 fn dev_save_snapshot(data_url: String, name: Option<String>) -> CmdResult<()> {
     use base64::Engine;
-    let mut path = std::path::PathBuf::from(dev_snapshot_path().ok_or("TONALITY_SNAPSHOT not set")?);
+    let mut path =
+        std::path::PathBuf::from(dev_snapshot_path().ok_or("TONALITY_SNAPSHOT not set")?);
     // Named snapshots go next to it: `snap.png` + "crop" → `snap-crop.png`.
     if let Some(n) = name.filter(|n| n.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')) {
-        let stem = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+        let stem = path
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_default();
         path.set_file_name(format!("{stem}-{n}.png"));
     }
-    let b64 = data_url.split_once(',').map(|(_, b)| b).ok_or("bad data url")?;
-    let bytes = base64::engine::general_purpose::STANDARD.decode(b64).map_err(|e| e.to_string())?;
+    let b64 = data_url
+        .split_once(',')
+        .map(|(_, b)| b)
+        .ok_or("bad data url")?;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(b64)
+        .map_err(|e| e.to_string())?;
     std::fs::write(path, bytes).map_err(|e| e.to_string())
 }
 
@@ -179,9 +203,19 @@ async fn develop_curve(edit: EditState) -> Response {
 
 /// Uniform block for `develop.wgsl`.
 #[tauri::command]
-async fn develop_params(id: ImageId, edit: EditState, images: State<'_, Images>) -> CmdResult<Vec<f32>> {
+async fn develop_params(
+    id: ImageId,
+    edit: EditState,
+    images: State<'_, Images>,
+) -> CmdResult<Vec<f32>> {
     let p = images.get(id).ok_or("image not open")?;
-    let mut params = DevelopParams::new(&edit, &p.color, p.lens.as_ref(), p.full_width, p.full_height);
+    let mut params = DevelopParams::new(
+        &edit,
+        &p.color,
+        p.lens.as_ref(),
+        p.full_width,
+        p.full_height,
+    );
     if tonality_render::presence::uses_maps(&edit) {
         let images = images.inner().clone();
         let maps = blocking(move || images.presence(id)).await?;
@@ -213,8 +247,17 @@ async fn presence_maps(id: ImageId, images: State<'_, Images>) -> CmdResult<Resp
 async fn mask_layers(id: ImageId, edit: EditState, app: AppHandle) -> CmdResult<Response> {
     blocking(move || {
         let p = app.state::<Images>().get(id).ok_or("image not open")?;
-        let (_, hash, _) = app.state::<history::CatalogState>().with(|c| c.image_file(id))?;
-        let l = ai::layers(&app, &hash, &edit, p.full_width, p.full_height, p.lens.as_ref());
+        let (_, hash, _) = app
+            .state::<history::CatalogState>()
+            .with(|c| c.image_file(id))?;
+        let l = ai::layers(
+            &app,
+            &hash,
+            &edit,
+            p.full_width,
+            p.full_height,
+            p.lens.as_ref(),
+        );
         let mut out = Vec::with_capacity(16 + 4 * l.missing.len() + l.data.len());
         for v in [l.width, l.height, l.layers, l.missing.len() as u32] {
             out.extend_from_slice(&v.to_le_bytes());
@@ -229,8 +272,12 @@ async fn mask_layers(id: ImageId, edit: EditState, app: AppHandle) -> CmdResult<
 }
 
 /// Run blocking work (pixels, files, the catalog) on the blocking pool, off the async workers.
-pub(crate) async fn blocking<T: Send + 'static>(f: impl FnOnce() -> CmdResult<T> + Send + 'static) -> CmdResult<T> {
-    tauri::async_runtime::spawn_blocking(f).await.map_err(|e| e.to_string())?
+pub(crate) async fn blocking<T: Send + 'static>(
+    f: impl FnOnce() -> CmdResult<T> + Send + 'static,
+) -> CmdResult<T> {
+    tauri::async_runtime::spawn_blocking(f)
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -244,7 +291,8 @@ pub fn run() {
         .register_asynchronous_uri_scheme_protocol(thumbs::SCHEME, thumbs::handle)
         .setup(|app| {
             let root = Store::resolve(app.path().picture_dir().ok(), app.path().home_dir().ok());
-            let store = Store::open(root.clone()).map_err(|e| format!("cannot open library at {root:?}: {e}"))?;
+            let store = Store::open(root.clone())
+                .map_err(|e| format!("cannot open library at {root:?}: {e}"))?;
             let mut catalog = Catalog::open(store.catalog_path())?;
             thumbs::backfill_aspects(&store, &mut catalog);
             eprintln!("[tonality] library: {}", store.root().display());

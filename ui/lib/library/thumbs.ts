@@ -19,7 +19,12 @@ const cache = new Map<string, string>(); // key → blob URL, insertion-ordered 
 const failed = new Map<string, number>(); // key → when it failed
 /** Keys some <img> is showing right now: never evicted (revoking would blank them). */
 const inUse = new Map<string, number>();
-type Waiter = { id: number; key: string; resolve: (url: string | null) => void; cancelled: boolean };
+type Waiter = {
+  id: number;
+  key: string;
+  resolve: (url: string | null) => void;
+  cancelled: boolean;
+};
 
 /** Bumped when Edit saves a new rendering of a photo, so grid cells reload it. */
 const epochs = new SvelteMap<number, number>();

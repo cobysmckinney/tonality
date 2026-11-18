@@ -21,7 +21,10 @@ pub struct CatalogState {
 
 impl CatalogState {
     pub fn new(catalog: Catalog) -> Self {
-        Self { catalog: Arc::new(Mutex::new(catalog)), on_change: Arc::new(OnceLock::new()) }
+        Self {
+            catalog: Arc::new(Mutex::new(catalog)),
+            on_change: Arc::new(OnceLock::new()),
+        }
     }
 
     /// [`with`](Self::with) on a blocking thread: commands are async, and catalog work (SQLite,
@@ -49,7 +52,10 @@ impl CatalogState {
     }
 
     /// Read (or change something that sidecars don't record).
-    pub(crate) fn with<T>(&self, f: impl FnOnce(&mut Catalog) -> tonality_core::catalog::Result<T>) -> CmdResult<T> {
+    pub(crate) fn with<T>(
+        &self,
+        f: impl FnOnce(&mut Catalog) -> tonality_core::catalog::Result<T>,
+    ) -> CmdResult<T> {
         let mut cat = self.catalog.lock().map_err(|_| "catalog lock poisoned")?;
         f(&mut cat).map_err(|e| e.to_string())
     }
@@ -70,8 +76,13 @@ impl CatalogState {
 
 /// An image's history, created with an "Original" commit on first open.
 #[tauri::command]
-pub async fn history_open(image_id: ImageId, catalog: State<'_, CatalogState>) -> CmdResult<Checkout> {
-    catalog.change(vec![image_id], move |c| c.history_open(image_id)).await
+pub async fn history_open(
+    image_id: ImageId,
+    catalog: State<'_, CatalogState>,
+) -> CmdResult<Checkout> {
+    catalog
+        .change(vec![image_id], move |c| c.history_open(image_id))
+        .await
 }
 
 #[tauri::command]
@@ -81,17 +92,31 @@ pub async fn history_commit(
     key: Option<String>,
     catalog: State<'_, CatalogState>,
 ) -> CmdResult<Checkout> {
-    catalog.change(vec![image_id], move |c| c.commit(image_id, &state, key.as_deref())).await
+    catalog
+        .change(vec![image_id], move |c| {
+            c.commit(image_id, &state, key.as_deref())
+        })
+        .await
 }
 
 #[tauri::command]
-pub async fn history_undo(image_id: ImageId, catalog: State<'_, CatalogState>) -> CmdResult<Checkout> {
-    catalog.change(vec![image_id], move |c| c.undo(image_id)).await
+pub async fn history_undo(
+    image_id: ImageId,
+    catalog: State<'_, CatalogState>,
+) -> CmdResult<Checkout> {
+    catalog
+        .change(vec![image_id], move |c| c.undo(image_id))
+        .await
 }
 
 #[tauri::command]
-pub async fn history_redo(image_id: ImageId, catalog: State<'_, CatalogState>) -> CmdResult<Checkout> {
-    catalog.change(vec![image_id], move |c| c.redo(image_id)).await
+pub async fn history_redo(
+    image_id: ImageId,
+    catalog: State<'_, CatalogState>,
+) -> CmdResult<Checkout> {
+    catalog
+        .change(vec![image_id], move |c| c.redo(image_id))
+        .await
 }
 
 #[tauri::command]
@@ -100,12 +125,20 @@ pub async fn history_checkout(
     commit: CommitId,
     catalog: State<'_, CatalogState>,
 ) -> CmdResult<Checkout> {
-    catalog.change(vec![image_id], move |c| c.checkout(image_id, commit)).await
+    catalog
+        .change(vec![image_id], move |c| c.checkout(image_id, commit))
+        .await
 }
 
 #[tauri::command]
-pub async fn history_switch(image_id: ImageId, name: String, catalog: State<'_, CatalogState>) -> CmdResult<Checkout> {
-    catalog.change(vec![image_id], move |c| c.switch_branch(image_id, &name)).await
+pub async fn history_switch(
+    image_id: ImageId,
+    name: String,
+    catalog: State<'_, CatalogState>,
+) -> CmdResult<Checkout> {
+    catalog
+        .change(vec![image_id], move |c| c.switch_branch(image_id, &name))
+        .await
 }
 
 #[tauri::command]
@@ -115,7 +148,11 @@ pub async fn history_branch(
     name: Option<String>,
     catalog: State<'_, CatalogState>,
 ) -> CmdResult<Checkout> {
-    catalog.change(vec![image_id], move |c| c.create_branch(image_id, at, name.as_deref())).await
+    catalog
+        .change(vec![image_id], move |c| {
+            c.create_branch(image_id, at, name.as_deref())
+        })
+        .await
 }
 
 #[tauri::command]
@@ -125,12 +162,22 @@ pub async fn history_rename(
     new: String,
     catalog: State<'_, CatalogState>,
 ) -> CmdResult<Checkout> {
-    catalog.change(vec![image_id], move |c| c.rename_branch(image_id, &old, &new)).await
+    catalog
+        .change(vec![image_id], move |c| {
+            c.rename_branch(image_id, &old, &new)
+        })
+        .await
 }
 
 #[tauri::command]
-pub async fn history_delete(image_id: ImageId, name: String, catalog: State<'_, CatalogState>) -> CmdResult<Checkout> {
-    catalog.change(vec![image_id], move |c| c.delete_branch(image_id, &name)).await
+pub async fn history_delete(
+    image_id: ImageId,
+    name: String,
+    catalog: State<'_, CatalogState>,
+) -> CmdResult<Checkout> {
+    catalog
+        .change(vec![image_id], move |c| c.delete_branch(image_id, &name))
+        .await
 }
 
 /// Copy `panels` from the tip of `source` onto the current version, as one commit.
@@ -141,12 +188,19 @@ pub async fn history_apply_from(
     panels: Vec<Panel>,
     catalog: State<'_, CatalogState>,
 ) -> CmdResult<Checkout> {
-    catalog.change(vec![image_id], move |c| c.apply_from_branch(image_id, &source, &panels)).await
+    catalog
+        .change(vec![image_id], move |c| {
+            c.apply_from_branch(image_id, &source, &panels)
+        })
+        .await
 }
 
 /// The edit recorded at `commit` (e.g. a branch tip, for its thumbnail or for compare).
 #[tauri::command]
-pub async fn history_state(commit: CommitId, catalog: State<'_, CatalogState>) -> CmdResult<EditState> {
+pub async fn history_state(
+    commit: CommitId,
+    catalog: State<'_, CatalogState>,
+) -> CmdResult<EditState> {
     catalog.read(move |c| c.state_at(commit)).await
 }
 
@@ -164,7 +218,9 @@ pub async fn history_reset(
     let hashes = catalog
         .change(image_ids, move |c| {
             c.reset_history(&ids)?;
-            ids.iter().map(|&id| Ok(c.image_file(id)?.1)).collect::<tonality_core::catalog::Result<Vec<_>>>()
+            ids.iter()
+                .map(|&id| Ok(c.image_file(id)?.1))
+                .collect::<tonality_core::catalog::Result<Vec<_>>>()
         })
         .await?;
     for hash in hashes {

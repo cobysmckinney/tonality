@@ -28,13 +28,19 @@ impl Geometry {
         Self {
             width: (r[2] * tw).max(1.0),
             height: (r[3] * th).max(1.0),
-            m: [[x[0] - o[0], y[0] - o[0], o[0]], [x[1] - o[1], y[1] - o[1], o[1]]],
+            m: [
+                [x[0] - o[0], y[0] - o[0], o[0]],
+                [x[1] - o[1], y[1] - o[1], o[1]],
+            ],
         }
     }
 
     pub fn apply(&self, f: [f32; 2]) -> [f32; 2] {
         let [a, b] = self.m;
-        [a[0] * f[0] + a[1] * f[1] + a[2], b[0] * f[0] + b[1] * f[1] + b[2]]
+        [
+            a[0] * f[0] + a[1] * f[1] + a[2],
+            b[0] * f[0] + b[1] * f[1] + b[2],
+        ]
     }
 
     /// Bounding box `[u0, v0, u1, v1]` of the source area that output region `f0..f1` reads.
@@ -50,7 +56,11 @@ impl Geometry {
 
 /// Size of the frame after quarter turns (pixels).
 pub fn turned_size(crop: &Crop, src_w: f32, src_h: f32) -> (f32, f32) {
-    if crop.turns % 2 == 1 { (src_h, src_w) } else { (src_w, src_h) }
+    if crop.turns % 2 == 1 {
+        (src_h, src_w)
+    } else {
+        (src_w, src_h)
+    }
 }
 
 /// The crop rect, sanitised to lie within the frame.
@@ -105,7 +115,10 @@ mod tests {
 
     #[test]
     fn quarter_turn_clockwise() {
-        let crop = Crop { turns: 1, ..Crop::default() };
+        let crop = Crop {
+            turns: 1,
+            ..Crop::default()
+        };
         let g = Geometry::new(&crop, 6000.0, 4000.0);
         assert_eq!((g.width, g.height), (4000.0, 6000.0));
         // After turning clockwise, the output's top-left shows the source's bottom-left.
@@ -116,14 +129,20 @@ mod tests {
 
     #[test]
     fn flip_mirrors() {
-        let crop = Crop { flip: true, ..Crop::default() };
+        let crop = Crop {
+            flip: true,
+            ..Crop::default()
+        };
         let g = Geometry::new(&crop, 100.0, 50.0);
         assert!(close(g.apply([0.0, 0.3]), [1.0, 0.3]));
     }
 
     #[test]
     fn crop_selects_a_region() {
-        let crop = Crop { rect: [0.5, 0.25, 0.5, 0.5], ..Crop::default() };
+        let crop = Crop {
+            rect: [0.5, 0.25, 0.5, 0.5],
+            ..Crop::default()
+        };
         let g = Geometry::new(&crop, 6000.0, 4000.0);
         assert_eq!((g.width, g.height), (3000.0, 2000.0));
         assert!(close(g.apply([0.0, 0.0]), [0.5, 0.25]));
@@ -132,7 +151,11 @@ mod tests {
 
     #[test]
     fn rotation_keeps_the_centre_and_preserves_pixel_distances() {
-        let crop = Crop { angle: 10.0, rect: [0.2, 0.2, 0.6, 0.6], ..Crop::default() };
+        let crop = Crop {
+            angle: 10.0,
+            rect: [0.2, 0.2, 0.6, 0.6],
+            ..Crop::default()
+        };
         let (w, h) = (6000.0, 4000.0);
         let g = Geometry::new(&crop, w, h);
         assert!(close(g.apply([0.5, 0.5]), [0.5, 0.5]));
@@ -147,7 +170,11 @@ mod tests {
 
     #[test]
     fn bounds_cover_the_footprint() {
-        let crop = Crop { angle: 30.0, rect: [0.3, 0.3, 0.4, 0.4], ..Crop::default() };
+        let crop = Crop {
+            angle: 30.0,
+            rect: [0.3, 0.3, 0.4, 0.4],
+            ..Crop::default()
+        };
         let g = Geometry::new(&crop, 1000.0, 1000.0);
         let b = g.source_bounds([0.0, 0.0], [1.0, 1.0]);
         for f in [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0], [0.5, 0.5]] {

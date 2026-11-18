@@ -42,21 +42,38 @@ pub fn neutral_srgb(pixels: &[u16], width: u32, height: u32, color: &CameraColor
 
 /// [`neutral_srgb`], box-downsampled to `out_w × out_h` (≤ the source) on the way. Averaging the
 /// linear data first means the colour maths only runs on the output pixels.
-pub fn neutral_srgb_sized(pixels: &[u16], width: u32, height: u32, color: &CameraColor, out_w: u32, out_h: u32) -> RgbImage {
+pub fn neutral_srgb_sized(
+    pixels: &[u16],
+    width: u32,
+    height: u32,
+    color: &CameraColor,
+    out_w: u32,
+    out_h: u32,
+) -> RgbImage {
     let (w, h) = (width as usize, height as usize);
-    let (ow, oh) = (out_w.clamp(1, width.max(1)) as usize, out_h.clamp(1, height.max(1)) as usize);
+    let (ow, oh) = (
+        out_w.clamp(1, width.max(1)) as usize,
+        out_h.clamp(1, height.max(1)) as usize,
+    );
     let wb = color.as_shot_multipliers();
     let cam_to_srgb = mul(&mul(&XYZ_TO_SRGB, &REC2020_TO_XYZ), &color.cam_to_working());
     // Half float → white balanced, clipped value, per channel: a lookup beats converting each one.
     // Clip after white balance, so blown highlights go white instead of magenta.
-    let lut: Vec<[f32; 3]> = (0..=u16::MAX).map(|b| wb.map(|m| (f16::from_bits(b).to_f32() * m).min(1.0))).collect();
+    let lut: Vec<[f32; 3]> = (0..=u16::MAX)
+        .map(|b| wb.map(|m| (f16::from_bits(b).to_f32() * m).min(1.0)))
+        .collect();
     // Source pixels [span(o), span(o + 1)) average into output pixel o.
     let span = |o: usize, n: usize, on: usize| o * n / on;
-    let cols: Vec<(usize, usize)> = (0..ow).map(|o| (span(o, w, ow), span(o + 1, w, ow).max(span(o, w, ow) + 1))).collect();
+    let cols: Vec<(usize, usize)> = (0..ow)
+        .map(|o| (span(o, w, ow), span(o + 1, w, ow).max(span(o, w, ow) + 1)))
+        .collect();
 
     let mut lin = vec![[0.0f32; 3]; ow * oh];
     lin.par_chunks_mut(ow).enumerate().for_each(|(oy, row)| {
-        let (y0, y1) = (span(oy, h, oh), span(oy + 1, h, oh).max(span(oy, h, oh) + 1));
+        let (y0, y1) = (
+            span(oy, h, oh),
+            span(oy + 1, h, oh).max(span(oy, h, oh) + 1),
+        );
         let mut acc = vec![[0.0f32; 3]; ow];
         for y in y0..y1 {
             let src = &pixels[y * w * 3..(y + 1) * w * 3];
@@ -76,17 +93,31 @@ pub fn neutral_srgb_sized(pixels: &[u16], width: u32, height: u32, color: &Camer
     let n = ow * oh;
 
     // Auto exposure from the median luminance (robust to small bright areas such as the sun).
-    let mut lum: Vec<f32> = lin.iter().step_by(7).map(|c| 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]).collect();
+    let mut lum: Vec<f32> = lin
+        .iter()
+        .step_by(7)
+        .map(|c| 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2])
+        .collect();
     let mid = lum.len() / 2;
-    let median = if lum.is_empty() { 0.0 } else { *lum.select_nth_unstable_by(mid, |a, b| a.total_cmp(b)).1 };
-    let gain = if median > 1e-6 { (TARGET_MEDIAN / median).clamp(0.25, 64.0) } else { 1.0 };
+    let median = if lum.is_empty() {
+        0.0
+    } else {
+        *lum.select_nth_unstable_by(mid, |a, b| a.total_cmp(b)).1
+    };
+    let gain = if median > 1e-6 {
+        (TARGET_MEDIAN / median).clamp(0.25, 64.0)
+    } else {
+        1.0
+    };
 
     let mut out = vec![0u8; n * 3];
-    out.par_chunks_mut(3).zip(lin.par_iter()).for_each(|(o, c)| {
-        for k in 0..3 {
-            o[k] = (srgb_encode(tone(c[k] * gain)) * 255.0 + 0.5) as u8;
-        }
-    });
+    out.par_chunks_mut(3)
+        .zip(lin.par_iter())
+        .for_each(|(o, c)| {
+            for k in 0..3 {
+                o[k] = (srgb_encode(tone(c[k] * gain)) * 255.0 + 0.5) as u8;
+            }
+        });
     ImageBuffer::from_raw(ow as u32, oh as u32, out).expect("sized above")
 }
 
@@ -99,9 +130,15 @@ pub struct Normalize {
 
 impl Normalize {
     /// The usual ImageNet statistics (on 0..1 values).
-    pub const IMAGENET: Normalize = Normalize { mean: [0.485, 0.456, 0.406], std: [0.229, 0.224, 0.225] };
+    pub const IMAGENET: Normalize = Normalize {
+        mean: [0.485, 0.456, 0.406],
+        std: [0.229, 0.224, 0.225],
+    };
     /// 0..1, no shift.
-    pub const UNIT: Normalize = Normalize { mean: [0.0; 3], std: [1.0; 3] };
+    pub const UNIT: Normalize = Normalize {
+        mean: [0.0; 3],
+        std: [1.0; 3],
+    };
 }
 
 /// Resize to exactly `w × h` and lay out as a normalised NCHW float tensor (N = 1).
@@ -130,7 +167,9 @@ pub fn guide(img: &RgbImage, w: u32, h: u32) -> Vec<f32> {
         resized = imageops::resize(img, w, h, imageops::FilterType::Triangle);
         &resized
     };
-    r.pixels().map(|Rgb(p)| (0.2126 * p[0] as f32 + 0.7152 * p[1] as f32 + 0.0722 * p[2] as f32) / 255.0).collect()
+    r.pixels()
+        .map(|Rgb(p)| (0.2126 * p[0] as f32 + 0.7152 * p[1] as f32 + 0.0722 * p[2] as f32) / 255.0)
+        .collect()
 }
 
 #[cfg(test)]
@@ -141,7 +180,10 @@ mod tests {
     fn color() -> CameraColor {
         // An identity-ish camera: XYZ → camera = XYZ → Rec.2020⁻¹, neutral white balance.
         let xyz_to_rec2020 = invert(&REC2020_TO_XYZ).unwrap();
-        CameraColor { xyz_to_cam: xyz_to_rec2020, as_shot_wb: [1.0, 1.0, 1.0] }
+        CameraColor {
+            xyz_to_cam: xyz_to_rec2020,
+            as_shot_wb: [1.0, 1.0, 1.0],
+        }
     }
 
     #[test]
@@ -149,8 +191,15 @@ mod tests {
         let px: Vec<u16> = std::iter::repeat_n(f16::from_f32(0.05).to_bits(), 4 * 4 * 3).collect();
         let img = neutral_srgb(&px, 4, 4, &color());
         let p = img.get_pixel(1, 1).0;
-        assert!(p[0].abs_diff(p[1]) <= 1 && p[1].abs_diff(p[2]) <= 1, "{p:?}");
-        assert!((100..140).contains(&p[1]), "median → mid grey, got {}", p[1]);
+        assert!(
+            p[0].abs_diff(p[1]) <= 1 && p[1].abs_diff(p[2]) <= 1,
+            "{p:?}"
+        );
+        assert!(
+            (100..140).contains(&p[1]),
+            "median → mid grey, got {}",
+            p[1]
+        );
     }
 
     #[test]
@@ -158,30 +207,50 @@ mod tests {
         let mut c = color();
         c.as_shot_wb = [2.0, 1.0, 1.6];
         // Every channel at the sensor's clip point.
-        let px: Vec<u16> = std::iter::repeat_n(f16::from_f32(1.0).to_bits(), 3).chain(std::iter::repeat_n(f16::from_f32(0.02).to_bits(), 15 * 3)).collect();
+        let px: Vec<u16> = std::iter::repeat_n(f16::from_f32(1.0).to_bits(), 3)
+            .chain(std::iter::repeat_n(f16::from_f32(0.02).to_bits(), 15 * 3))
+            .collect();
         let img = neutral_srgb(&px, 4, 4, &c);
         let p = img.get_pixel(0, 0).0;
-        assert!(p[0].abs_diff(p[1]) <= 2 && p[1].abs_diff(p[2]) <= 2, "neutral, got {p:?}");
+        assert!(
+            p[0].abs_diff(p[1]) <= 2 && p[1].abs_diff(p[2]) <= 2,
+            "neutral, got {p:?}"
+        );
     }
 
     #[test]
     fn downsizing_averages_in_linear() {
         // Left half dark, right half bright; halving keeps the split and the colour.
-        let px: Vec<u16> = (0..8 * 4).flat_map(|i| [if i % 8 < 4 { 0.01 } else { 0.2 }; 3]).map(|v| f16::from_f32(v).to_bits()).collect();
+        let px: Vec<u16> = (0..8 * 4)
+            .flat_map(|i| [if i % 8 < 4 { 0.01 } else { 0.2 }; 3])
+            .map(|v| f16::from_f32(v).to_bits())
+            .collect();
         let full = neutral_srgb(&px, 8, 4, &color());
         let half = neutral_srgb_sized(&px, 8, 4, &color(), 4, 2);
         assert_eq!(half.dimensions(), (4, 2));
         for (x, fx) in [(0, 0), (3, 7)] {
             let (a, b) = (half.get_pixel(x, 1).0, full.get_pixel(fx, 2).0);
-            assert!(a.iter().zip(b).all(|(a, b)| a.abs_diff(b) <= 2), "{a:?} vs {b:?}");
+            assert!(
+                a.iter().zip(b).all(|(a, b)| a.abs_diff(b) <= 2),
+                "{a:?} vs {b:?}"
+            );
         }
         // Odd ratios cover every output pixel.
-        assert_eq!(neutral_srgb_sized(&px, 8, 4, &color(), 3, 3).dimensions(), (3, 3));
+        assert_eq!(
+            neutral_srgb_sized(&px, 8, 4, &color(), 3, 3).dimensions(),
+            (3, 3)
+        );
     }
 
     #[test]
     fn nchw_layout_and_normalisation() {
-        let img = RgbImage::from_fn(2, 1, |x, _| if x == 0 { Rgb([255, 0, 0]) } else { Rgb([0, 0, 255]) });
+        let img = RgbImage::from_fn(2, 1, |x, _| {
+            if x == 0 {
+                Rgb([255, 0, 0])
+            } else {
+                Rgb([0, 0, 255])
+            }
+        });
         let t = to_nchw(&img, 2, 1, Normalize::UNIT);
         assert_eq!(t, [1.0, 0.0, 0.0, 0.0, 0.0, 1.0]);
     }

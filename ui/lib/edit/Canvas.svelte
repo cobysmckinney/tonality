@@ -10,7 +10,17 @@
   import { FULL, turnedSize } from "./crop";
   import MaskOverlay from "./MaskOverlay.svelte";
   import LassoOverlay from "./LassoOverlay.svelte";
-  import { MASK_THUMB_EDGE, brushKey, brushLayer, maskSize, masksOf, shaderIndex, usesPresenceMaps, withoutStrokes, type BrushLayers } from "./masks";
+  import {
+    MASK_THUMB_EDGE,
+    brushKey,
+    brushLayer,
+    maskSize,
+    masksOf,
+    shaderIndex,
+    usesPresenceMaps,
+    withoutStrokes,
+    type BrushLayers,
+  } from "./masks";
   import { session } from "./session.svelte";
   import type { Mask } from "$lib/bindings/Mask";
   import type { Stroke } from "$lib/bindings/Stroke";
@@ -96,7 +106,8 @@
         loadingDetail = true;
         try {
           const d = await api.detailRegion(id, req);
-          if (seq === detailSeq && renderer === r && image.id === id) r.setDetail(d.region, req.level, d.width, d.height, d.pixels);
+          if (seq === detailSeq && renderer === r && image.id === id)
+            r.setDetail(d.region, req.level, d.width, d.height, d.pixels);
         } catch (e) {
           console.warn("[detail]", e);
         } finally {
@@ -212,7 +223,12 @@
   // in flight each, always ending on the newest state. The curve LUT is only refetched when the
   // curve itself changes.
   function pipeline(
-    apply: (r: PreviewRenderer, params: Float32Array, curve: Uint16Array | null, brush: BrushLayers | null | undefined) => void,
+    apply: (
+      r: PreviewRenderer,
+      params: Float32Array,
+      curve: Uint16Array | null,
+      brush: BrushLayers | null | undefined,
+    ) => void,
   ) {
     let inflight = false;
     // Each request carries its own renderer and photo: switching photos mid-flight must not
@@ -311,7 +327,11 @@
       if (!r || !session.masking || before) return;
       const ms = masksOf(edit);
       const idx = ms.map((_, i) => shaderIndex(ms, i));
-      const drawn = r.renderMasks(idx.filter((v) => v !== null), MASK_THUMB_EDGE) ?? [];
+      const drawn =
+        r.renderMasks(
+          idx.filter((v) => v !== null),
+          MASK_THUMB_EDGE,
+        ) ?? [];
       let k = 0;
       session.maskThumbs = idx.map((v) => (v === null ? null : (drawn[k++] ?? null)));
     }, 120);
@@ -395,7 +415,16 @@
     onpointercancel={onPointerUp}
   ></canvas>
   {#if cropping && oncrop && frameRect.w > 0}
-    <CropOverlay crop={edit.crop} frame={frameRect} tw={turned[0]} th={turned[1]} aspect={cropAspect} {level} onchange={oncrop} {onlevel} />
+    <CropOverlay
+      crop={edit.crop}
+      frame={frameRect}
+      tw={turned[0]}
+      th={turned[1]}
+      aspect={cropAspect}
+      {level}
+      onchange={oncrop}
+      {onlevel}
+    />
   {/if}
   {#if session.lassoing && renderer && frameRect.w > 0}
     <LassoOverlay
@@ -430,7 +459,8 @@
     <div class="pane-label left">{before ? "Before" : compare.current}</div>
     <div class="pane-label right">
       {compare.label}
-      {#if oncloseCompare}<button onclick={oncloseCompare} title="Stop comparing (Esc)">×</button>{/if}
+      {#if oncloseCompare}<button onclick={oncloseCompare} title="Stop comparing (Esc)">×</button
+        >{/if}
     </div>
   {:else if before}<div class="badge">Before</div>{/if}
   {#if error}<div class="error">{error}</div>{/if}

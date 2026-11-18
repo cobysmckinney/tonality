@@ -138,7 +138,12 @@ impl Catalog {
 
     /// The image with these exact file contents, if the library already has it.
     pub fn image_by_hash(&self, hash: &str) -> Result<Option<ImageId>> {
-        Ok(self.conn.query_row("SELECT id FROM images WHERE hash = ?1", [hash], |r| r.get(0)).optional()?)
+        Ok(self
+            .conn
+            .query_row("SELECT id FROM images WHERE hash = ?1", [hash], |r| {
+                r.get(0)
+            })
+            .optional()?)
     }
 
     /// Catalogue a photo copied into the library. Returns `None` if one with the same contents
@@ -173,7 +178,8 @@ impl Catalog {
     pub fn finish_import(&mut self, import: ImportId) -> Result<Option<ImportInfo>> {
         let info = self.import_info(import)?;
         if info.count == 0 {
-            self.conn.execute("DELETE FROM imports WHERE id = ?1", [import])?;
+            self.conn
+                .execute("DELETE FROM imports WHERE id = ?1", [import])?;
             return Ok(None);
         }
         Ok(Some(info))
@@ -194,13 +200,21 @@ impl Catalog {
              FROM imports m ORDER BY m.imported_at DESC, m.id DESC",
         )?;
         let rows = stmt.query_map([], |r| {
-            Ok(ImportInfo { id: r.get(0)?, name: r.get(1)?, source: r.get(2)?, imported_at: r.get(3)?, count: r.get(4)? })
+            Ok(ImportInfo {
+                id: r.get(0)?,
+                name: r.get(1)?,
+                source: r.get(2)?,
+                imported_at: r.get(3)?,
+                count: r.get(4)?,
+            })
         })?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
     pub fn image_count(&self) -> Result<u32> {
-        Ok(self.conn.query_row("SELECT COUNT(*) FROM images", [], |r| r.get(0))?)
+        Ok(self
+            .conn
+            .query_row("SELECT COUNT(*) FROM images", [], |r| r.get(0))?)
     }
 
     pub fn images(&self, q: &ImageQuery) -> Result<Vec<ImageRow>> {
@@ -218,7 +232,10 @@ impl Catalog {
         }
         if let Some(a) = q.album {
             args.push(a.into());
-            sql += &format!(" AND i.id IN (SELECT image_id FROM album_images WHERE album_id = ?{})", args.len());
+            sql += &format!(
+                " AND i.id IN (SELECT image_id FROM album_images WHERE album_id = ?{})",
+                args.len()
+            );
         }
         if let Some(flag) = q.flag {
             args.push((flag as i64).into());
@@ -253,9 +270,11 @@ impl Catalog {
     /// The library-relative file, content hash and original name of an image.
     pub fn image_file(&self, id: ImageId) -> Result<(String, String, String)> {
         self.conn
-            .query_row("SELECT file, hash, name FROM images WHERE id = ?1", [id], |r| {
-                Ok((r.get(0)?, r.get(1)?, r.get(2)?))
-            })
+            .query_row(
+                "SELECT file, hash, name FROM images WHERE id = ?1",
+                [id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
             .optional()?
             .ok_or_else(|| CatalogError::NotFound(format!("image {id}")))
     }
@@ -269,12 +288,18 @@ impl Catalog {
 
     /// Whether a library-relative path is already taken (used when choosing a name for a copy).
     pub fn file_taken(&self, file: &str) -> Result<bool> {
-        Ok(self.conn.query_row("SELECT EXISTS(SELECT 1 FROM images WHERE file = ?1)", [file], |r| r.get(0))?)
+        Ok(self.conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM images WHERE file = ?1)",
+            [file],
+            |r| r.get(0),
+        )?)
     }
 
     /// Images whose shape isn't recorded yet, with their content hashes.
     pub fn images_without_aspect(&self) -> Result<Vec<(ImageId, String)>> {
-        let mut stmt = self.conn.prepare("SELECT id, hash FROM images WHERE aspect IS NULL")?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id, hash FROM images WHERE aspect IS NULL")?;
         let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
@@ -326,7 +351,11 @@ mod tests {
             name: name.into(),
             file_size: 100,
             source_path: format!("/card/{name}"),
-            meta: at.map(|at| ImageMeta { make: "Sony".into(), captured_at: Some(at.into()), ..Default::default() }),
+            meta: at.map(|at| ImageMeta {
+                make: "Sony".into(),
+                captured_at: Some(at.into()),
+                ..Default::default()
+            }),
             aspect: None,
         }
     }
@@ -335,7 +364,10 @@ mod tests {
     fn aspect_is_learnt_once_then_updated_by_edits() {
         let mut cat = Catalog::open_in_memory().unwrap();
         let m = cat.begin_import("card", "/card").unwrap();
-        let id = cat.add_image(m, &img("a.ARW", "h1", None)).unwrap().unwrap();
+        let id = cat
+            .add_image(m, &img("a.ARW", "h1", None))
+            .unwrap()
+            .unwrap();
         let aspect = |cat: &Catalog| cat.images(&ImageQuery::default()).unwrap()[0].aspect;
         assert_eq!(aspect(&cat), None);
         cat.set_aspect(id, 1.5, true).unwrap();
@@ -351,21 +383,45 @@ mod tests {
     fn import_dedupes_and_sorts() {
         let mut cat = Catalog::open_in_memory().unwrap();
         let m = cat.begin_import("card", "/card").unwrap();
-        assert!(cat.add_image(m, &img("b.ARW", "h1", Some("2026-11-02T10:00:00"))).unwrap().is_some());
-        assert!(cat.add_image(m, &img("a.ARW", "h2", Some("2026-11-02T11:00:00"))).unwrap().is_some());
-        assert!(cat.add_image(m, &img("c.ARW", "h3", None)).unwrap().is_some());
+        assert!(cat
+            .add_image(m, &img("b.ARW", "h1", Some("2026-11-02T10:00:00")))
+            .unwrap()
+            .is_some());
+        assert!(cat
+            .add_image(m, &img("a.ARW", "h2", Some("2026-11-02T11:00:00")))
+            .unwrap()
+            .is_some());
+        assert!(cat
+            .add_image(m, &img("c.ARW", "h3", None))
+            .unwrap()
+            .is_some());
         let info = cat.finish_import(m).unwrap().unwrap();
         assert_eq!(info.count, 3);
 
-        let names = |q: &ImageQuery| cat.images(q).unwrap().into_iter().map(|i| i.name).collect::<Vec<_>>();
+        let names = |q: &ImageQuery| {
+            cat.images(q)
+                .unwrap()
+                .into_iter()
+                .map(|i| i.name)
+                .collect::<Vec<_>>()
+        };
         assert_eq!(names(&ImageQuery::default()), ["b.ARW", "a.ARW", "c.ARW"]);
-        assert_eq!(names(&ImageQuery { sort: SortOrder::Name, ..Default::default() }), ["a.ARW", "b.ARW", "c.ARW"]);
+        assert_eq!(
+            names(&ImageQuery {
+                sort: SortOrder::Name,
+                ..Default::default()
+            }),
+            ["a.ARW", "b.ARW", "c.ARW"]
+        );
 
         // Re-importing the same contents (even under another name) adds nothing,
         // and the empty import disappears.
         let m2 = cat.begin_import("again", "/card").unwrap();
         assert!(cat.image_by_hash("h1").unwrap().is_some());
-        assert_eq!(cat.add_image(m2, &img("renamed.ARW", "h1", None)).unwrap(), None);
+        assert_eq!(
+            cat.add_image(m2, &img("renamed.ARW", "h1", None)).unwrap(),
+            None
+        );
         assert_eq!(cat.finish_import(m2).unwrap(), None);
         assert_eq!(cat.imports().unwrap().len(), 1);
         assert_eq!(cat.image_count().unwrap(), 3);
@@ -375,17 +431,38 @@ mod tests {
     fn ratings_flags_and_filters() {
         let mut cat = Catalog::open_in_memory().unwrap();
         let m = cat.begin_import("x", "/x").unwrap();
-        let a = cat.add_image(m, &img("1.ARW", "h1", Some("1"))).unwrap().unwrap();
-        let b = cat.add_image(m, &img("2.ARW", "h2", Some("2"))).unwrap().unwrap();
+        let a = cat
+            .add_image(m, &img("1.ARW", "h1", Some("1")))
+            .unwrap()
+            .unwrap();
+        let b = cat
+            .add_image(m, &img("2.ARW", "h2", Some("2")))
+            .unwrap()
+            .unwrap();
         cat.set_rating(&[a], 9).unwrap();
         cat.set_flag(&[a, b], -1).unwrap();
         cat.set_flag(&[b], 1).unwrap();
-        let rated = cat.images(&ImageQuery { min_rating: 3, ..Default::default() }).unwrap();
+        let rated = cat
+            .images(&ImageQuery {
+                min_rating: 3,
+                ..Default::default()
+            })
+            .unwrap();
         assert_eq!(rated.len(), 1);
         assert_eq!(rated[0].rating, 5, "clamped");
-        let picks = cat.images(&ImageQuery { flag: Some(1), ..Default::default() }).unwrap();
+        let picks = cat
+            .images(&ImageQuery {
+                flag: Some(1),
+                ..Default::default()
+            })
+            .unwrap();
         assert_eq!(picks.iter().map(|i| i.id).collect::<Vec<_>>(), [b]);
-        let by_import = cat.images(&ImageQuery { import: Some(m + 1), ..Default::default() }).unwrap();
+        let by_import = cat
+            .images(&ImageQuery {
+                import: Some(m + 1),
+                ..Default::default()
+            })
+            .unwrap();
         assert!(by_import.is_empty());
     }
 
@@ -393,7 +470,10 @@ mod tests {
     fn branch_counts() {
         let mut cat = Catalog::open_in_memory().unwrap();
         let m = cat.begin_import("x", "/x").unwrap();
-        let id = cat.add_image(m, &img("1.ARW", "h1", None)).unwrap().unwrap();
+        let id = cat
+            .add_image(m, &img("1.ARW", "h1", None))
+            .unwrap()
+            .unwrap();
         assert_eq!(cat.images(&ImageQuery::default()).unwrap()[0].branches, 0);
         let root = cat.history_open(id).unwrap().view.head.commit;
         cat.create_branch(id, root, Some("B&W")).unwrap();

@@ -15,7 +15,12 @@ import { dropLibraryThumbs } from "$lib/edit/versions";
 import { invalidateThumb } from "$lib/library/thumbs";
 
 const SIZE_KEY = "tonality.library.thumbSize";
-const RAW_FILTER = [{ name: "RAW photos", extensions: [...RAW_EXTENSIONS, ...RAW_EXTENSIONS.map((e) => e.toUpperCase())] }];
+const RAW_FILTER = [
+  {
+    name: "RAW photos",
+    extensions: [...RAW_EXTENSIONS, ...RAW_EXTENSIONS.map((e) => e.toUpperCase())],
+  },
+];
 
 function storedSize(): number {
   try {
@@ -46,7 +51,14 @@ class LibraryState {
   root = $state("");
   /** Photos matching the current query. Raw (not deeply reactive): replaced wholesale. */
   images = $state.raw<ImageRow[]>([]);
-  query = $state<ImageQuery>({ import: null, album: null, minRating: 0, flag: null, sort: "captureTime", descending: true });
+  query = $state<ImageQuery>({
+    import: null,
+    album: null,
+    minRating: 0,
+    flag: null,
+    sort: "captureTime",
+    descending: true,
+  });
   selected = new SvelteSet<number>();
   /** Keyboard focus / range anchor (image id). */
   focus = $state<number | null>(null);
@@ -92,7 +104,10 @@ class LibraryState {
   }
 
   show(v: View) {
-    this.setQuery({ album: v.kind === "album" ? v.id : null, import: v.kind === "import" ? v.id : null });
+    this.setQuery({
+      album: v.kind === "album" ? v.id : null,
+      import: v.kind === "import" ? v.id : null,
+    });
   }
 
   get focused(): ImageRow | null {
@@ -115,7 +130,10 @@ class LibraryState {
   async refresh(): Promise<void> {
     const seq = ++this.refreshSeq;
     try {
-      const [overview, images] = await Promise.all([api.library.overview(), api.library.images(this.query)]);
+      const [overview, images] = await Promise.all([
+        api.library.overview(),
+        api.library.images(this.query),
+      ]);
       if (seq !== this.refreshSeq) return;
       this.imports = overview.imports;
       this.albums = overview.albums;
@@ -150,7 +168,12 @@ class LibraryState {
   }
 
   async importFiles(opts: { open?: boolean } = {}) {
-    const paths = await open({ multiple: true, directory: false, title: "Import photos", filters: RAW_FILTER });
+    const paths = await open({
+      multiple: true,
+      directory: false,
+      title: "Import photos",
+      filters: RAW_FILTER,
+    });
     if (paths?.length) await this.importPaths(paths, opts);
   }
 
@@ -325,7 +348,8 @@ class LibraryState {
   createAlbum(name: string, images: number[] = []) {
     return this.albumOp(async () => {
       const id = await api.albums.create(name, images);
-      if (images.length) this.message = `Added ${images.length} photo${images.length === 1 ? "" : "s"} to “${name.trim()}”`;
+      if (images.length)
+        this.message = `Added ${images.length} photo${images.length === 1 ? "" : "s"} to “${name.trim()}”`;
       return id;
     });
   }
@@ -351,7 +375,8 @@ class LibraryState {
       const n = await api.albums.add(id, images);
       const skipped = images.length - n;
       this.message =
-        `Added ${n} photo${n === 1 ? "" : "s"} to “${name}”` + (skipped ? ` · ${skipped} already there` : "");
+        `Added ${n} photo${n === 1 ? "" : "s"} to “${name}”` +
+        (skipped ? ` · ${skipped} already there` : "");
     });
   }
 
@@ -375,8 +400,15 @@ class LibraryState {
     this.drag = { ids, x, y, over: null };
     const move = (e: PointerEvent) => {
       if (!this.drag) return;
-      const el = document.elementFromPoint(e.clientX, e.clientY)?.closest<HTMLElement>("[data-album]");
-      this.drag = { ...this.drag, x: e.clientX, y: e.clientY, over: el ? Number(el.dataset.album) : null };
+      const el = document
+        .elementFromPoint(e.clientX, e.clientY)
+        ?.closest<HTMLElement>("[data-album]");
+      this.drag = {
+        ...this.drag,
+        x: e.clientX,
+        y: e.clientY,
+        over: el ? Number(el.dataset.album) : null,
+      };
     };
     const end = (e: Event) => {
       window.removeEventListener("pointermove", move);

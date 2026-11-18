@@ -1,8 +1,24 @@
 import { describe, expect, it } from "vitest";
 import type { Crop } from "$lib/bindings/Crop";
-import { FULL, fits, flip, levelAngle, shrinkToFit, towards, turn, withAspect, type Rect } from "./crop";
+import {
+  FULL,
+  fits,
+  flip,
+  levelAngle,
+  shrinkToFit,
+  towards,
+  turn,
+  withAspect,
+  type Rect,
+} from "./crop";
 
-const crop = (p: Partial<Crop> = {}): Crop => ({ turns: 0, flip: false, angle: 0, rect: [0, 0, 1, 1], ...p });
+const crop = (p: Partial<Crop> = {}): Crop => ({
+  turns: 0,
+  flip: false,
+  angle: 0,
+  rect: [0, 0, 1, 1],
+  ...p,
+});
 
 describe("crop", () => {
   it("full frame fits only when straight", () => {

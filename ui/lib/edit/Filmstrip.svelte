@@ -56,7 +56,9 @@
   <div class="bar">
     <span class="source">{library.viewName}</span>
     {#if images.length}
-      <span class="pos">{index >= 0 ? `${index + 1} of ${images.length}` : `${images.length} photos`}</span>
+      <span class="pos"
+        >{index >= 0 ? `${index + 1} of ${images.length}` : `${images.length} photos`}</span
+      >
     {/if}
     <span class="keys">← → to switch photos</span>
   </div>
@@ -80,7 +82,12 @@
           onclick={() => open(img.id)}
           title={img.name}
         >
-          <img use:thumbnail={thumbKey(img.id, img.head)} alt="" decoding="async" draggable="false" />
+          <img
+            use:thumbnail={thumbKey(img.id, img.head)}
+            alt=""
+            decoding="async"
+            draggable="false"
+          />
           {#if img.rating > 0}<span class="stars">{"★".repeat(img.rating)}</span>{/if}
           {#if img.flag > 0}<span class="flag">●</span>{/if}
         </button>

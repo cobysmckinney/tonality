@@ -85,7 +85,11 @@ describe("branchSteps", () => {
     const forks = Object.fromEntries(main[0].steps.map((s) => [s.commit.id, s.forks]));
     expect(forks).toEqual({ 3: [], 2: ["bw"], 1: ["hdr"] });
     // From bw, main is the ancestor (a group), and hdr splits at 1.
-    expect(branchSteps(view).at(-1)!.steps.find((s) => s.commit.id === 1)!.forks).toEqual(["hdr"]);
+    expect(
+      branchSteps(view)
+        .at(-1)!
+        .steps.find((s) => s.commit.id === 1)!.forks,
+    ).toEqual(["hdr"]);
   });
 
   it("gives a fresh version no steps of its own", () => {

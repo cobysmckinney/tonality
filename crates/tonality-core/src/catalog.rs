@@ -139,7 +139,10 @@ const MIGRATIONS: &[&str] = &[
 
 pub fn system_clock() -> Clock {
     Box::new(|| {
-        SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0)
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0)
     })
 }
 
@@ -178,7 +181,10 @@ impl Catalog {
             tx.pragma_update(None, "user_version", i + 1)?;
             tx.commit()?;
         }
-        Ok(Catalog { conn, clock: system_clock() })
+        Ok(Catalog {
+            conn,
+            clock: system_clock(),
+        })
     }
 
     pub(crate) fn now(&self) -> i64 {
@@ -221,14 +227,32 @@ mod tests {
         )
         .unwrap();
         let cat = Catalog::init(conn).unwrap();
-        let head = |img: i64| -> String { cat.conn.query_row("SELECT branch FROM heads WHERE image_id = ?1", [img], |r| r.get(0)).unwrap() };
+        let head = |img: i64| -> String {
+            cat.conn
+                .query_row("SELECT branch FROM heads WHERE image_id = ?1", [img], |r| {
+                    r.get(0)
+                })
+                .unwrap()
+        };
         assert_eq!(head(1), "main", "pointed at the branch with its tip");
         assert_eq!(head(2), "gone", "branch brought back");
-        let refs: i64 = cat.conn.query_row("SELECT COUNT(*) FROM refs WHERE image_id = 2 AND name = 'gone'", [], |r| r.get(0)).unwrap();
+        let refs: i64 = cat
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM refs WHERE image_id = 2 AND name = 'gone'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
         assert_eq!(refs, 1);
         // Enforced from now on, and renames carry HEAD along.
-        assert!(cat.conn.execute("DELETE FROM refs WHERE image_id = 1 AND name = 'main'", []).is_err());
-        cat.conn.execute("UPDATE refs SET name = 'renamed' WHERE image_id = 1", []).unwrap();
+        assert!(cat
+            .conn
+            .execute("DELETE FROM refs WHERE image_id = 1 AND name = 'main'", [])
+            .is_err());
+        cat.conn
+            .execute("UPDATE refs SET name = 'renamed' WHERE image_id = 1", [])
+            .unwrap();
         assert_eq!(head(1), "renamed");
     }
 
@@ -239,7 +263,12 @@ mod tests {
         let _ = std::fs::remove_file(&path);
         let id = Catalog::open(&path).unwrap().test_image("a");
         let cat = Catalog::open(&path).unwrap();
-        let n: i64 = cat.conn.query_row("SELECT COUNT(*) FROM images WHERE id = ?1", [id], |r| r.get(0)).unwrap();
+        let n: i64 = cat
+            .conn
+            .query_row("SELECT COUNT(*) FROM images WHERE id = ?1", [id], |r| {
+                r.get(0)
+            })
+            .unwrap();
         assert_eq!(n, 1);
         let _ = std::fs::remove_dir_all(dir);
     }

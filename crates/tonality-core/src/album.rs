@@ -60,7 +60,11 @@ impl Catalog {
             if let Some(c) = a.cover {
                 a.cover_head = self
                     .conn
-                    .query_row("SELECT commit_id FROM heads WHERE image_id = ?1", [c], |r| r.get(0))
+                    .query_row(
+                        "SELECT commit_id FROM heads WHERE image_id = ?1",
+                        [c],
+                        |r| r.get(0),
+                    )
                     .optional()?;
             }
         }
@@ -69,7 +73,9 @@ impl Catalog {
 
     /// The photos in an album.
     pub fn album_members(&self, id: AlbumId) -> Result<Vec<ImageId>> {
-        let mut stmt = self.conn.prepare("SELECT image_id FROM album_images WHERE album_id = ?1 ORDER BY image_id")?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT image_id FROM album_images WHERE album_id = ?1 ORDER BY image_id")?;
         let rows = stmt.query_map([id], |r| r.get(0))?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
@@ -83,7 +89,10 @@ impl Catalog {
     }
 
     pub fn rename_album(&mut self, id: AlbumId, name: &str) -> Result<()> {
-        let n = self.conn.execute("UPDATE albums SET name = ?1 WHERE id = ?2", params![clean_name(name)?, id])?;
+        let n = self.conn.execute(
+            "UPDATE albums SET name = ?1 WHERE id = ?2",
+            params![clean_name(name)?, id],
+        )?;
         if n == 0 {
             return Err(CatalogError::NotFound(format!("album {id}")));
         }
@@ -92,7 +101,8 @@ impl Catalog {
 
     /// Delete an album. Its photos stay in the library.
     pub fn delete_album(&mut self, id: AlbumId) -> Result<()> {
-        self.conn.execute("DELETE FROM albums WHERE id = ?1", [id])?;
+        self.conn
+            .execute("DELETE FROM albums WHERE id = ?1", [id])?;
         Ok(())
     }
 
@@ -100,7 +110,11 @@ impl Catalog {
     pub fn add_to_album(&mut self, id: AlbumId, images: &[ImageId]) -> Result<u32> {
         let now = self.now();
         let tx = self.conn.transaction()?;
-        let exists: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM albums WHERE id = ?1)", [id], |r| r.get(0))?;
+        let exists: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM albums WHERE id = ?1)",
+            [id],
+            |r| r.get(0),
+        )?;
         if !exists {
             return Err(CatalogError::NotFound(format!("album {id}")));
         }
@@ -121,7 +135,8 @@ impl Catalog {
     pub fn remove_from_album(&mut self, id: AlbumId, images: &[ImageId]) -> Result<()> {
         let tx = self.conn.transaction()?;
         {
-            let mut stmt = tx.prepare("DELETE FROM album_images WHERE album_id = ?1 AND image_id = ?2")?;
+            let mut stmt =
+                tx.prepare("DELETE FROM album_images WHERE album_id = ?1 AND image_id = ?2")?;
             for img in images {
                 stmt.execute(params![id, img])?;
             }
@@ -150,15 +165,21 @@ mod tests {
         cat.add_to_album(fam, &[b]).unwrap();
 
         let albums = cat.albums().unwrap();
-        assert_eq!(albums.iter().map(|x| x.name.as_str()).collect::<Vec<_>>(), ["Family", "Trips"]);
+        assert_eq!(
+            albums.iter().map(|x| x.name.as_str()).collect::<Vec<_>>(),
+            ["Family", "Trips"]
+        );
         assert_eq!(albums[1].count, 2);
 
         let in_album = |cat: &Catalog, id| {
-            cat.images(&ImageQuery { album: Some(id), ..Default::default() })
-                .unwrap()
-                .into_iter()
-                .map(|i| i.id)
-                .collect::<Vec<_>>()
+            cat.images(&ImageQuery {
+                album: Some(id),
+                ..Default::default()
+            })
+            .unwrap()
+            .into_iter()
+            .map(|i| i.id)
+            .collect::<Vec<_>>()
         };
         assert_eq!(in_album(&cat, trips), [a, b]);
         assert_eq!(in_album(&cat, fam), [b]);

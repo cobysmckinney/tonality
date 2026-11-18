@@ -1,9 +1,21 @@
 import { describe, expect, it } from "vitest";
 import type { EditState } from "$lib/bindings/EditState";
 import type { Mask } from "$lib/bindings/Mask";
-import { aiKey, brushKey, brushLayer, newAiMask, nextName, strokesHash, withoutStrokes } from "./masks";
+import {
+  aiKey,
+  brushKey,
+  brushLayer,
+  newAiMask,
+  nextName,
+  strokesHash,
+  withoutStrokes,
+} from "./masks";
 
-const brush = (): Mask => ({ ...newAiMask("subject", { kind: "subject" }, "subject@1", []), name: "Brush 1", shape: { kind: "brush", strokes: [] } });
+const brush = (): Mask => ({
+  ...newAiMask("subject", { kind: "subject" }, "subject@1", []),
+  name: "Brush 1",
+  shape: { kind: "brush", strokes: [] },
+});
 
 describe("AI masks", () => {
   it("names presets and inverts Background", () => {
@@ -22,7 +34,9 @@ describe("AI masks", () => {
   });
 
   it("refetches layers after a detection or a lens change, not otherwise", () => {
-    const edit = { masks: [newAiMask("sky", { kind: "sky" }, "scene@1", [])] } as unknown as EditState;
+    const edit = {
+      masks: [newAiMask("sky", { kind: "sky" }, "scene@1", [])],
+    } as unknown as EditState;
     const a = brushKey(edit, 0);
     expect(a).not.toBe("");
     expect(brushKey(edit, 0)).toBe(a);
@@ -41,7 +55,13 @@ describe("AI masks", () => {
 });
 
 describe("stroke keys", () => {
-  const st = (x: number, erase = false) => ({ points: [[x, 0.5]] as [number, number][], radius: 0.05, feather: 0.5, strength: 1, erase });
+  const st = (x: number, erase = false) => ({
+    points: [[x, 0.5]] as [number, number][],
+    radius: 0.05,
+    feather: 0.5,
+    strength: 1,
+    erase,
+  });
   it("change with any stroke detail and stay put otherwise", () => {
     const a = strokesHash([st(0.1), st(0.2)]);
     expect(strokesHash([st(0.1), st(0.2)])).toBe(a);

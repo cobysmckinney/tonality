@@ -113,7 +113,11 @@ fn commit_row(c: &Connection, id: CommitId) -> Result<CommitRow> {
 
 fn load_state(c: &Connection, hash: &str) -> Result<EditState> {
     let json: String = c
-        .query_row("SELECT json FROM edit_states WHERE hash = ?1", [hash], |r| r.get(0))
+        .query_row(
+            "SELECT json FROM edit_states WHERE hash = ?1",
+            [hash],
+            |r| r.get(0),
+        )
         .optional()?
         .ok_or_else(|| CatalogError::NotFound(format!("edit state {hash}")))?;
     Ok(serde_json::from_str(&json)?)
@@ -129,13 +133,25 @@ pub(crate) fn store_state(c: &Connection, state: &EditState) -> Result<String> {
 }
 
 pub(crate) fn head(c: &Connection, image: ImageId) -> Result<Option<Head>> {
-    Ok(c.query_row("SELECT branch, commit_id FROM heads WHERE image_id = ?1", [image], |r| {
-        Ok(Head { branch: r.get(0)?, commit: r.get(1)? })
-    })
+    Ok(c.query_row(
+        "SELECT branch, commit_id FROM heads WHERE image_id = ?1",
+        [image],
+        |r| {
+            Ok(Head {
+                branch: r.get(0)?,
+                commit: r.get(1)?,
+            })
+        },
+    )
     .optional()?)
 }
 
-pub(crate) fn set_head(c: &Connection, image: ImageId, branch: &str, commit: CommitId) -> Result<()> {
+pub(crate) fn set_head(
+    c: &Connection,
+    image: ImageId,
+    branch: &str,
+    commit: CommitId,
+) -> Result<()> {
     c.execute(
         "INSERT INTO heads (image_id, branch, commit_id) VALUES (?1, ?2, ?3)
          ON CONFLICT(image_id) DO UPDATE SET branch = excluded.branch, commit_id = excluded.commit_id",
@@ -146,19 +162,31 @@ pub(crate) fn set_head(c: &Connection, image: ImageId, branch: &str, commit: Com
 
 pub(crate) fn branches(c: &Connection, image: ImageId) -> Result<Vec<BranchInfo>> {
     let mut stmt = c.prepare("SELECT name, commit_id FROM refs WHERE image_id = ?1 ORDER BY id")?;
-    let rows = stmt.query_map([image], |r| Ok(BranchInfo { name: r.get(0)?, tip: r.get(1)? }))?;
+    let rows = stmt.query_map([image], |r| {
+        Ok(BranchInfo {
+            name: r.get(0)?,
+            tip: r.get(1)?,
+        })
+    })?;
     Ok(rows.collect::<rusqlite::Result<_>>()?)
 }
 
 fn branch_tip(c: &Connection, image: ImageId, name: &str) -> Result<CommitId> {
-    c.query_row("SELECT commit_id FROM refs WHERE image_id = ?1 AND name = ?2", params![image, name], |r| {
-        r.get(0)
-    })
+    c.query_row(
+        "SELECT commit_id FROM refs WHERE image_id = ?1 AND name = ?2",
+        params![image, name],
+        |r| r.get(0),
+    )
     .optional()?
     .ok_or_else(|| CatalogError::NotFound(format!("branch “{name}”")))
 }
 
-pub(crate) fn set_branch(c: &Connection, image: ImageId, name: &str, commit: CommitId) -> Result<()> {
+pub(crate) fn set_branch(
+    c: &Connection,
+    image: ImageId,
+    name: &str,
+    commit: CommitId,
+) -> Result<()> {
     c.execute(
         "INSERT INTO refs (image_id, name, commit_id) VALUES (?1, ?2, ?3)
          ON CONFLICT(image_id, name) DO UPDATE SET commit_id = excluded.commit_id",
@@ -167,14 +195,20 @@ pub(crate) fn set_branch(c: &Connection, image: ImageId, name: &str, commit: Com
     Ok(())
 }
 
-pub(crate) fn parents(c: &Connection, image: ImageId) -> Result<HashMap<CommitId, Option<CommitId>>> {
+pub(crate) fn parents(
+    c: &Connection,
+    image: ImageId,
+) -> Result<HashMap<CommitId, Option<CommitId>>> {
     let mut stmt = c.prepare("SELECT id, parent FROM commits WHERE image_id = ?1")?;
     let rows = stmt.query_map([image], |r| Ok((r.get(0)?, r.get(1)?)))?;
     Ok(rows.collect::<rusqlite::Result<_>>()?)
 }
 
 /// `tip` and all its ancestors, tip first.
-pub(crate) fn lineage(parents: &HashMap<CommitId, Option<CommitId>>, tip: CommitId) -> Vec<CommitId> {
+pub(crate) fn lineage(
+    parents: &HashMap<CommitId, Option<CommitId>>,
+    tip: CommitId,
+) -> Vec<CommitId> {
     let mut out = vec![tip];
     let mut cur = tip;
     while let Some(Some(p)) = parents.get(&cur) {
@@ -185,7 +219,11 @@ pub(crate) fn lineage(parents: &HashMap<CommitId, Option<CommitId>>, tip: Commit
 }
 
 fn has_children(c: &Connection, commit: CommitId) -> Result<bool> {
-    Ok(c.query_row("SELECT EXISTS(SELECT 1 FROM commits WHERE parent = ?1)", [commit], |r| r.get(0))?)
+    Ok(c.query_row(
+        "SELECT EXISTS(SELECT 1 FROM commits WHERE parent = ?1)",
+        [commit],
+        |r| r.get(0),
+    )?)
 }
 
 fn insert_commit(
@@ -211,7 +249,9 @@ pub(crate) fn validate_name(name: &str) -> Result<String> {
         return Err(CatalogError::Invalid("Branch name can’t be empty".into()));
     }
     if name.chars().count() > MAX_BRANCH_NAME {
-        return Err(CatalogError::Invalid(format!("Branch names are limited to {MAX_BRANCH_NAME} characters")));
+        return Err(CatalogError::Invalid(format!(
+            "Branch names are limited to {MAX_BRANCH_NAME} characters"
+        )));
     }
     Ok(name.to_string())
 }
@@ -219,11 +259,16 @@ pub(crate) fn validate_name(name: &str) -> Result<String> {
 /// Next free `base-N` name, where `base` is `from` without any existing `-N` suffix.
 pub(crate) fn auto_branch_name(existing: &[BranchInfo], from: &str) -> String {
     let base = match from.rsplit_once('-') {
-        Some((b, n)) if !b.is_empty() && !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()) => b,
+        Some((b, n)) if !b.is_empty() && !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()) => {
+            b
+        }
         _ => from,
     };
     let taken: HashSet<&str> = existing.iter().map(|b| b.name.as_str()).collect();
-    (2..).map(|n| format!("{base}-{n}")).find(|n| !taken.contains(n.as_str())).expect("unbounded")
+    (2..)
+        .map(|n| format!("{base}-{n}"))
+        .find(|n| !taken.contains(n.as_str()))
+        .expect("unbounded")
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -249,15 +294,22 @@ impl Catalog {
         let head = head(c, image)?.ok_or_else(|| CatalogError::NotFound("history".into()))?;
         let branches = branches(c, image)?;
         let parents = parents(c, image)?;
-        let visible: HashSet<CommitId> =
-            branches.iter().flat_map(|b| lineage(&parents, b.tip)).collect();
+        let visible: HashSet<CommitId> = branches
+            .iter()
+            .flat_map(|b| lineage(&parents, b.tip))
+            .collect();
 
         let mut stmt = c.prepare(
             "SELECT id, parent, summary, updated_at FROM commits WHERE image_id = ?1 ORDER BY id",
         )?;
         let commits = stmt
             .query_map([image], |r| {
-                Ok(CommitInfo { id: r.get(0)?, parent: r.get(1)?, summary: r.get(2)?, time: r.get(3)? })
+                Ok(CommitInfo {
+                    id: r.get(0)?,
+                    parent: r.get(1)?,
+                    summary: r.get(2)?,
+                    time: r.get(3)?,
+                })
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?
             .into_iter()
@@ -265,8 +317,17 @@ impl Catalog {
             .collect();
 
         let can_undo = matches!(parents.get(&head.commit), Some(Some(_)));
-        let can_redo = branches.iter().any(|b| b.name == head.branch && b.tip != head.commit);
-        Ok(HistoryView { image_id: image, commits, branches, head, can_undo, can_redo })
+        let can_redo = branches
+            .iter()
+            .any(|b| b.name == head.branch && b.tip != head.commit);
+        Ok(HistoryView {
+            image_id: image,
+            commits,
+            branches,
+            head,
+            can_undo,
+            can_redo,
+        })
     }
 
     pub fn state_at(&self, commit: CommitId) -> Result<EditState> {
@@ -285,19 +346,31 @@ impl Catalog {
 
     /// Record `state` as the result of an edit. `key` identifies the control that made the
     /// change, for coalescing; pass `None` for one-off actions (e.g. "As Shot").
-    pub fn commit(&mut self, image: ImageId, state: &EditState, key: Option<&str>) -> Result<Checkout> {
+    pub fn commit(
+        &mut self,
+        image: ImageId,
+        state: &EditState,
+        key: Option<&str>,
+    ) -> Result<Checkout> {
         self.commit_inner(image, state, key, None)
     }
 
     /// Copy `panels` from the tip of branch `source` onto HEAD, as one commit
     /// ("Color from B&W"). A no-op if nothing differs.
-    pub fn apply_from_branch(&mut self, image: ImageId, source: &str, panels: &[Panel]) -> Result<Checkout> {
+    pub fn apply_from_branch(
+        &mut self,
+        image: ImageId,
+        source: &str,
+        panels: &[Panel],
+    ) -> Result<Checkout> {
         if panels.is_empty() {
             return Err(CatalogError::Invalid("choose at least one panel".into()));
         }
         let h = self.require_head(image)?;
         if h.branch == source {
-            return Err(CatalogError::Invalid("can't copy a branch onto itself".into()));
+            return Err(CatalogError::Invalid(
+                "can't copy a branch onto itself".into(),
+            ));
         }
         let tip = branch_tip(&self.conn, image, source)?;
         let src = self.state_at(tip)?;
@@ -306,7 +379,12 @@ impl Catalog {
         let what = if panels.len() == Panel::ALL.len() {
             "All settings".to_string()
         } else {
-            Panel::ALL.iter().filter(|p| panels.contains(p)).map(|p| p.label()).collect::<Vec<_>>().join(", ")
+            Panel::ALL
+                .iter()
+                .filter(|p| panels.contains(p))
+                .map(|p| p.label())
+                .collect::<Vec<_>>()
+                .join(", ")
         };
         self.commit_inner(image, &next, None, Some(format!("{what} from {source}")))
     }
@@ -403,7 +481,10 @@ impl Catalog {
         let branches = branches(&self.conn, image)?;
         let parents = parents(&self.conn, image)?;
         let contains = |b: &BranchInfo| lineage(&parents, b.tip).contains(&commit);
-        let current = branches.iter().find(|b| b.name == h.branch).filter(|b| contains(b));
+        let current = branches
+            .iter()
+            .find(|b| b.name == h.branch)
+            .filter(|b| contains(b));
         let branch = current
             .or_else(|| branches.iter().find(|b| b.tip == commit))
             .or_else(|| branches.iter().find(|b| contains(b)))
@@ -421,11 +502,19 @@ impl Catalog {
 
     /// Create a branch at `at` (auto-named after the current branch if `name` is `None`)
     /// and switch to it.
-    pub fn create_branch(&mut self, image: ImageId, at: CommitId, name: Option<&str>) -> Result<Checkout> {
+    pub fn create_branch(
+        &mut self,
+        image: ImageId,
+        at: CommitId,
+        name: Option<&str>,
+    ) -> Result<Checkout> {
         let h = self.require_head(image)?;
         let existing = branches(&self.conn, image)?;
         let parents = parents(&self.conn, image)?;
-        if !existing.iter().any(|b| lineage(&parents, b.tip).contains(&at)) {
+        if !existing
+            .iter()
+            .any(|b| lineage(&parents, b.tip).contains(&at))
+        {
             return Err(CatalogError::NotFound(format!("commit {at}")));
         }
         let name = match name {
@@ -433,7 +522,9 @@ impl Catalog {
             None => auto_branch_name(&existing, &h.branch),
         };
         if existing.iter().any(|b| b.name == name) {
-            return Err(CatalogError::Invalid(format!("A branch named “{name}” already exists")));
+            return Err(CatalogError::Invalid(format!(
+                "A branch named “{name}” already exists"
+            )));
         }
         let tx = self.conn.transaction()?;
         set_branch(&tx, image, &name, at)?;
@@ -447,7 +538,9 @@ impl Catalog {
         if new != old {
             branch_tip(&self.conn, image, old)?;
             if branch_tip(&self.conn, image, &new).is_ok() {
-                return Err(CatalogError::Invalid(format!("A branch named “{new}” already exists")));
+                return Err(CatalogError::Invalid(format!(
+                    "A branch named “{new}” already exists"
+                )));
             }
             let tx = self.conn.transaction()?;
             tx.execute(
@@ -472,24 +565,35 @@ impl Catalog {
             return Err(CatalogError::NotFound(format!("branch “{name}”")));
         }
         let Some(fallback) = all.iter().find(|b| b.name != name) else {
-            return Err(CatalogError::Invalid("The only branch can’t be deleted".into()));
+            return Err(CatalogError::Invalid(
+                "The only branch can’t be deleted".into(),
+            ));
         };
         let tx = self.conn.transaction()?;
-        tx.execute("DELETE FROM refs WHERE image_id = ?1 AND name = ?2", params![image, name])?;
+        tx.execute(
+            "DELETE FROM refs WHERE image_id = ?1 AND name = ?2",
+            params![image, name],
+        )?;
         if h.branch == name {
             set_head(&tx, image, &fallback.name, fallback.tip)?;
         }
         // The commits only that branch had are unreachable now: delete them (children first,
         // which have the higher ids), and any edit state no commit uses any more.
         let par = parents(&tx, image)?;
-        let keep: HashSet<CommitId> = branches(&tx, image)?.iter().flat_map(|b| lineage(&par, b.tip)).collect();
+        let keep: HashSet<CommitId> = branches(&tx, image)?
+            .iter()
+            .flat_map(|b| lineage(&par, b.tip))
+            .collect();
         let mut gone: Vec<CommitId> = par.keys().filter(|c| !keep.contains(c)).copied().collect();
         gone.sort_unstable_by(|a, b| b.cmp(a));
         for c in &gone {
             tx.execute("DELETE FROM commits WHERE id = ?1", [c])?;
         }
         if !gone.is_empty() {
-            tx.execute("DELETE FROM edit_states WHERE hash NOT IN (SELECT state_hash FROM commits)", [])?;
+            tx.execute(
+                "DELETE FROM edit_states WHERE hash NOT IN (SELECT state_hash FROM commits)",
+                [],
+            )?;
         }
         tx.commit()?;
         self.checkout_result(image)
@@ -508,7 +612,10 @@ impl Catalog {
             tx.execute("DELETE FROM commits WHERE image_id = ?1", [image])?;
             tx.execute("UPDATE images SET aspect = NULL WHERE id = ?1", [image])?;
         }
-        tx.execute("DELETE FROM edit_states WHERE hash NOT IN (SELECT state_hash FROM commits)", [])?;
+        tx.execute(
+            "DELETE FROM edit_states WHERE hash NOT IN (SELECT state_hash FROM commits)",
+            [],
+        )?;
         tx.commit()?;
         Ok(())
     }
@@ -524,7 +631,9 @@ mod tests {
     fn catalog() -> (Catalog, Arc<AtomicI64>, ImageId) {
         let t = Arc::new(AtomicI64::new(1_000_000));
         let tc = t.clone();
-        let cat = Catalog::open_in_memory().unwrap().with_clock(Box::new(move || tc.load(Ordering::SeqCst)));
+        let cat = Catalog::open_in_memory()
+            .unwrap()
+            .with_clock(Box::new(move || tc.load(Ordering::SeqCst)));
         let img = cat.test_image("x");
         (cat, t, img)
     }
@@ -557,9 +666,15 @@ mod tests {
         assert_eq!(count("SELECT COUNT(*) FROM commits WHERE image_id = ?1"), 0);
         assert_eq!(count("SELECT COUNT(*) FROM refs WHERE image_id = ?1"), 0);
         assert_eq!(count("SELECT COUNT(*) FROM heads WHERE image_id = ?1"), 0);
-        assert_eq!(count("SELECT COUNT(*) FROM images WHERE id = ?1 AND aspect IS NULL"), 1);
+        assert_eq!(
+            count("SELECT COUNT(*) FROM images WHERE id = ?1 AND aspect IS NULL"),
+            1
+        );
         // exp(2) was only `img`'s: gone. exp(1) and the default are still used by `other`.
-        let states: i64 = cat.conn.query_row("SELECT COUNT(*) FROM edit_states", [], |r| r.get(0)).unwrap();
+        let states: i64 = cat
+            .conn
+            .query_row("SELECT COUNT(*) FROM edit_states", [], |r| r.get(0))
+            .unwrap();
         assert_eq!(states, 2);
         assert_eq!(cat.history_view(other).unwrap().commits.len(), 2);
 
@@ -616,7 +731,10 @@ mod tests {
         cat.commit(img, &exp(1.0), Some("exposure")).unwrap();
         t.fetch_add(5000, Ordering::SeqCst);
         let c = cat.commit(img, &exp(1.5), Some("exposure")).unwrap();
-        assert_eq!(summaries(&c), ["Original", "Exposure +1.00", "Exposure +1.50"]);
+        assert_eq!(
+            summaries(&c),
+            ["Original", "Exposure +1.00", "Exposure +1.50"]
+        );
         let c = cat.undo(img).unwrap();
         assert_eq!(c.state, exp(1.0));
         assert!(c.view.can_redo);
@@ -654,7 +772,12 @@ mod tests {
         cat.history_open(img).unwrap();
         cat.commit(img, &exp(1.0), Some("exposure")).unwrap();
         t.fetch_add(5000, Ordering::SeqCst);
-        let main_tip = cat.commit(img, &exp(2.0), Some("exposure")).unwrap().view.head.commit;
+        let main_tip = cat
+            .commit(img, &exp(2.0), Some("exposure"))
+            .unwrap()
+            .view
+            .head
+            .commit;
         let c = cat.undo(img).unwrap();
         let fork_point = c.view.head.commit;
         let c = cat.commit(img, &exp(-1.0), Some("exposure")).unwrap();
@@ -675,7 +798,13 @@ mod tests {
         let root = cat.history_open(img).unwrap().view.head.commit;
         let a = cat.commit(img, &exp(1.0), None).unwrap().view.head.commit;
         let c = cat.create_branch(img, root, Some("B&W")).unwrap();
-        assert_eq!(c.view.head, Head { branch: "B&W".into(), commit: root });
+        assert_eq!(
+            c.view.head,
+            Head {
+                branch: "B&W".into(),
+                commit: root
+            }
+        );
         let b = cat.commit(img, &exp(-1.0), None).unwrap().view.head.commit;
         // Root is on B&W: stay on B&W.
         assert_eq!(cat.checkout(img, root).unwrap().view.head.branch, "B&W");
@@ -696,11 +825,25 @@ mod tests {
         cat.commit(img, &exp(1.0), None).unwrap();
         let c = cat.delete_branch(img, "Creative").unwrap();
         assert_eq!(c.view.head.branch, "main");
-        assert_eq!(summaries(&c), ["Original"], "commits only on the deleted branch are gone");
+        assert_eq!(
+            summaries(&c),
+            ["Original"],
+            "commits only on the deleted branch are gone"
+        );
         assert!(cat.delete_branch(img, "main").is_err());
-        let rows: i64 = cat.conn.query_row("SELECT COUNT(*) FROM commits WHERE image_id = ?1", [img], |r| r.get(0)).unwrap();
+        let rows: i64 = cat
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM commits WHERE image_id = ?1",
+                [img],
+                |r| r.get(0),
+            )
+            .unwrap();
         assert_eq!(rows, 1, "and deleted, not just hidden");
-        let states: i64 = cat.conn.query_row("SELECT COUNT(*) FROM edit_states", [], |r| r.get(0)).unwrap();
+        let states: i64 = cat
+            .conn
+            .query_row("SELECT COUNT(*) FROM edit_states", [], |r| r.get(0))
+            .unwrap();
         assert_eq!(states, 1);
         // Still fully usable.
         cat.commit(img, &exp(2.0), None).unwrap();
@@ -708,9 +851,19 @@ mod tests {
 
     #[test]
     fn auto_names() {
-        let b = |n: &[&str]| n.iter().map(|n| BranchInfo { name: n.to_string(), tip: 0 }).collect::<Vec<_>>();
+        let b = |n: &[&str]| {
+            n.iter()
+                .map(|n| BranchInfo {
+                    name: n.to_string(),
+                    tip: 0,
+                })
+                .collect::<Vec<_>>()
+        };
         assert_eq!(auto_branch_name(&b(&["main"]), "main"), "main-2");
-        assert_eq!(auto_branch_name(&b(&["main", "main-2"]), "main-2"), "main-3");
+        assert_eq!(
+            auto_branch_name(&b(&["main", "main-2"]), "main-2"),
+            "main-3"
+        );
         assert_eq!(auto_branch_name(&b(&["B&W"]), "B&W"), "B&W-2");
         assert_eq!(auto_branch_name(&b(&["-5"]), "-5"), "-5-2");
     }
@@ -723,7 +876,11 @@ mod tests {
 
     #[derive(Debug, Clone)]
     enum Op {
-        Commit { exposure: u8, key: Option<u8>, dt: i64 },
+        Commit {
+            exposure: u8,
+            key: Option<u8>,
+            dt: i64,
+        },
         Undo,
         Redo,
         Checkout(usize),
@@ -757,7 +914,11 @@ mod tests {
             }
             seen.insert(c.id);
         }
-        assert_eq!(v.commits.iter().filter(|c| c.parent.is_none()).count(), 1, "single root");
+        assert_eq!(
+            v.commits.iter().filter(|c| c.parent.is_none()).count(),
+            1,
+            "single root"
+        );
         // Refs resolve; names unique.
         let names: HashSet<&str> = v.branches.iter().map(|b| b.name.as_str()).collect();
         assert_eq!(names.len(), v.branches.len());
@@ -766,9 +927,16 @@ mod tests {
             assert!(ids.contains(&b.tip));
         }
         // HEAD is on its branch.
-        let b = v.branches.iter().find(|b| b.name == v.head.branch).expect("head branch exists");
+        let b = v
+            .branches
+            .iter()
+            .find(|b| b.name == v.head.branch)
+            .expect("head branch exists");
         let parents = parents(&cat.conn, v.image_id).unwrap();
-        assert!(lineage(&parents, b.tip).contains(&v.head.commit), "head commit on head branch");
+        assert!(
+            lineage(&parents, b.tip).contains(&v.head.commit),
+            "head commit on head branch"
+        );
         assert_eq!(v.can_redo, b.tip != v.head.commit);
     }
 

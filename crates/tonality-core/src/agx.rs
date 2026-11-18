@@ -76,7 +76,10 @@ impl Display {
 
     /// Rec.2020 → this display's primaries (linear).
     pub fn from_2020(self) -> M3 {
-        mul(&inv(&npm(self.primaries(), WHITE_D65)), &npm(&REC2020, WHITE_D65))
+        mul(
+            &inv(&npm(self.primaries(), WHITE_D65)),
+            &npm(&REC2020, WHITE_D65),
+        )
     }
 }
 
@@ -98,7 +101,15 @@ impl Sigmoid {
             let a = slope * (1.0 - tx);
             (a.powf(-p) * ((a / (1.0 - ty)).powf(p) - 1.0)).powf(-1.0 / p)
         };
-        Sigmoid { pivot, slope, powers, scales: [-scale(1.0 - px, 1.0 - py, powers[0]), scale(px, py, powers[1])] }
+        Sigmoid {
+            pivot,
+            slope,
+            powers,
+            scales: [
+                -scale(1.0 - px, 1.0 - py, powers[0]),
+                scale(px, py, powers[1]),
+            ],
+        }
     }
 
     pub fn eval(&self, x: f64) -> f64 {
@@ -161,8 +172,14 @@ impl Agx {
     fn new(hdr: bool, display: Display) -> Self {
         let to_2020 = inv(&npm(&REC2020, WHITE_D65));
         let to_egamut = mul(&inv(&EGAMUT_TO_XYZ), &npm(&REC2020, WHITE_D65));
-        let inset = mul(&to_2020, &npm(&working_space(INSET_ROTATE, INSET_SCALE), WHITE_D65));
-        let outset = inv(&mul(&to_2020, &npm(&working_space([0.0; 3], OUTSET_SCALE), WHITE_D65)));
+        let inset = mul(
+            &to_2020,
+            &npm(&working_space(INSET_ROTATE, INSET_SCALE), WHITE_D65),
+        );
+        let outset = inv(&mul(
+            &to_2020,
+            &npm(&working_space([0.0; 3], OUTSET_SCALE), WHITE_D65),
+        ));
         // HDR is guarded in P3 whatever the display, as Blender's "P3 limited" HDR LUT.
         let rail = if hdr { Display::DisplayP3 } else { display };
         let to_rail = rail.from_2020();
@@ -170,8 +187,15 @@ impl Agx {
         // Rail luminance measured back in Rec.2020: W · (rail→2020 · c) = (rail→2020)ᵀ W · c.
         let rail_to_2020 = inv(&to_rail);
         let luma_display = [0, 1, 2].map(|j| (0..3).map(|i| rail_to_2020[i][j] * luma[i]).sum());
-        let pivot = [-LOG_MIN / (LOG_MAX - LOG_MIN), GREY.powf(1.0 / SIGMOID_GAMMA)];
-        let shoulder = if hdr { POWER * HDR_RATIO.powf(2f64.log10()) } else { POWER };
+        let pivot = [
+            -LOG_MIN / (LOG_MAX - LOG_MIN),
+            GREY.powf(1.0 / SIGMOID_GAMMA),
+        ];
+        let shoulder = if hdr {
+            POWER * HDR_RATIO.powf(2f64.log10())
+        } else {
+            POWER
+        };
         Agx {
             hdr,
             to_egamut,
@@ -181,7 +205,11 @@ impl Agx {
             luma,
             luma_display,
             sigmoid: Sigmoid::new(pivot, SLOPE, [POWER, shoulder]),
-            darken: Sigmoid::new([dark_encode(GREY), dark_encode(GREY / HDR_RATIO)], 1.000001, [3.0, 1.0]),
+            darken: Sigmoid::new(
+                [dark_encode(GREY), dark_encode(GREY / HDR_RATIO)],
+                1.000001,
+                [3.0, 1.0],
+            ),
             rail_to_2020,
             to_display: display.from_2020(),
         }
@@ -192,7 +220,10 @@ impl Agx {
     fn form(&self, rgb: V3) -> V3 {
         // 1. Input domain: E-Gamut, −10…+15 stops around middle grey, per channel.
         let [lo, hi] = DOMAIN_STOPS.map(|s| GREY * s.exp2());
-        let c = mv(&self.from_egamut, mv(&self.to_egamut, rgb).map(|v| v.clamp(lo, hi)));
+        let c = mv(
+            &self.from_egamut,
+            mv(&self.to_egamut, rgb).map(|v| v.clamp(lo, hi)),
+        );
         // 2. Lower guard rail in Rec.2020.
         let c = low_side_2020(c, &self.luma);
         // 3. Inset, 4. its hue.
@@ -215,7 +246,13 @@ impl Agx {
     /// AgXHLG.py's `darken_middle_grey`: each channel down along the darkening curve (on log2),
     /// then hue and saturation moved back halfway to where they were.
     fn darken_grey(&self, c: V3) -> V3 {
-        let d = c.map(|v| if v > 0.0 { dark_decode(self.darken.eval(dark_encode(v))) } else { 0.0 });
+        let d = c.map(|v| {
+            if v > 0.0 {
+                dark_decode(self.darken.eval(dark_encode(v)))
+            } else {
+                0.0
+            }
+        });
         let h = lerp_hue(hue(c), hue(d), HDR_PURITY);
         let s = saturation(c) + HDR_PURITY * (saturation(d) - saturation(c));
         hsv(h, s, d[0].max(d[1]).max(d[2]))
@@ -226,14 +263,16 @@ impl Agx {
     pub fn display(&self, rgb: V3) -> V3 {
         debug_assert!(!self.hdr);
         // 12. Clip, encode.
-        self.form(rgb).map(|v| srgb_encode(if v.is_nan() { 0.0 } else { v.clamp(0.0, 1.0) }))
+        self.form(rgb)
+            .map(|v| srgb_encode(if v.is_nan() { 0.0 } else { v.clamp(0.0, 1.0) }))
     }
 
     /// AgX HDR: scene-linear Rec.2020 → display light, Rec.2020 primaries (limited to P3),
     /// 0–1 = 0–1000 nits.
     pub fn hdr_light(&self, rgb: V3) -> V3 {
         debug_assert!(self.hdr);
-        mv(&self.rail_to_2020, self.form(rgb)).map(|v| if v.is_nan() { 0.0 } else { v.clamp(0.0, 1.0) })
+        mv(&self.rail_to_2020, self.form(rgb))
+            .map(|v| if v.is_nan() { 0.0 } else { v.clamp(0.0, 1.0) })
     }
 
     /// AgX HDR in the display's primaries, relative to SDR white (0–[`HDR_RATIO`]): what the
@@ -246,7 +285,14 @@ impl Agx {
     pub fn uniform(&self) -> [[f32; 4]; AGX_VEC4S] {
         let row = |m: &M3, i: usize| [m[i][0] as f32, m[i][1] as f32, m[i][2] as f32, 0.0];
         let [lo, hi] = DOMAIN_STOPS.map(|s| (GREY * s.exp2()) as f32);
-        let sig = |s: &Sigmoid| [s.pivot[0] as f32, s.pivot[1] as f32, s.scales[0] as f32, s.scales[1] as f32];
+        let sig = |s: &Sigmoid| {
+            [
+                s.pivot[0] as f32,
+                s.pivot[1] as f32,
+                s.scales[0] as f32,
+                s.scales[1] as f32,
+            ]
+        };
         let mut u = [[0.0f32; 4]; AGX_VEC4S];
         for i in 0..3 {
             u[i] = row(&self.to_egamut, i);
@@ -256,12 +302,32 @@ impl Agx {
             u[16 + i] = row(&self.rail_to_2020, i);
             u[19 + i] = row(&self.to_display, i);
         }
-        u[12] = [self.luma[0] as f32, self.luma[1] as f32, self.luma[2] as f32, lo];
-        u[13] = [self.luma_display[0] as f32, self.luma_display[1] as f32, self.luma_display[2] as f32, hi];
+        u[12] = [
+            self.luma[0] as f32,
+            self.luma[1] as f32,
+            self.luma[2] as f32,
+            lo,
+        ];
+        u[13] = [
+            self.luma_display[0] as f32,
+            self.luma_display[1] as f32,
+            self.luma_display[2] as f32,
+            hi,
+        ];
         u[14] = sig(&self.sigmoid);
-        u[15] = [self.sigmoid.powers[0] as f32, self.sigmoid.powers[1] as f32, if self.hdr { 1.0 } else { 0.0 }, 0.0];
+        u[15] = [
+            self.sigmoid.powers[0] as f32,
+            self.sigmoid.powers[1] as f32,
+            if self.hdr { 1.0 } else { 0.0 },
+            0.0,
+        ];
         u[22] = sig(&self.darken);
-        u[23] = [self.darken.slope as f32, self.darken.powers[0] as f32, self.darken.powers[1] as f32, HDR_PURITY as f32];
+        u[23] = [
+            self.darken.slope as f32,
+            self.darken.powers[0] as f32,
+            self.darken.powers[1] as f32,
+            HDR_PURITY as f32,
+        ];
         u
     }
 }
@@ -320,7 +386,11 @@ fn low_side_display(c: V3, w: &V3) -> V3 {
     let y = blend(c);
     let lifted = lift(c);
     let y_new = blend(lifted);
-    let ratio = if y_new > y { y / y_new.max(1e-100) } else { 1.0 };
+    let ratio = if y_new > y {
+        y / y_new.max(1e-100)
+    } else {
+        1.0
+    };
     lifted.map(|v| v * ratio)
 }
 
@@ -372,7 +442,13 @@ pub fn with_hue(c: V3, h: f64) -> V3 {
 /// Hue `a` moved `t` of the way to `b`, the short way round.
 pub fn lerp_hue(a: f64, b: f64, t: f64) -> f64 {
     let d = b - a;
-    let b = if d > 0.5 { b - 1.0 } else if d < -0.5 { b + 1.0 } else { b };
+    let b = if d > 0.5 {
+        b - 1.0
+    } else if d < -0.5 {
+        b + 1.0
+    } else {
+        b
+    };
     (a + t * (b - a)).rem_euclid(1.0)
 }
 
@@ -441,9 +517,21 @@ pub fn inv(m: &M3) -> M3 {
     let [[a, b, c], [d, e, f], [g, h, i]] = *m;
     let det = a * (e * i - f * h) - b * (d * i - f * g) + c * (d * h - e * g);
     [
-        [(e * i - f * h) / det, (c * h - b * i) / det, (b * f - c * e) / det],
-        [(f * g - d * i) / det, (a * i - c * g) / det, (c * d - a * f) / det],
-        [(d * h - e * g) / det, (b * g - a * h) / det, (a * e - b * d) / det],
+        [
+            (e * i - f * h) / det,
+            (c * h - b * i) / det,
+            (b * f - c * e) / det,
+        ],
+        [
+            (f * g - d * i) / det,
+            (a * i - c * g) / det,
+            (c * d - a * f) / det,
+        ],
+        [
+            (d * h - e * g) / det,
+            (b * g - a * h) / det,
+            (a * e - b * d) / det,
+        ],
     ]
 }
 
@@ -474,7 +562,9 @@ mod tests {
     }
 
     fn max_diff(a: &M3, b: &M3) -> f64 {
-        (0..9).map(|k| (a[k / 3][k % 3] - b[k / 3][k % 3]).abs()).fold(0.0, f64::max)
+        (0..9)
+            .map(|k| (a[k / 3][k % 3] - b[k / 3][k % 3]).abs())
+            .fold(0.0, f64::max)
     }
 
     /// Display light (Rec.2020, 1 = 1000 nits) → Rec.2100 HLG signal (BT.2100: the inverse
@@ -483,10 +573,23 @@ mod tests {
         let c = c.map(|v| v.clamp(0.0, 1.0));
         let y = 0.2627 * c[0] + 0.6780 * c[1] + 0.0593 * c[2];
         let gamma = 1.2;
-        let scene = c.map(|v| if y == 0.0 { 0.0 } else { y.powf((1.0 - gamma) / gamma) * v });
+        let scene = c.map(|v| {
+            if y == 0.0 {
+                0.0
+            } else {
+                y.powf((1.0 - gamma) / gamma) * v
+            }
+        });
         let (a, b): (f64, f64) = (0.17883277, 1.0 - 4.0 * 0.17883277);
         let c0 = 0.5 - a * (4.0 * a).ln();
-        scene.map(|e| if e <= 1.0 / 12.0 { (3.0 * e).sqrt() } else { a * (12.0 * e - b).ln() + c0 }.clamp(0.0, 1.0))
+        scene.map(|e| {
+            if e <= 1.0 / 12.0 {
+                (3.0 * e).sqrt()
+            } else {
+                a * (12.0 * e - b).ln() + c0
+            }
+            .clamp(0.0, 1.0)
+        })
     }
 
     #[test]
@@ -501,7 +604,10 @@ mod tests {
         assert!(max_diff(&agx.inset, &blender) < 1e-7, "{:?}", agx.inset);
         let r = reference();
         assert!(max_diff(&agx.inset, &r.inset) < 1e-7);
-        for (agx, display) in [(agx, Display::Srgb), (Agx::sdr(Display::DisplayP3), Display::DisplayP3)] {
+        for (agx, display) in [
+            (agx, Display::Srgb),
+            (Agx::sdr(Display::DisplayP3), Display::DisplayP3),
+        ] {
             let outset = mul(&inv(&display.from_2020()), &agx.outset_display);
             assert!(max_diff(&outset, &r.outset) < 1e-7, "{outset:?}");
         }
@@ -534,7 +640,10 @@ mod tests {
         for display in [Display::Srgb, Display::DisplayP3] {
             let out = Agx::sdr(display).display([GREY; 3]);
             assert!((out[0] - srgb_encode(GREY)).abs() < 1e-9, "{out:?}");
-            assert!(out.iter().all(|&v| (v - out[0]).abs() < 1e-12), "grey stays grey");
+            assert!(
+                out.iter().all(|&v| (v - out[0]).abs() < 1e-12),
+                "grey stays grey"
+            );
             // HDR: 18 nits as well (0.18 of a 100-nit white), so the gain map is 1 there.
             let hdr = Agx::hdr(display).hdr_relative([GREY; 3]);
             assert!(hdr.iter().all(|&v| (v - GREY).abs() < 1e-6), "{hdr:?}");
@@ -543,7 +652,11 @@ mod tests {
 
     #[test]
     fn matches_the_exact_reference() {
-        let (srgb, p3, hdr) = (Agx::sdr(Display::Srgb), Agx::sdr(Display::DisplayP3), Agx::hdr(Display::Srgb));
+        let (srgb, p3, hdr) = (
+            Agx::sdr(Display::Srgb),
+            Agx::sdr(Display::DisplayP3),
+            Agx::hdr(Display::Srgb),
+        );
         for r in reference().rows {
             // HLG's square-root toe magnifies rounding at black: a grey exactly 10 stops under
             // middle grey sits on the HDR curve's clip, where each channel lands either side.
@@ -552,20 +665,30 @@ mod tests {
                 (p3.display(r.input), r.exact_p3, 1e-5),
                 (hlg_encode(hdr.hdr_light(r.input)), r.exact_hlg, 1e-4),
             ] {
-                assert!((0..3).all(|k| (out[k] - want[k]).abs() < tol), "{:?}: {out:?} vs {want:?}", r.input);
+                assert!(
+                    (0..3).all(|k| (out[k] - want[k]).abs() < tol),
+                    "{:?}: {out:?} vs {want:?}",
+                    r.input
+                );
             }
         }
     }
 
     #[test]
     fn matches_blender_within_its_lut_precision() {
-        let (srgb, p3, hdr) = (Agx::sdr(Display::Srgb), Agx::sdr(Display::DisplayP3), Agx::hdr(Display::Srgb));
+        let (srgb, p3, hdr) = (
+            Agx::sdr(Display::Srgb),
+            Agx::sdr(Display::DisplayP3),
+            Agx::hdr(Display::Srgb),
+        );
         let rows = reference().rows;
         type Pair<'a> = &'a dyn Fn(&Row) -> (V3, V3);
         let targets: [(&str, Pair); 3] = [
             ("sRGB", &|r| (srgb.display(r.input), r.blender_srgb)),
             ("P3", &|r| (p3.display(r.input), r.blender_p3)),
-            ("HLG", &|r| (hlg_encode(hdr.hdr_light(r.input)), r.blender_hlg)),
+            ("HLG", &|r| {
+                (hlg_encode(hdr.hdr_light(r.input)), r.blender_hlg)
+            }),
         ];
         for (name, f) in targets {
             let mut d: Vec<f64> = rows
@@ -579,15 +702,26 @@ mod tests {
             let mean = d.iter().sum::<f64>() / d.len() as f64;
             let p99 = d[d.len() * 99 / 100];
             let max = d[d.len() - 1];
-            assert!(mean < 0.002 && p99 < 0.02 && max < 0.07, "{name}: mean {mean} p99 {p99} max {max}");
+            assert!(
+                mean < 0.002 && p99 < 0.02 && max < 0.07,
+                "{name}: mean {mean} p99 {p99} max {max}"
+            );
         }
     }
 
     #[test]
     fn gain_range_covers_hdr_over_sdr() {
         let k = GAIN_OFFSET;
-        let linear = |v: f64| if v <= 0.04045 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) };
-        let mut inputs: Vec<V3> = (0..=400).map(|i| [GREY * (i as f64 / 400.0 * 26.0 - 12.0).exp2(); 3]).collect();
+        let linear = |v: f64| {
+            if v <= 0.04045 {
+                v / 12.92
+            } else {
+                ((v + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        let mut inputs: Vec<V3> = (0..=400)
+            .map(|i| [GREY * (i as f64 / 400.0 * 26.0 - 12.0).exp2(); 3])
+            .collect();
         inputs.extend(reference().rows.iter().map(|r| r.input));
         for display in [Display::Srgb, Display::DisplayP3] {
             let (sdr, hdr) = (Agx::sdr(display), Agx::hdr(display));
@@ -595,20 +729,34 @@ mod tests {
                 let (s, h) = (sdr.display(c).map(linear), hdr.hdr_relative(c));
                 for i in 0..3 {
                     let g = ((h[i] + k) / (s[i] + k)).log2();
-                    assert!((GAIN_LOG2[0]..=GAIN_LOG2[1]).contains(&g), "{display:?} {c:?}: gain {g}");
+                    assert!(
+                        (GAIN_LOG2[0]..=GAIN_LOG2[1]).contains(&g),
+                        "{display:?} {c:?}: gain {g}"
+                    );
                 }
             }
             // Bright highlights reach the 10× peak.
             let white = hdr.hdr_relative([GREY * 128.0; 3]); // +7 stops: past the curve's end
-            assert!(white.iter().all(|&v| (v - HDR_RATIO).abs() < 1e-6), "{white:?}");
+            assert!(
+                white.iter().all(|&v| (v - HDR_RATIO).abs() < 1e-6),
+                "{white:?}"
+            );
         }
     }
 
     #[test]
     fn hue_round_trips() {
-        for c in [[0.9, 0.2, 0.1], [0.1, 0.8, 0.3], [0.2, 0.3, 0.9], [0.7, 0.1, 0.6]] {
+        for c in [
+            [0.9, 0.2, 0.1],
+            [0.1, 0.8, 0.3],
+            [0.2, 0.3, 0.9],
+            [0.7, 0.1, 0.6],
+        ] {
             let out = with_hue(c, hue(c));
-            assert!((0..3).all(|k| (out[k] - c[k]).abs() < 1e-12), "{c:?} → {out:?}");
+            assert!(
+                (0..3).all(|k| (out[k] - c[k]).abs() < 1e-12),
+                "{c:?} → {out:?}"
+            );
         }
         assert!((lerp_hue(0.95, 0.05, 0.5) - 0.0).abs() < 1e-12);
     }

@@ -82,7 +82,13 @@ pub struct LensCorrection {
 
 impl Default for LensCorrection {
     fn default() -> Self {
-        Self { profile: false, distortion: 100.0, vignetting: 100.0, chromatic: true, manual_distortion: 0.0 }
+        Self {
+            profile: false,
+            distortion: 100.0,
+            vignetting: 100.0,
+            chromatic: true,
+            manual_distortion: 0.0,
+        }
     }
 }
 
@@ -105,7 +111,11 @@ pub struct LensTable {
 
 impl LensTable {
     pub fn identity() -> Self {
-        Self { knots: [[1.0; 4]; LENS_KNOTS], active: false, margin: 0.0 }
+        Self {
+            knots: [[1.0; 4]; LENS_KNOTS],
+            active: false,
+            margin: 0.0,
+        }
     }
 }
 
@@ -145,13 +155,15 @@ pub fn lens_table(profile: Option<&LensProfile>, s: &LensCorrection, w: f32, h: 
         const N: usize = 48;
         (0..=N).all(|i| {
             let t = i as f32 / N as f32;
-            [[ax * (2.0 * t - 1.0), ay], [ax, ay * (2.0 * t - 1.0)]].iter().all(|&[x, y]| {
-                let r = (x * x + y * y).sqrt();
-                (0..3).all(|c| {
-                    let f = base(c, r / z) / z;
-                    (f * x).abs() <= ax * 1.0005 && (f * y).abs() <= ay * 1.0005
+            [[ax * (2.0 * t - 1.0), ay], [ax, ay * (2.0 * t - 1.0)]]
+                .iter()
+                .all(|&[x, y]| {
+                    let r = (x * x + y * y).sqrt();
+                    (0..3).all(|c| {
+                        let f = base(c, r / z) / z;
+                        (f * x).abs() <= ax * 1.0005 && (f * y).abs() <= ay * 1.0005
+                    })
                 })
-            })
         })
     };
     let zoom = if has_dist {
@@ -167,7 +179,11 @@ pub fn lens_table(profile: Option<&LensProfile>, s: &LensCorrection, w: f32, h: 
         } else {
             for _ in 0..30 {
                 let mid = 0.5 * (lo + hi);
-                if inside(mid) { hi = mid } else { lo = mid }
+                if inside(mid) {
+                    hi = mid
+                } else {
+                    lo = mid
+                }
             }
             hi
         }
@@ -213,7 +229,9 @@ pub struct UvToSource {
 
 impl UvToSource {
     pub fn new(table: &LensTable, src_w: u32, src_h: u32) -> Self {
-        let diag = ((src_w as f32).powi(2) + (src_h as f32).powi(2)).sqrt().max(1e-6);
+        let diag = ((src_w as f32).powi(2) + (src_h as f32).powi(2))
+            .sqrt()
+            .max(1e-6);
         Self {
             green: std::array::from_fn(|i| table.knots[i][1]),
             ax: src_w as f32 / diag,
@@ -229,13 +247,23 @@ impl UvToSource {
         let (dx, dy) = (uv[0] - 0.5, uv[1] - 0.5);
         let r = ((dx * 2.0 * self.ax).powi(2) + (dy * 2.0 * self.ay).powi(2)).sqrt();
         let k = sample(&self.green, r);
-        [(0.5 + k * dx).clamp(0.0, 1.0), (0.5 + k * dy).clamp(0.0, 1.0)]
+        [
+            (0.5 + k * dx).clamp(0.0, 1.0),
+            (0.5 + k * dy).clamp(0.0, 1.0),
+        ]
     }
 }
 
 /// Resample a mask raster made on the *uncorrected* source (as models see the photo) into the
 /// corrected uv space masks live in (see [`UvToSource`]).
-pub fn warp_to_uv(raster: &[u8], w: u32, h: u32, table: &LensTable, src_w: u32, src_h: u32) -> Vec<u8> {
+pub fn warp_to_uv(
+    raster: &[u8],
+    w: u32,
+    h: u32,
+    table: &LensTable,
+    src_w: u32,
+    src_h: u32,
+) -> Vec<u8> {
     if !table.active {
         return raster.to_vec();
     }
@@ -269,17 +297,31 @@ mod tests {
     fn warp_is_identity_without_correction_and_follows_the_ratio_with_it() {
         let (w, h) = (40u32, 20u32);
         let raster: Vec<u8> = (0..w * h).map(|i| ((i % w) * 6) as u8).collect();
-        assert_eq!(warp_to_uv(&raster, w, h, &LensTable::identity(), 400, 200), raster);
+        assert_eq!(
+            warp_to_uv(&raster, w, h, &LensTable::identity(), 400, 200),
+            raster
+        );
 
         // Constant ratio 0.5: corrected uv shows the source at half the distance from the centre.
-        let table = LensTable { knots: [[0.5, 0.5, 0.5, 1.0]; LENS_KNOTS], active: true, margin: 0.0 };
+        let table = LensTable {
+            knots: [[0.5, 0.5, 0.5, 1.0]; LENS_KNOTS],
+            active: true,
+            margin: 0.0,
+        };
         let out = warp_to_uv(&raster, w, h, &table, 400, 200);
         let row = (h / 2 * w) as usize;
         // Leftmost corrected pixel (u ≈ 0.0125) reads source u ≈ 0.256 → value ≈ 0.256·40·6.
         let expect = ((0.5 + 0.5 * (0.5 / w as f32 - 0.5)) * w as f32 - 0.5) * 6.0;
-        assert!((out[row] as f32 - expect).abs() <= 1.0, "{} vs {expect}", out[row]);
+        assert!(
+            (out[row] as f32 - expect).abs() <= 1.0,
+            "{} vs {expect}",
+            out[row]
+        );
         let c = row + w as usize / 2;
-        assert!(out[c].abs_diff(raster[c]) <= 2, "near the centre barely moves");
+        assert!(
+            out[c].abs_diff(raster[c]) <= 2,
+            "near the centre barely moves"
+        );
     }
 
     fn barrel() -> LensProfile {
@@ -287,21 +329,31 @@ mod tests {
         LensProfile {
             source: LensSource::Embedded,
             name: "test".into(),
-            distortion: Some([radial(|r| 1.0 - 0.06 * r * r), radial(|r| 1.0 - 0.05 * r * r), radial(|r| 1.0 - 0.04 * r * r)]),
+            distortion: Some([
+                radial(|r| 1.0 - 0.06 * r * r),
+                radial(|r| 1.0 - 0.05 * r * r),
+                radial(|r| 1.0 - 0.04 * r * r),
+            ]),
             chromatic: true,
             vignetting: Some(radial(|r| 1.0 + 0.8 * r * r)),
         }
     }
 
     fn on() -> LensCorrection {
-        LensCorrection { profile: true, ..Default::default() }
+        LensCorrection {
+            profile: true,
+            ..Default::default()
+        }
     }
 
     #[test]
     fn off_is_identity() {
         let t = lens_table(Some(&barrel()), &LensCorrection::default(), 6000.0, 4000.0);
         assert_eq!(t, LensTable::identity());
-        assert!(!lens_table(None, &on(), 6000.0, 4000.0).active, "no profile, nothing to do");
+        assert!(
+            !lens_table(None, &on(), 6000.0, 4000.0).active,
+            "no profile, nothing to do"
+        );
     }
 
     #[test]
@@ -326,7 +378,10 @@ mod tests {
             for (x, y) in [(ax * s, ay), (ax, ay * s)] {
                 for c in 0..3 {
                     let (u, v) = read(x, y, c);
-                    assert!(u.abs() <= ax * 1.002 && v.abs() <= ay * 1.002, "({x}, {y}) reads ({u}, {v})");
+                    assert!(
+                        u.abs() <= ax * 1.002 && v.abs() <= ay * 1.002,
+                        "({x}, {y}) reads ({u}, {v})"
+                    );
                     tight = tight.max((u.abs() / ax).max(v.abs() / ay));
                 }
             }
@@ -341,17 +396,50 @@ mod tests {
     fn amounts_and_toggles() {
         let p = barrel();
         let full = lens_table(Some(&p), &on(), 600.0, 400.0);
-        let no_ca = lens_table(Some(&p), &LensCorrection { chromatic: false, ..on() }, 600.0, 400.0);
+        let no_ca = lens_table(
+            Some(&p),
+            &LensCorrection {
+                chromatic: false,
+                ..on()
+            },
+            600.0,
+            400.0,
+        );
         let i = LENS_KNOTS - 8;
         assert_ne!(full.knots[i][0], full.knots[i][1]);
         assert_eq!(no_ca.knots[i][0], no_ca.knots[i][1]);
-        let none = lens_table(Some(&p), &LensCorrection { distortion: 0.0, chromatic: false, ..on() }, 600.0, 400.0);
+        let none = lens_table(
+            Some(&p),
+            &LensCorrection {
+                distortion: 0.0,
+                chromatic: false,
+                ..on()
+            },
+            600.0,
+            400.0,
+        );
         assert_eq!(none.knots[i][1], 1.0, "only vignetting left");
         assert!(none.knots[i][3] > 1.5);
-        let half = lens_table(Some(&p), &LensCorrection { vignetting: 50.0, ..on() }, 600.0, 400.0);
+        let half = lens_table(
+            Some(&p),
+            &LensCorrection {
+                vignetting: 50.0,
+                ..on()
+            },
+            600.0,
+            400.0,
+        );
         assert!((half.knots[i][3] - full.knots[i][3].sqrt()).abs() < 1e-5);
         // Manual distortion works without a profile.
-        let m = lens_table(None, &LensCorrection { manual_distortion: 50.0, ..Default::default() }, 600.0, 400.0);
+        let m = lens_table(
+            None,
+            &LensCorrection {
+                manual_distortion: 50.0,
+                ..Default::default()
+            },
+            600.0,
+            400.0,
+        );
         assert!(m.active && m.knots[0][1] != m.knots[LENS_KNOTS - 1][1]);
     }
 

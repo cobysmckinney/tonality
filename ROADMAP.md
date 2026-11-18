@@ -7,7 +7,9 @@ Add new ideas to **Later**, and move finished items to **Done** with the date an
 1. Branch from `main` (`git checkout -b <item-slug>`).
 2. Settle the item's open questions with Coby before writing code.
 3. Build it, add tests where logic is testable, and run `cargo test --workspace`,
-   `cargo clippy --workspace --all-targets`, `npm test` and `npm run check`.
+   `cargo clippy --workspace --all-targets`, `cargo fmt --all --check`, `npm test`,
+   `npm run check` and `npm run format:check` (`cargo fmt --all` and `npm run format` fix the
+   last two).
 4. Try it in `npm run tauri dev`. UI work isn't done until it has been seen in the app.
 5. Merge into `main` and move the item to **Done**.
 

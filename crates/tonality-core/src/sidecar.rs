@@ -16,8 +16,8 @@ use serde::{Deserialize, Serialize};
 use crate::catalog::{Catalog, CatalogError, ImageId, Result};
 use crate::edit::EditState;
 use crate::history::{
-    auto_branch_name, branches, head, lineage, parents, set_branch, set_head, store_state, validate_name, BranchInfo,
-    CommitId,
+    auto_branch_name, branches, head, lineage, parents, set_branch, set_head, store_state,
+    validate_name, BranchInfo, CommitId,
 };
 
 /// Format version written by this build; newer files are refused rather than half-read.
@@ -87,7 +87,10 @@ pub struct SidecarCommit {
 impl Sidecar {
     /// Nothing worth keeping: never edited, unrated, unflagged.
     pub fn is_empty(&self) -> bool {
-        self.head.is_none() && self.image.rating == 0 && self.image.flag == 0 && self.image.albums.is_empty()
+        self.head.is_none()
+            && self.image.rating == 0
+            && self.image.flag == 0
+            && self.image.albums.is_empty()
     }
 
     pub fn to_json(&self) -> String {
@@ -101,7 +104,9 @@ impl Sidecar {
             return Err(CatalogError::Invalid("not a tonality sidecar".into()));
         }
         if version > SIDECAR_VERSION as u64 {
-            return Err(CatalogError::Invalid("sidecar was written by a newer version of tonality".into()));
+            return Err(CatalogError::Invalid(
+                "sidecar was written by a newer version of tonality".into(),
+            ));
         }
         Ok(serde_json::from_value(v)?)
     }
@@ -172,9 +177,11 @@ impl Catalog {
     pub fn sidecar(&self, image: ImageId) -> Result<Sidecar> {
         let c = &self.conn;
         let (name, hash, rating, flag): (String, String, u8, i8) = c
-            .query_row("SELECT name, hash, rating, flag FROM images WHERE id = ?1", [image], |r| {
-                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
-            })
+            .query_row(
+                "SELECT name, hash, rating, flag FROM images WHERE id = ?1",
+                [image],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
             .optional()?
             .ok_or_else(|| CatalogError::NotFound(format!("image {image}")))?;
         let albums = {
@@ -189,7 +196,13 @@ impl Catalog {
         };
         let mut sc = Sidecar {
             tonality: SIDECAR_VERSION,
-            image: SidecarImage { name, hash, rating, flag, albums },
+            image: SidecarImage {
+                name,
+                hash,
+                rating,
+                flag,
+                albums,
+            },
             head: None,
             branches: vec![],
             commits: vec![],
@@ -201,19 +214,33 @@ impl Catalog {
         let view = self.history_view(image)?;
         let mut rows: HashMap<CommitId, (String, i64)> = HashMap::new();
         {
-            let mut stmt = c.prepare("SELECT id, state_hash, created_at FROM commits WHERE image_id = ?1")?;
+            let mut stmt =
+                c.prepare("SELECT id, state_hash, created_at FROM commits WHERE image_id = ?1")?;
             for r in stmt.query_map([image], |r| Ok((r.get(0)?, (r.get(1)?, r.get(2)?))))? {
                 let (id, row) = r?;
                 rows.insert(id, row);
             }
         }
         // `view.commits` is in id order, and a parent is always inserted before its children.
-        let index: HashMap<CommitId, usize> = view.commits.iter().enumerate().map(|(i, c)| (c.id, i)).collect();
+        let index: HashMap<CommitId, usize> = view
+            .commits
+            .iter()
+            .enumerate()
+            .map(|(i, c)| (c.id, i))
+            .collect();
         for ci in &view.commits {
-            let (state, created) = rows.get(&ci.id).cloned().ok_or_else(|| CatalogError::NotFound("commit".into()))?;
+            let (state, created) = rows
+                .get(&ci.id)
+                .cloned()
+                .ok_or_else(|| CatalogError::NotFound("commit".into()))?;
             if !sc.states.contains_key(&state) {
-                let json: String = c.query_row("SELECT json FROM edit_states WHERE hash = ?1", [&state], |r| r.get(0))?;
-                sc.states.insert(state.clone(), serde_json::from_str(&json)?);
+                let json: String = c.query_row(
+                    "SELECT json FROM edit_states WHERE hash = ?1",
+                    [&state],
+                    |r| r.get(0),
+                )?;
+                sc.states
+                    .insert(state.clone(), serde_json::from_str(&json)?);
             }
             sc.commits.push(SidecarCommit {
                 parent: ci.parent.and_then(|p| index.get(&p).copied()),
@@ -223,8 +250,18 @@ impl Catalog {
                 time: ci.time,
             });
         }
-        sc.branches = view.branches.iter().map(|b| SidecarBranch { name: b.name.clone(), tip: index[&b.tip] }).collect();
-        sc.head = Some(SidecarHead { branch: view.head.branch.clone(), commit: index[&view.head.commit] });
+        sc.branches = view
+            .branches
+            .iter()
+            .map(|b| SidecarBranch {
+                name: b.name.clone(),
+                tip: index[&b.tip],
+            })
+            .collect();
+        sc.head = Some(SidecarHead {
+            branch: view.head.branch.clone(),
+            commit: index[&view.head.commit],
+        });
         Ok(sc)
     }
 
@@ -235,13 +272,17 @@ impl Catalog {
         let states = sc.validate()?;
         let (hash, rating, flag): (String, u8, i8) = self
             .conn
-            .query_row("SELECT hash, rating, flag FROM images WHERE id = ?1", [image], |r| {
-                Ok((r.get(0)?, r.get(1)?, r.get(2)?))
-            })
+            .query_row(
+                "SELECT hash, rating, flag FROM images WHERE id = ?1",
+                [image],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
             .optional()?
             .ok_or_else(|| CatalogError::NotFound(format!("image {image}")))?;
         if !sc.image.hash.is_empty() && sc.image.hash != hash {
-            return Err(CatalogError::Invalid("the sidecar belongs to a different photo".into()));
+            return Err(CatalogError::Invalid(
+                "the sidecar belongs to a different photo".into(),
+            ));
         }
 
         let mut out = MergeSummary::default();
@@ -316,13 +357,17 @@ impl Catalog {
             // A local branch at the same tip that the sidecar doesn't know by name is most
             // likely this one renamed: don't add it twice. A branch the sidecar names itself
             // is a genuine second branch at that commit (e.g. just created), so this one stays.
-            let renamed_here =
-                |h: &BranchInfo| h.tip == tip && !sc.branches.iter().any(|s| s.name.trim() == h.name);
+            let renamed_here = |h: &BranchInfo| {
+                h.tip == tip && !sc.branches.iter().any(|s| s.name.trim() == h.name)
+            };
             match have.iter().position(|h| h.name == name) {
                 None if !fresh && have.iter().any(renamed_here) => {}
                 None => {
                     set_branch(&tx, image, name, tip)?;
-                    have.push(BranchInfo { name: name.into(), tip });
+                    have.push(BranchInfo {
+                        name: name.into(),
+                        tip,
+                    });
                     out.branches += 1;
                 }
                 Some(i) if contains(have[i].tip) => {}
@@ -336,7 +381,10 @@ impl Catalog {
                 Some(_) => {
                     let new = auto_branch_name(&have, name);
                     set_branch(&tx, image, &new, tip)?;
-                    have.push(BranchInfo { name: new.clone(), tip });
+                    have.push(BranchInfo {
+                        name: new.clone(),
+                        tip,
+                    });
                     renamed.insert(name, new);
                     out.branches += 1;
                 }
@@ -345,27 +393,45 @@ impl Catalog {
 
         if fresh {
             if let Some(first) = sc.branches.first() {
-                let h = sc.head.as_ref().map_or((first.name.trim(), first.tip), |h| (h.branch.trim(), h.commit));
+                let h = sc
+                    .head
+                    .as_ref()
+                    .map_or((first.name.trim(), first.tip), |h| {
+                        (h.branch.trim(), h.commit)
+                    });
                 let name = renamed.get(h.0).cloned().unwrap_or_else(|| h.0.to_string());
                 // HEAD must name a branch that exists, or every later commit fails.
                 let branch = have
                     .iter()
                     .find(|b| b.name == name)
-                    .or_else(|| have.iter().find(|b| lineage(&par, b.tip).contains(&map[h.1])))
+                    .or_else(|| {
+                        have.iter()
+                            .find(|b| lineage(&par, b.tip).contains(&map[h.1]))
+                    })
                     .or(have.first());
                 if let Some(b) = branch {
-                    let commit = if lineage(&par, b.tip).contains(&map[h.1]) { map[h.1] } else { b.tip };
+                    let commit = if lineage(&par, b.tip).contains(&map[h.1]) {
+                        map[h.1]
+                    } else {
+                        b.tip
+                    };
                     set_head(&tx, image, &b.name, commit)?;
                 }
             }
         }
 
         if rating == 0 && sc.image.rating > 0 {
-            tx.execute("UPDATE images SET rating = ?2 WHERE id = ?1", params![image, sc.image.rating.min(5)])?;
+            tx.execute(
+                "UPDATE images SET rating = ?2 WHERE id = ?1",
+                params![image, sc.image.rating.min(5)],
+            )?;
             out.labels = true;
         }
         if flag == 0 && sc.image.flag != 0 {
-            tx.execute("UPDATE images SET flag = ?2 WHERE id = ?1", params![image, sc.image.flag.clamp(-1, 1)])?;
+            tx.execute(
+                "UPDATE images SET flag = ?2 WHERE id = ?1",
+                params![image, sc.image.flag.clamp(-1, 1)],
+            )?;
             out.labels = true;
         }
 
@@ -377,12 +443,19 @@ impl Catalog {
                 continue;
             }
             let album: i64 = match tx
-                .query_row("SELECT id FROM albums WHERE name = ?1 ORDER BY id LIMIT 1", [name], |r| r.get(0))
+                .query_row(
+                    "SELECT id FROM albums WHERE name = ?1 ORDER BY id LIMIT 1",
+                    [name],
+                    |r| r.get(0),
+                )
                 .optional()?
             {
                 Some(id) => id,
                 None => {
-                    tx.execute("INSERT INTO albums (name, created_at) VALUES (?1, ?2)", params![name, now])?;
+                    tx.execute(
+                        "INSERT INTO albums (name, created_at) VALUES (?1, ?2)",
+                        params![name, now],
+                    )?;
                     tx.last_insert_rowid()
                 }
             };
@@ -437,7 +510,9 @@ fn same_child(
         "SELECT id, summary, created_at, updated_at FROM commits WHERE image_id = ?1 AND parent IS ?2 ORDER BY id",
     )?;
     let kids: Vec<(CommitId, String, i64, i64)> = stmt
-        .query_map(params![image, parent], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
+        .query_map(params![image, parent], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
+        })?
         .collect::<rusqlite::Result<_>>()?;
     for (id, summary, created, updated) in &kids {
         if *created == c.created && *updated == c.time && *summary == c.summary {
@@ -473,10 +548,23 @@ mod tests {
     fn graph(cat: &Catalog, img: ImageId) -> Vec<(String, Vec<String>)> {
         let v = cat.history_view(img).unwrap();
         let par = parents(&cat.conn, img).unwrap();
-        let summary: HashMap<CommitId, String> = v.commits.iter().map(|c| (c.id, c.summary.clone())).collect();
+        let summary: HashMap<CommitId, String> = v
+            .commits
+            .iter()
+            .map(|c| (c.id, c.summary.clone()))
+            .collect();
         v.branches
             .iter()
-            .map(|b| (b.name.clone(), lineage(&par, b.tip).iter().rev().map(|c| summary[c].clone()).collect()))
+            .map(|b| {
+                (
+                    b.name.clone(),
+                    lineage(&par, b.tip)
+                        .iter()
+                        .rev()
+                        .map(|c| summary[c].clone())
+                        .collect(),
+                )
+            })
             .collect()
     }
 
@@ -505,7 +593,11 @@ mod tests {
         assert_eq!(vb.view.head.branch, "B&W");
         assert_eq!(vb.state, va.state, "HEAD position restored");
         assert!(vb.view.can_redo);
-        assert_eq!(b.sidecar(ib).unwrap(), a.sidecar(ia).unwrap(), "same graph, same sidecar");
+        assert_eq!(
+            b.sidecar(ib).unwrap(),
+            a.sidecar(ia).unwrap(),
+            "same graph, same sidecar"
+        );
         // Reading it again changes nothing.
         assert!(!b.merge_sidecar(ib, &sc).unwrap().changed());
     }
@@ -527,12 +619,23 @@ mod tests {
         // Rewrite every stored state as an older version would have written it: without
         // the masks' `vibrance`.
         let rows: Vec<(String, String)> = {
-            let mut q = a.conn.prepare("SELECT hash, json FROM edit_states").unwrap();
-            q.query_map([], |r| Ok((r.get(0).unwrap(), r.get(1).unwrap()))).unwrap().map(|r| r.unwrap()).collect()
+            let mut q = a
+                .conn
+                .prepare("SELECT hash, json FROM edit_states")
+                .unwrap();
+            q.query_map([], |r| Ok((r.get(0).unwrap(), r.get(1).unwrap())))
+                .unwrap()
+                .map(|r| r.unwrap())
+                .collect()
         };
         for (hash, json) in rows {
             let mut v: serde_json::Value = serde_json::from_str(&json).unwrap();
-            for m in v.get_mut("masks").and_then(|m| m.as_array_mut()).into_iter().flatten() {
+            for m in v
+                .get_mut("masks")
+                .and_then(|m| m.as_array_mut())
+                .into_iter()
+                .flatten()
+            {
                 m["adjust"].as_object_mut().unwrap().remove("vibrance");
             }
             let old = serde_json::to_string(&v).unwrap();
@@ -540,8 +643,18 @@ mod tests {
             if old_hash == hash {
                 continue;
             }
-            a.conn.execute("INSERT INTO edit_states (hash, json) VALUES (?1, ?2)", params![old_hash, old]).unwrap();
-            a.conn.execute("UPDATE commits SET state_hash = ?1 WHERE state_hash = ?2", params![old_hash, hash]).unwrap();
+            a.conn
+                .execute(
+                    "INSERT INTO edit_states (hash, json) VALUES (?1, ?2)",
+                    params![old_hash, old],
+                )
+                .unwrap();
+            a.conn
+                .execute(
+                    "UPDATE commits SET state_hash = ?1 WHERE state_hash = ?2",
+                    params![old_hash, hash],
+                )
+                .unwrap();
         }
 
         let before = graph(&a, ia);
@@ -573,8 +686,18 @@ mod tests {
         }
         let old = serde_json::to_string(&v).unwrap();
         let old_hash = blake3::hash(old.as_bytes()).to_hex().to_string();
-        a.conn.execute("INSERT INTO edit_states (hash, json) VALUES (?1, ?2)", params![old_hash, old]).unwrap();
-        a.conn.execute("UPDATE commits SET state_hash = ?1 WHERE id = ?2", params![old_hash, first]).unwrap();
+        a.conn
+            .execute(
+                "INSERT INTO edit_states (hash, json) VALUES (?1, ?2)",
+                params![old_hash, old],
+            )
+            .unwrap();
+        a.conn
+            .execute(
+                "UPDATE commits SET state_hash = ?1 WHERE id = ?2",
+                params![old_hash, first],
+            )
+            .unwrap();
         // ...and a sibling copy of it in today's format, on its own branch, made by an older merge.
         a.conn
             .execute(
@@ -611,11 +734,28 @@ mod tests {
         assert_eq!((m.commits, m.branches, m.advanced), (2, 2, 0));
         let g = graph(&b, ib);
         let names: Vec<&str> = g.iter().map(|(n, _)| n.as_str()).collect();
-        assert_eq!(names, ["main", "main-2", "HDR"], "diverged main arrives as main-2");
-        assert_eq!(g[0].1.last().unwrap(), "Exposure -1.00", "local main untouched");
+        assert_eq!(
+            names,
+            ["main", "main-2", "HDR"],
+            "diverged main arrives as main-2"
+        );
+        assert_eq!(
+            g[0].1.last().unwrap(),
+            "Exposure -1.00",
+            "local main untouched"
+        );
         assert_eq!(g[1].1.last().unwrap(), "Exposure +2.00");
-        assert_eq!(b.history_view(ib).unwrap().head.branch, "main", "HEAD stays put");
-        assert!(!b.merge_sidecar(ib, &a.sidecar(ia).unwrap()).unwrap().changed(), "idempotent");
+        assert_eq!(
+            b.history_view(ib).unwrap().head.branch,
+            "main",
+            "HEAD stays put"
+        );
+        assert!(
+            !b.merge_sidecar(ib, &a.sidecar(ia).unwrap())
+                .unwrap()
+                .changed(),
+            "idempotent"
+        );
 
         // A branch the sidecar extends fast-forwards.
         a.switch_branch(ia, "HDR").unwrap();
@@ -636,12 +776,21 @@ mod tests {
         assert_eq!(a.history_view(ia).unwrap().head.branch, "HDR");
 
         b.merge_sidecar(ib, &a.sidecar(ia).unwrap()).unwrap();
-        assert!(!b.merge_sidecar(ib, &a.sidecar(ia).unwrap()).unwrap().changed(), "idempotent");
+        assert!(
+            !b.merge_sidecar(ib, &a.sidecar(ia).unwrap())
+                .unwrap()
+                .changed(),
+            "idempotent"
+        );
         let v = b.history_open(ib).unwrap().view;
         let names: Vec<&str> = v.branches.iter().map(|x| x.name.as_str()).collect();
-        assert!(names.contains(&"main") && names.contains(&"HDR"), "{names:?}");
+        assert!(
+            names.contains(&"main") && names.contains(&"HDR"),
+            "{names:?}"
+        );
         assert_eq!(v.head.branch, "HDR");
-        b.commit(ib, &exp(2.0), None).expect("HEAD names a real branch");
+        b.commit(ib, &exp(2.0), None)
+            .expect("HEAD names a real branch");
     }
 
     #[test]
@@ -650,7 +799,9 @@ mod tests {
         use std::sync::Arc;
         let t = Arc::new(AtomicI64::new(1_000));
         let tc = t.clone();
-        let mut a = Catalog::open_in_memory().unwrap().with_clock(Box::new(move || tc.load(Ordering::SeqCst)));
+        let mut a = Catalog::open_in_memory()
+            .unwrap()
+            .with_clock(Box::new(move || tc.load(Ordering::SeqCst)));
         let ia = a.test_image("x");
         a.history_open(ia).unwrap();
         t.store(2_000, Ordering::SeqCst);
@@ -677,7 +828,13 @@ mod tests {
         b.rename_branch(ib, "main", "Final").unwrap();
         let m = b.merge_sidecar(ib, &a.sidecar(ia).unwrap()).unwrap();
         assert_eq!(m.branches, 0);
-        let names: Vec<String> = b.history_view(ib).unwrap().branches.into_iter().map(|x| x.name).collect();
+        let names: Vec<String> = b
+            .history_view(ib)
+            .unwrap()
+            .branches
+            .into_iter()
+            .map(|x| x.name)
+            .collect();
         assert_eq!(names, ["Final"]);
     }
 
@@ -708,7 +865,10 @@ mod tests {
         for bad in [cyclic, dangling, missing] {
             assert!(b.merge_sidecar(ib, &bad).is_err());
         }
-        assert!(b.history_view(ib).is_err(), "failed merges leave nothing behind");
+        assert!(
+            b.history_view(ib).is_err(),
+            "failed merges leave nothing behind"
+        );
         assert!(Sidecar::from_json(r#"{"tonality": 99}"#).is_err());
         assert!(Sidecar::from_json(r#"{"hello": 1}"#).is_err());
     }
@@ -729,12 +889,24 @@ mod tests {
         let m = b.merge_sidecar(ib, &sc).unwrap();
         assert_eq!(m.albums, 2);
         let albums = b.albums().unwrap();
-        assert_eq!(albums.iter().map(|x| (x.name.as_str(), x.count)).collect::<Vec<_>>(), [("Best of", 1), ("Trips", 1)]);
+        assert_eq!(
+            albums
+                .iter()
+                .map(|x| (x.name.as_str(), x.count))
+                .collect::<Vec<_>>(),
+            [("Best of", 1), ("Trips", 1)]
+        );
         assert_eq!(albums[1].id, local);
         assert!(!b.merge_sidecar(ib, &sc).unwrap().changed(), "idempotent");
 
         // Old sidecars without the field still read; empty lists aren't written.
-        let plain = Sidecar::from_json(&b.sidecar(ib).unwrap().to_json().replace(r#","albums":["Best of","Trips"]"#, "")).unwrap();
+        let plain = Sidecar::from_json(
+            &b.sidecar(ib)
+                .unwrap()
+                .to_json()
+                .replace(r#","albums":["Best of","Trips"]"#, ""),
+        )
+        .unwrap();
         assert!(plain.image.albums.is_empty());
         b.remove_from_album(local, &[ib]).unwrap();
         b.delete_album(albums[0].id).unwrap();

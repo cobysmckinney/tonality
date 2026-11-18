@@ -24,7 +24,15 @@
   const key = (field: string) => `mask${sel}.${field}`;
 
   type AdjustKey = keyof LocalAdjust;
-  type Control = { key: AdjustKey; label: string; min: number; max: number; step?: number; decimals?: number; track?: string };
+  type Control = {
+    key: AdjustKey;
+    label: string;
+    min: number;
+    max: number;
+    step?: number;
+    decimals?: number;
+    track?: string;
+  };
   const light: Control[] = [
     { key: "exposure", label: "Exposure", min: -4, max: 4, step: 0.01, decimals: 2 },
     { key: "contrast", label: "Contrast", min: -100, max: 100 },
@@ -34,9 +42,27 @@
     { key: "blacks", label: "Blacks", min: -100, max: 100 },
   ];
   const color: Control[] = [
-    { key: "temperature", label: "Temperature", min: -100, max: 100, track: "linear-gradient(90deg, #4f7fd9, #d8d8d8 50%, #e0a63c)" },
-    { key: "tint", label: "Tint", min: -100, max: 100, track: "linear-gradient(90deg, #4fb55a, #d8d8d8 50%, #c45bc4)" },
-    { key: "hue", label: "Hue", min: -100, max: 100, track: "linear-gradient(90deg, #c46bd0, #d8d8d8 50%, #d8b04f)" },
+    {
+      key: "temperature",
+      label: "Temperature",
+      min: -100,
+      max: 100,
+      track: "linear-gradient(90deg, #4f7fd9, #d8d8d8 50%, #e0a63c)",
+    },
+    {
+      key: "tint",
+      label: "Tint",
+      min: -100,
+      max: 100,
+      track: "linear-gradient(90deg, #4fb55a, #d8d8d8 50%, #c45bc4)",
+    },
+    {
+      key: "hue",
+      label: "Hue",
+      min: -100,
+      max: 100,
+      track: "linear-gradient(90deg, #c46bd0, #d8d8d8 50%, #d8b04f)",
+    },
     { key: "saturation", label: "Saturation", min: -100, max: 100 },
     { key: "vibrance", label: "Vibrance", min: -100, max: 100 },
   ];
@@ -70,7 +96,9 @@
     tint: mask ? mask.adjust.colorAmount !== 0 : false,
     detail: mask ? detail.some((c) => mask.adjust[c.key] !== 0) : false,
     effects: mask ? effects.some((c) => get(c.key) !== 0) : false,
-    range: mask ? mask.range.low !== 0 || mask.range.high !== 100 || mask.range.smoothness !== 20 : false,
+    range: mask
+      ? mask.range.low !== 0 || mask.range.high !== 100 || mask.range.smoothness !== 20
+      : false,
   });
 
   function zero(keys: AdjustKey[]) {
@@ -101,7 +129,8 @@
     return k ? session.aiStatus.get(k) : undefined;
   }
   const progress = $derived(session.aiProgress);
-  const pct = (p: { done: number; total: number }) => Math.round((100 * p.done) / Math.max(p.total, 1));
+  const pct = (p: { done: number; total: number }) =>
+    Math.round((100 * p.done) / Math.max(p.total, 1));
 
   const kindName = (m: Mask) =>
     m.shape.kind === "ai"
@@ -120,9 +149,12 @@
   };
   const hints: Record<Mask["shape"]["kind"], string> = {
     ai: "Found automatically. Paint to add to it, hold Alt to erase.",
-    linear: "Full effect beyond the solid line, fading to nothing at the faint one. Drag either end, or the pin to move it.",
-    radial: "Drag inside to move, the edge handles to resize, the blue knob to rotate (Shift: 15° steps).",
-    brush: "Paint over the image. Hold Alt to erase, Alt+wheel or [ ] to change size, Space to pan.",
+    linear:
+      "Full effect beyond the solid line, fading to nothing at the faint one. Drag either end, or the pin to move it.",
+    radial:
+      "Drag inside to move, the edge handles to resize, the blue knob to rotate (Shift: 15° steps).",
+    brush:
+      "Paint over the image. Hold Alt to erase, Alt+wheel or [ ] to change size, Space to pan.",
   };
 </script>
 
@@ -131,7 +163,11 @@
     <HistogramView {histogram} />
     <header>
       {#if mask}
-        <span class="kind-icon"><svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"><path d={SHAPE_ICON[mask.shape.kind]} /></svg></span>
+        <span class="kind-icon"
+          ><svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"
+            ><path d={SHAPE_ICON[mask.shape.kind]} /></svg
+          ></span
+        >
         <span class="heading">
           <span class="name">{mask.name}</span>
           <span class="sub">{kindName(mask)}</span>
@@ -139,14 +175,21 @@
       {:else}
         <span class="heading"><span class="name">Masks</span></span>
       {/if}
-      <button class="primary" onclick={() => session.stopMasks()} title="Back to the adjustments (M)">Done</button>
+      <button
+        class="primary"
+        onclick={() => session.stopMasks()}
+        title="Back to the adjustments (M)">Done</button
+      >
     </header>
   </div>
 
   <div class="scroll">
     {#if !masks.length}
       <div class="empty">
-        <p class="hint">Masks apply their own adjustments to part of the photo: a gradient across it, an area round a subject, or wherever you paint.</p>
+        <p class="hint">
+          Masks apply their own adjustments to part of the photo: a gradient across it, an area
+          round a subject, or wherever you paint.
+        </p>
         <MaskCreate />
       </div>
     {:else if !mask || sel === null}
@@ -180,7 +223,10 @@
                 {/if}
               </p>
             {:else if st?.state === "empty"}
-              <p class="ai-note warn">No {target === "people" ? "people" : target} found in this photo. Paint to add areas by hand.</p>
+              <p class="ai-note warn">
+                No {target === "people" ? "people" : target} found in this photo. Paint to add areas by
+                hand.
+              </p>
             {:else if st?.state === "error"}
               <p class="ai-note warn">Detection failed: {st.message}</p>
               <button class="ghost" onclick={() => session.detect(mask)}>Try again</button>
@@ -190,8 +236,14 @@
             {/if}
           {/if}
           <div class="modes">
-            <button class:active={!session.brush.erase} onclick={() => (session.brush.erase = false)}>{mask.shape.kind === "ai" ? "Add" : "Paint"}</button>
-            <button class:active={session.brush.erase} onclick={() => (session.brush.erase = true)}>Erase</button>
+            <button
+              class:active={!session.brush.erase}
+              onclick={() => (session.brush.erase = false)}
+              >{mask.shape.kind === "ai" ? "Add" : "Paint"}</button
+            >
+            <button class:active={session.brush.erase} onclick={() => (session.brush.erase = true)}
+              >Erase</button
+            >
           </div>
           <Slider
             label="Size"
@@ -238,13 +290,28 @@
           oninput={(v) => (mask.amount = v)}
           oncommit={() => commit(key("amount"))}
         />
-        <button class="toggle" class:active={mask.invert} onclick={toggleInvert} aria-pressed={mask.invert}>
-          <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><circle cx="8" cy="8" r="6" /><path d="M8 2a6 6 0 0 0 0 12Z" fill="currentColor" /></svg>
+        <button
+          class="toggle"
+          class:active={mask.invert}
+          onclick={toggleInvert}
+          aria-pressed={mask.invert}
+        >
+          <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"
+            ><circle cx="8" cy="8" r="6" /><path
+              d="M8 2a6 6 0 0 0 0 12Z"
+              fill="currentColor"
+            /></svg
+          >
           Invert
         </button>
       </Section>
 
-      <Section title="Light" storeKey="mask.light" edited={edited.light} onreset={() => zero(keysOf(light))}>
+      <Section
+        title="Light"
+        storeKey="mask.light"
+        edited={edited.light}
+        onreset={() => zero(keysOf(light))}
+      >
         {#each light as c (c.key)}
           <Slider
             label={c.label}
@@ -259,7 +326,12 @@
         {/each}
       </Section>
 
-      <Section title="Color" storeKey="mask.color" edited={edited.color} onreset={() => zero(keysOf(color))}>
+      <Section
+        title="Color"
+        storeKey="mask.color"
+        edited={edited.color}
+        onreset={() => zero(keysOf(color))}
+      >
         {#each color as c (c.key)}
           <Slider
             label={c.label}
@@ -273,10 +345,20 @@
         {/each}
       </Section>
 
-      <Section title="Color Tint" storeKey="mask.tint" open={false} edited={edited.tint} onreset={() => zero(tintKeys)}>
+      <Section
+        title="Color Tint"
+        storeKey="mask.tint"
+        open={false}
+        edited={edited.tint}
+        onreset={() => zero(tintKeys)}
+      >
         <p class="hint">Wash the area with a colour, keeping its brightness.</p>
         <div class="tint-row">
-          <span class="swatch" style:background={tintSwatch(mask.adjust.colorHue)} style:opacity={0.35 + 0.65 * (mask.adjust.colorAmount / 100)}></span>
+          <span
+            class="swatch"
+            style:background={tintSwatch(mask.adjust.colorHue)}
+            style:opacity={0.35 + 0.65 * (mask.adjust.colorAmount / 100)}
+          ></span>
           <div class="grow">
             <Slider
               label="Hue"
@@ -303,7 +385,13 @@
         />
       </Section>
 
-      <Section title="Detail" storeKey="mask.detail" open={false} edited={edited.detail} onreset={() => zero(keysOf(detail))}>
+      <Section
+        title="Detail"
+        storeKey="mask.detail"
+        open={false}
+        edited={edited.detail}
+        onreset={() => zero(keysOf(detail))}
+      >
         {#each detail as c (c.key)}
           <Slider
             label={c.label}
@@ -316,7 +404,13 @@
         {/each}
       </Section>
 
-      <Section title="Effects" storeKey="mask.effects" open={false} edited={edited.effects} onreset={() => zero(keysOf(effects))}>
+      <Section
+        title="Effects"
+        storeKey="mask.effects"
+        open={false}
+        edited={edited.effects}
+        onreset={() => zero(keysOf(effects))}
+      >
         {#each effects as c (c.key)}
           <Slider
             label={c.label}
@@ -329,7 +423,13 @@
         {/each}
       </Section>
 
-      <Section title="Luminance Range" storeKey="mask.range" open={false} edited={edited.range} onreset={resetRange}>
+      <Section
+        title="Luminance Range"
+        storeKey="mask.range"
+        open={false}
+        edited={edited.range}
+        onreset={resetRange}
+      >
         <p class="hint">Limit the mask to tones between these levels.</p>
         <Slider
           label="Darkest"

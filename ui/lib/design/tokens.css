@@ -1,16 +1,16 @@
 /* tonality design tokens — neutral greys so the UI never tints perception of the photo. */
 :root {
-  --bg-0: #0f0f0f;      /* app background / canvas surround */
-  --bg-1: #191919;      /* panels */
-  --bg-2: #222222;      /* raised controls */
-  --bg-3: #2b2b2b;      /* hover */
-  --bg-4: #343434;      /* active */
+  --bg-0: #0f0f0f; /* app background / canvas surround */
+  --bg-1: #191919; /* panels */
+  --bg-2: #222222; /* raised controls */
+  --bg-3: #2b2b2b; /* hover */
+  --bg-4: #343434; /* active */
   --line: #262626;
   --line-strong: #363636;
   --text-0: #ececec;
   --text-1: #a8a8a8;
   --text-2: #6e6e6e;
-  --accent: #d9d9d9;    /* deliberately colorless; colour lives in the photo */
+  --accent: #d9d9d9; /* deliberately colorless; colour lives in the photo */
   --focus: #7aa2ff;
   --danger: #ff6b6b;
   --branch-0: #7aa2ff;
@@ -112,7 +112,9 @@ button {
   color: var(--text-1);
   font-size: var(--fs-s);
   white-space: nowrap;
-  transition: background 120ms var(--ease), color 120ms var(--ease);
+  transition:
+    background 120ms var(--ease),
+    color 120ms var(--ease);
 }
 .btn:hover:not(:disabled) {
   background: var(--bg-3);
@@ -147,7 +149,9 @@ button {
   height: 26px;
   border-radius: var(--radius-s);
   color: var(--text-2);
-  transition: background 120ms var(--ease), color 120ms var(--ease);
+  transition:
+    background 120ms var(--ease),
+    color 120ms var(--ease);
 }
 .icon-btn:hover:not(:disabled),
 .icon-btn.on {
@@ -174,7 +178,9 @@ button {
   font-size: var(--fs-xs);
   color: var(--text-2);
   white-space: nowrap;
-  transition: background 120ms var(--ease), color 120ms var(--ease);
+  transition:
+    background 120ms var(--ease),
+    color 120ms var(--ease);
 }
 .seg > button:hover {
   color: var(--text-0);

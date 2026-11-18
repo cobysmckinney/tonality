@@ -13,7 +13,8 @@ export function normalise(points: Point[]): Point[] {
     .map(([x, y]): Point => [Math.min(1, Math.max(0, x)), Math.min(1, Math.max(0, y))])
     .sort((a, b) => a[0] - b[0]);
   const out: Point[] = [];
-  for (const q of p) if (!out.length || Math.abs(q[0] - out[out.length - 1][0]) >= 1e-4) out.push(q);
+  for (const q of p)
+    if (!out.length || Math.abs(q[0] - out[out.length - 1][0]) >= 1e-4) out.push(q);
   return out.length < 2 ? IDENTITY.map((q) => [...q] as Point) : out;
 }
 
@@ -26,7 +27,10 @@ export function isIdentity(points: Point[]): boolean {
 export function curve(points: Point[]): (x: number) => number {
   const p = normalise(points);
   const n = p.length;
-  const d = Array.from({ length: n - 1 }, (_, i) => (p[i + 1][1] - p[i][1]) / (p[i + 1][0] - p[i][0]));
+  const d = Array.from(
+    { length: n - 1 },
+    (_, i) => (p[i + 1][1] - p[i][1]) / (p[i + 1][0] - p[i][0]),
+  );
   const m = new Array<number>(n).fill(0);
   m[0] = d[0];
   m[n - 1] = d[n - 2];

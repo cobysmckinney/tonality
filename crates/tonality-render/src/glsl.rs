@@ -31,13 +31,17 @@ pub struct GlslProgram {
 }
 
 pub fn preview_glsl() -> Result<GlslProgram, String> {
-    let module = naga::front::wgsl::parse_str(DEVELOP_WGSL).map_err(|e| e.emit_to_string(DEVELOP_WGSL))?;
+    let module =
+        naga::front::wgsl::parse_str(DEVELOP_WGSL).map_err(|e| e.emit_to_string(DEVELOP_WGSL))?;
     let info = Validator::new(ValidationFlags::all(), Capabilities::empty())
         .validate(&module)
         .map_err(|e| format!("{e:?}"))?;
 
     let options = glsl::Options {
-        version: glsl::Version::Embedded { version: 300, is_webgl: true },
+        version: glsl::Version::Embedded {
+            version: 300,
+            is_webgl: true,
+        },
         writer_flags: glsl::WriterFlags::empty(),
         ..Default::default()
     };
@@ -55,9 +59,20 @@ pub fn preview_glsl() -> Result<GlslProgram, String> {
 
     let write = |stage, entry: &str| -> Result<(String, glsl::ReflectionInfo), String> {
         let mut out = String::new();
-        let pipeline = glsl::PipelineOptions { shader_stage: stage, entry_point: entry.into(), multiview: None };
-        let mut w = glsl::Writer::new(&mut out, &module, &info, &options, &pipeline, Default::default())
-            .map_err(|e| format!("{e:?}"))?;
+        let pipeline = glsl::PipelineOptions {
+            shader_stage: stage,
+            entry_point: entry.into(),
+            multiview: None,
+        };
+        let mut w = glsl::Writer::new(
+            &mut out,
+            &module,
+            &info,
+            &options,
+            &pipeline,
+            Default::default(),
+        )
+        .map_err(|e| format!("{e:?}"))?;
         let refl = w.write().map_err(|e| format!("{e:?}"))?;
         Ok((out, refl))
     };
@@ -65,8 +80,16 @@ pub fn preview_glsl() -> Result<GlslProgram, String> {
     let (vertex, vrefl) = write(naga::ShaderStage::Vertex, "vs_main")?;
     let (fragment, frefl) = write(naga::ShaderStage::Fragment, "fs_main")?;
 
-    let params_block = frefl.uniforms.get(&params_h).cloned().ok_or("params not used in fragment")?;
-    let view_block = vrefl.uniforms.get(&view_h).cloned().ok_or("view not used in vertex")?;
+    let params_block = frefl
+        .uniforms
+        .get(&params_h)
+        .cloned()
+        .ok_or("params not used in fragment")?;
+    let view_block = vrefl
+        .uniforms
+        .get(&view_h)
+        .cloned()
+        .ok_or("view not used in vertex")?;
     let sampler_for = |texture: &str| -> Result<String, String> {
         let h = find_global(texture)?;
         frefl
@@ -111,6 +134,10 @@ mod tests {
         assert!(p.fragment.contains("sampler2DArray"));
         assert!(p.fragment.contains(&p.params_block));
         assert!(p.vertex.contains(&p.view_block));
-        println!("{}\n----\n{}\n{p:?}", p.vertex, p.fragment.lines().take(40).collect::<Vec<_>>().join("\n"));
+        println!(
+            "{}\n----\n{}\n{p:?}",
+            p.vertex,
+            p.fragment.lines().take(40).collect::<Vec<_>>().join("\n")
+        );
     }
 }

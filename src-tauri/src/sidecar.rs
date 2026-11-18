@@ -86,7 +86,9 @@ fn write(app: &AppHandle, id: ImageId) -> CmdResult<()> {
 fn reconcile(app: &AppHandle) {
     let store = app.state::<Store>();
     let catalog = app.state::<CatalogState>();
-    let Ok(ids) = catalog.with(|c| c.image_ids()) else { return };
+    let Ok(ids) = catalog.with(|c| c.image_ids()) else {
+        return;
+    };
     for id in ids {
         if let Ok((rel, _, _)) = catalog.with(|c| c.image_file(id)) {
             adopt(&catalog, id, &store.abs(&rel));
@@ -110,16 +112,19 @@ impl Sidecars {
     pub fn start(app: AppHandle) -> Self {
         let (tx, rx) = mpsc::channel::<Msg>();
         let notify = tx.clone();
-        app.state::<CatalogState>().on_change(Box::new(move |ids: &[ImageId]| {
-            let _ = notify.send(Msg::Dirty(ids.to_vec()));
-        }));
+        app.state::<CatalogState>()
+            .on_change(Box::new(move |ids: &[ImageId]| {
+                let _ = notify.send(Msg::Dirty(ids.to_vec()));
+            }));
         std::thread::Builder::new()
             .name("sidecars".into())
             .spawn(move || {
                 reconcile(&app);
                 let mut dirty = BTreeSet::new();
                 let mut flushes = Vec::new();
-                let take = |m: Msg, dirty: &mut BTreeSet<ImageId>, flushes: &mut Vec<Sender<()>>| match m {
+                let take = |m: Msg,
+                            dirty: &mut BTreeSet<ImageId>,
+                            flushes: &mut Vec<Sender<()>>| match m {
                     Msg::Dirty(ids) => dirty.extend(ids),
                     Msg::Flush(done) => flushes.push(done),
                 };

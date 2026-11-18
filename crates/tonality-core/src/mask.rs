@@ -49,7 +49,12 @@ pub enum MaskShape {
     Linear { from: [f32; 2], to: [f32; 2] },
     /// An ellipse: full effect inside, fading out over the outer `feather` (0..=1) of its radius.
     /// `radius` is in long-edge units; `angle` (degrees) turns it clockwise.
-    Radial { center: [f32; 2], radius: [f32; 2], angle: f32, feather: f32 },
+    Radial {
+        center: [f32; 2],
+        radius: [f32; 2],
+        angle: f32,
+        feather: f32,
+    },
     /// Painted strokes, applied in order.
     Brush { strokes: Vec<Stroke> },
     /// Found by an on-device model. The raster itself is cached outside the edit (it is
@@ -73,7 +78,9 @@ pub enum AiTarget {
     Sky,
     People,
     /// Whatever was circled: `lasso` is a closed loop in source uv.
-    Object { lasso: Vec<[f32; 2]> },
+    Object {
+        lasso: Vec<[f32; 2]>,
+    },
 }
 
 impl AiTarget {
@@ -104,7 +111,12 @@ impl AiTarget {
 
 impl Default for MaskShape {
     fn default() -> Self {
-        MaskShape::Radial { center: [0.5, 0.5], radius: [0.2, 0.2], angle: 0.0, feather: 0.5 }
+        MaskShape::Radial {
+            center: [0.5, 0.5],
+            radius: [0.2, 0.2],
+            angle: 0.0,
+            feather: 0.5,
+        }
     }
 }
 
@@ -143,7 +155,13 @@ pub struct Stroke {
 
 impl Default for Stroke {
     fn default() -> Self {
-        Self { points: Vec::new(), radius: 0.03, feather: 0.5, strength: 1.0, erase: false }
+        Self {
+            points: Vec::new(),
+            radius: 0.03,
+            feather: 0.5,
+            strength: 1.0,
+            erase: false,
+        }
     }
 }
 
@@ -160,7 +178,11 @@ pub struct LuminanceRange {
 
 impl Default for LuminanceRange {
     fn default() -> Self {
-        Self { low: 0.0, high: 100.0, smoothness: 20.0 }
+        Self {
+            low: 0.0,
+            high: 100.0,
+            smoothness: 20.0,
+        }
     }
 }
 
@@ -225,7 +247,10 @@ pub const MASK_EDGE: u32 = 1024;
 pub fn mask_size(src_w: u32, src_h: u32) -> (u32, u32) {
     let long = src_w.max(src_h).max(1) as f32;
     let s = MASK_EDGE as f32 / long;
-    (((src_w as f32 * s).round() as u32).max(1), ((src_h as f32 * s).round() as u32).max(1))
+    (
+        ((src_w as f32 * s).round() as u32).max(1),
+        ((src_h as f32 * s).round() as u32).max(1),
+    )
 }
 
 /// The rasters of every raster mask in `masks` (brush and AI, in order), as layers of one
@@ -277,7 +302,13 @@ pub fn mask_layers(
         data.extend_from_slice(&layer);
         layers += 1;
     }
-    BrushLayers { width, height, layers, data, missing }
+    BrushLayers {
+        width,
+        height,
+        layers,
+        data,
+        missing,
+    }
 }
 
 /// Paint one stroke into `layer`.
@@ -310,7 +341,11 @@ pub fn stamp_segment(layer: &mut [u8], w: u32, h: u32, a: [f32; 2], b: [f32; 2],
     for y in y0..y1 {
         for x in x0..x1 {
             let (px, py) = (x as f32 + 0.5 - ax, y as f32 + 0.5 - ay);
-            let t = if len2 > 0.0 { ((px * dx + py * dy) / len2).clamp(0.0, 1.0) } else { 0.0 };
+            let t = if len2 > 0.0 {
+                ((px * dx + py * dy) / len2).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
             let (ex, ey) = (px - t * dx, py - t * dy);
             let d = (ex * ex + ey * ey).sqrt();
             if d >= r {
@@ -319,7 +354,11 @@ pub fn stamp_segment(layer: &mut [u8], w: u32, h: u32, a: [f32; 2], b: [f32; 2],
             let v = strength * (1.0 - smoothstep(inner, r, d));
             let q = (v * 255.0).round() as u8;
             let p = &mut layer[(y * w + x) as usize];
-            *p = if s.erase { (*p).min(255 - q) } else { (*p).max(q) };
+            *p = if s.erase {
+                (*p).min(255 - q)
+            } else {
+                (*p).max(q)
+            };
         }
     }
 }
@@ -342,7 +381,9 @@ pub(crate) fn describe_masks(prev: &[Mask], next: &[Mask]) -> Vec<(String, Strin
         return one(format!("Add {}", next[prev.len()].name));
     }
     if next.len() + 1 == prev.len() {
-        let i = (0..next.len()).find(|&i| prev[i] != next[i]).unwrap_or(next.len());
+        let i = (0..next.len())
+            .find(|&i| prev[i] != next[i])
+            .unwrap_or(next.len());
         if prev[..i] == next[..i] && prev[i + 1..] == next[i..] {
             return one(format!("Delete {}", prev[i].name));
         }
@@ -350,7 +391,11 @@ pub(crate) fn describe_masks(prev: &[Mask], next: &[Mask]) -> Vec<(String, Strin
     if prev.len() != next.len() {
         return one("Masks".into());
     }
-    prev.iter().zip(next).filter(|(a, b)| a != b).map(|(a, b)| (b.name.clone(), describe_mask(a, b))).collect()
+    prev.iter()
+        .zip(next)
+        .filter(|(a, b)| a != b)
+        .map(|(a, b)| (b.name.clone(), describe_mask(a, b)))
+        .collect()
 }
 
 fn describe_mask(a: &Mask, b: &Mask) -> String {
@@ -368,14 +413,24 @@ fn describe_mask(a: &Mask, b: &Mask) -> String {
             | (MaskShape::Ai { refine: sa, .. }, MaskShape::Ai { refine: sb, .. })
                 if sb.len() > sa.len() =>
             {
-                if sb.last().is_some_and(|s| s.erase) { "Erase".into() } else { "Paint".into() }
+                if sb.last().is_some_and(|s| s.erase) {
+                    "Erase".into()
+                } else {
+                    "Paint".into()
+                }
             }
-            (MaskShape::Ai { target: ta, .. }, MaskShape::Ai { target: tb, .. }) if ta != tb => "Reselect".into(),
+            (MaskShape::Ai { target: ta, .. }, MaskShape::Ai { target: tb, .. }) if ta != tb => {
+                "Reselect".into()
+            }
             _ => "Shape".into(),
         });
     }
     if a.invert != b.invert {
-        what.push(if b.invert { "Invert".into() } else { "Uninvert".into() });
+        what.push(if b.invert {
+            "Invert".into()
+        } else {
+            "Uninvert".into()
+        });
     }
     if a.amount != b.amount {
         what.push(format!("Amount {}", b.amount.round() as i64));
@@ -413,7 +468,12 @@ fn describe_mask(a: &Mask, b: &Mask) -> String {
         what.push(format!("Color Hue {}°", b.adjust.color_hue.round() as i64));
     }
     match what.as_slice() {
-        [w] if w == "Paint" || w == "Erase" || w == "Invert" || w == "Uninvert" || w == "Reselect" => {
+        [w] if w == "Paint"
+            || w == "Erase"
+            || w == "Invert"
+            || w == "Uninvert"
+            || w == "Reselect" =>
+        {
             format!("{w} {name}")
         }
         [w] => format!("{name} {w}"),
@@ -426,11 +486,21 @@ mod tests {
     use super::*;
 
     fn stroke(points: Vec<[f32; 2]>) -> Stroke {
-        Stroke { points, radius: 0.05, feather: 0.5, strength: 1.0, erase: false }
+        Stroke {
+            points,
+            radius: 0.05,
+            feather: 0.5,
+            strength: 1.0,
+            erase: false,
+        }
     }
 
     fn brush(strokes: Vec<Stroke>) -> Mask {
-        Mask { name: "Brush 1".into(), shape: MaskShape::Brush { strokes }, ..Mask::default() }
+        Mask {
+            name: "Brush 1".into(),
+            shape: MaskShape::Brush { strokes },
+            ..Mask::default()
+        }
     }
 
     #[test]
@@ -444,14 +514,21 @@ mod tests {
         let (w, h) = (200, 100);
         let mut layer = vec![0u8; (w * h) as usize];
         paint(&mut layer, w, h, &stroke(vec![[0.2, 0.5], [0.8, 0.5]]));
-        let at = |l: &[u8], x: f32, y: f32| l[((y * h as f32) as u32 * w + (x * w as f32) as u32) as usize];
+        let at = |l: &[u8], x: f32, y: f32| {
+            l[((y * h as f32) as u32 * w + (x * w as f32) as u32) as usize]
+        };
         assert_eq!(at(&layer, 0.5, 0.5), 255);
         assert_eq!(at(&layer, 0.5, 0.1), 0);
         // The soft edge falls off monotonically.
-        let edge: Vec<u8> = (0..12).map(|i| layer[((50 + i) * w + 100) as usize]).collect();
+        let edge: Vec<u8> = (0..12)
+            .map(|i| layer[((50 + i) * w + 100) as usize])
+            .collect();
         assert!(edge.windows(2).all(|p| p[0] >= p[1]), "{edge:?}");
         assert!(edge.iter().any(|&v| v > 0 && v < 255));
-        let erase = Stroke { erase: true, ..stroke(vec![[0.5, 0.5]]) };
+        let erase = Stroke {
+            erase: true,
+            ..stroke(vec![[0.5, 0.5]])
+        };
         paint(&mut layer, w, h, &erase);
         assert_eq!(at(&layer, 0.5, 0.5), 0);
         assert_eq!(at(&layer, 0.25, 0.5), 255);
@@ -476,13 +553,28 @@ mod tests {
     fn reference_values_for_the_preview() {
         let (w, h) = (64, 48);
         let mut layer = vec![0u8; (w * h) as usize];
-        let s = Stroke { points: vec![[0.25, 0.5], [0.75, 0.25]], radius: 0.1, feather: 0.7, strength: 0.8, erase: false };
+        let s = Stroke {
+            points: vec![[0.25, 0.5], [0.75, 0.25]],
+            radius: 0.1,
+            feather: 0.7,
+            strength: 0.8,
+            erase: false,
+        };
         paint(&mut layer, w, h, &s);
         let sum: u32 = layer.iter().map(|&v| v as u32).sum();
-        let samples: Vec<u8> = [(16, 24), (16, 27), (20, 26), (32, 21), (40, 19), (16, 30), (50, 9), (11, 24)]
-            .iter()
-            .map(|&(x, y)| layer[(y * w + x) as usize])
-            .collect();
+        let samples: Vec<u8> = [
+            (16, 24),
+            (16, 27),
+            (20, 26),
+            (32, 21),
+            (40, 19),
+            (16, 30),
+            (50, 9),
+            (11, 24),
+        ]
+        .iter()
+        .map(|&(x, y)| layer[(y * w + x) as usize])
+        .collect();
         assert_eq!((sum, samples), (REF_SUM, REF_SAMPLES.to_vec()));
     }
     const REF_SUM: u32 = 69740;
@@ -504,52 +596,102 @@ mod tests {
 
     #[test]
     fn describes_mask_changes() {
-        let r = Mask { name: "Radial 1".into(), ..Mask::default() };
-        let full = |a: Vec<Mask>, b: Vec<Mask>| describe_masks(&a, &b).into_iter().map(|(_, f)| f).collect::<Vec<_>>();
+        let r = Mask {
+            name: "Radial 1".into(),
+            ..Mask::default()
+        };
+        let full = |a: Vec<Mask>, b: Vec<Mask>| {
+            describe_masks(&a, &b)
+                .into_iter()
+                .map(|(_, f)| f)
+                .collect::<Vec<_>>()
+        };
         assert_eq!(full(vec![], vec![r.clone()]), ["Add Radial 1"]);
         assert_eq!(full(vec![r.clone()], vec![]), ["Delete Radial 1"]);
         let mut e = r.clone();
         e.adjust.exposure = 0.5;
-        assert_eq!(full(vec![r.clone()], vec![e.clone()]), ["Radial 1 Exposure +0.50"]);
+        assert_eq!(
+            full(vec![r.clone()], vec![e.clone()]),
+            ["Radial 1 Exposure +0.50"]
+        );
         e.invert = true;
-        assert_eq!(full(vec![r.clone()], vec![e.clone()]), ["Radial 1: 2 adjustments"]);
+        assert_eq!(
+            full(vec![r.clone()], vec![e.clone()]),
+            ["Radial 1: 2 adjustments"]
+        );
         let b0 = brush(vec![]);
         let b1 = brush(vec![stroke(vec![[0.5, 0.5]])]);
         assert_eq!(full(vec![b0.clone()], vec![b1.clone()]), ["Paint Brush 1"]);
         let mut hidden = r.clone();
         hidden.enabled = false;
-        assert_eq!(full(vec![r.clone(), b0.clone()], vec![hidden, b0.clone()]), ["Hide Radial 1"]);
-        assert_eq!(full(vec![r.clone(), b0.clone(), b1.clone()], vec![r.clone(), b1.clone()]), ["Delete Brush 1"]);
+        assert_eq!(
+            full(vec![r.clone(), b0.clone()], vec![hidden, b0.clone()]),
+            ["Hide Radial 1"]
+        );
+        assert_eq!(
+            full(
+                vec![r.clone(), b0.clone(), b1.clone()],
+                vec![r.clone(), b1.clone()]
+            ),
+            ["Delete Brush 1"]
+        );
     }
 
     #[test]
     fn json_shape() {
-        let m = Mask { name: "Linear 1".into(), shape: MaskShape::Linear { from: [0.5, 0.0], to: [0.5, 0.5] }, ..Mask::default() };
+        let m = Mask {
+            name: "Linear 1".into(),
+            shape: MaskShape::Linear {
+                from: [0.5, 0.0],
+                to: [0.5, 0.5],
+            },
+            ..Mask::default()
+        };
         let j = serde_json::to_string(&m).unwrap();
-        assert!(j.contains(r#""shape":{"kind":"linear","from":[0.5,0.0],"to":[0.5,0.5]}"#), "{j}");
+        assert!(
+            j.contains(r#""shape":{"kind":"linear","from":[0.5,0.0],"to":[0.5,0.5]}"#),
+            "{j}"
+        );
         let back: Mask = serde_json::from_str(&j).unwrap();
         assert_eq!(back, m);
     }
 
     fn ai(target: AiTarget) -> Mask {
-        Mask { shape: MaskShape::Ai { target, model: "subject@1".into(), refine: vec![] }, ..Mask::default() }
+        Mask {
+            shape: MaskShape::Ai {
+                target,
+                model: "subject@1".into(),
+                refine: vec![],
+            },
+            ..Mask::default()
+        }
     }
 
     #[test]
     fn ai_json_shape() {
         let m = ai(AiTarget::Sky);
         let j = serde_json::to_string(&m.shape).unwrap();
-        assert_eq!(j, r#"{"kind":"ai","target":{"kind":"sky"},"model":"subject@1","refine":[]}"#);
+        assert_eq!(
+            j,
+            r#"{"kind":"ai","target":{"kind":"sky"},"model":"subject@1","refine":[]}"#
+        );
         // `refine` may be absent.
-        let back: MaskShape = serde_json::from_str(r#"{"kind":"ai","target":{"kind":"object","lasso":[[0.1,0.2]]},"model":"sam@1"}"#).unwrap();
+        let back: MaskShape = serde_json::from_str(
+            r#"{"kind":"ai","target":{"kind":"object","lasso":[[0.1,0.2]]},"model":"sam@1"}"#,
+        )
+        .unwrap();
         assert!(matches!(back, MaskShape::Ai { ref refine, .. } if refine.is_empty()));
     }
 
     #[test]
     fn cache_keys_are_stable_and_lasso_specific() {
         assert_eq!(AiTarget::Sky.cache_key(), "sky");
-        let a = AiTarget::Object { lasso: vec![[0.1, 0.2], [0.3, 0.4]] };
-        let b = AiTarget::Object { lasso: vec![[0.1, 0.2], [0.3, 0.41]] };
+        let a = AiTarget::Object {
+            lasso: vec![[0.1, 0.2], [0.3, 0.4]],
+        };
+        let b = AiTarget::Object {
+            lasso: vec![[0.1, 0.2], [0.3, 0.41]],
+        };
         assert_eq!(a.cache_key(), a.clone().cache_key());
         assert_ne!(a.cache_key(), b.cache_key());
         assert!(a.cache_key().starts_with("object-"));
@@ -557,18 +699,32 @@ mod tests {
 
     #[test]
     fn ai_layers_sit_between_brush_layers_and_report_missing() {
-        let masks = vec![brush(vec![stroke(vec![[0.5, 0.5]])]), Mask::default(), ai(AiTarget::Subject), ai(AiTarget::Sky)];
+        let masks = vec![
+            brush(vec![stroke(vec![[0.5, 0.5]])]),
+            Mask::default(),
+            ai(AiTarget::Subject),
+            ai(AiTarget::Sky),
+        ];
         let (w, h) = mask_size(64, 32);
         let len = (w * h) as usize;
         let l = mask_layers(&masks, 64, 32, |i, _| (i == 2).then(|| vec![200u8; len]));
         assert_eq!(l.layers, 3, "brush, subject, sky; the radial has no layer");
         assert_eq!(l.missing, [3]);
-        assert!(l.data[len..2 * len].iter().all(|&v| v == 200), "subject raster");
-        assert!(l.data[2 * len..].iter().all(|&v| v == 0), "missing sky is empty");
+        assert!(
+            l.data[len..2 * len].iter().all(|&v| v == 200),
+            "subject raster"
+        );
+        assert!(
+            l.data[2 * len..].iter().all(|&v| v == 0),
+            "missing sky is empty"
+        );
         // Refine strokes paint over the model raster.
         let mut refined = ai(AiTarget::Subject);
         if let MaskShape::Ai { refine, .. } = &mut refined.shape {
-            refine.push(Stroke { erase: true, ..stroke(vec![[0.5, 0.5]]) });
+            refine.push(Stroke {
+                erase: true,
+                ..stroke(vec![[0.5, 0.5]])
+            });
         }
         let l = mask_layers(&[refined], 64, 32, |_, _| Some(vec![255u8; len]));
         let centre = (h / 2 * w + w / 2) as usize;

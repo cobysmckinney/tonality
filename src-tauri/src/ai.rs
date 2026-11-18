@@ -28,12 +28,19 @@ use crate::CmdResult;
 /// Where the raster for `mask` of the photo with contents `hash` is cached.
 pub fn raster_path(store: &Store, hash: &str, model: &str, key: &str) -> PathBuf {
     let model = model.replace(['@', '/', '\\'], "-");
-    store.root().join("cache").join("masks").join(&hash[..2]).join(format!("{}-{model}-{key}.png", &hash[2..]))
+    store
+        .root()
+        .join("cache")
+        .join("masks")
+        .join(&hash[..2])
+        .join(format!("{}-{model}-{key}.png", &hash[2..]))
 }
 
 fn raster_of(store: &Store, hash: &str, m: &Mask) -> Option<PathBuf> {
     match &m.shape {
-        MaskShape::Ai { target, model, .. } => Some(raster_path(store, hash, model, &target.cache_key())),
+        MaskShape::Ai { target, model, .. } => {
+            Some(raster_path(store, hash, model, &target.cache_key()))
+        }
         _ => None,
     }
 }
@@ -49,18 +56,33 @@ pub fn save_raster(path: &std::path::Path, data: Vec<u8>, w: u32, h: u32) -> Res
     std::fs::create_dir_all(path.parent().unwrap()).map_err(|e| e.to_string())?;
     let img = image::GrayImage::from_raw(w, h, data).ok_or("raster has the wrong size")?;
     let tmp = crate::store::temp_path(path);
-    img.save_with_format(&tmp, image::ImageFormat::Png).map_err(|e| e.to_string())?;
+    img.save_with_format(&tmp, image::ImageFormat::Png)
+        .map_err(|e| e.to_string())?;
     std::fs::rename(&tmp, path).map_err(|e| e.to_string())
 }
 
 /// Every raster layer of `edit` for a photo (`hash`, `w × h`, lens `profile`): brush strokes,
 /// and AI masks from the cache, warped into corrected uv when lens correction is on.
 /// `missing` lists AI masks with no cached raster yet. Unchanged layers come from [`LayerCache`].
-pub fn layers(app: &AppHandle, hash: &str, edit: &EditState, w: u32, h: u32, profile: Option<&LensProfile>) -> BrushLayers {
+pub fn layers(
+    app: &AppHandle,
+    hash: &str,
+    edit: &EditState,
+    w: u32,
+    h: u32,
+    profile: Option<&LensProfile>,
+) -> BrushLayers {
     let store = app.state::<Store>();
     let (lw, lh) = mask_size(w, h);
     let table = lens_table(profile, &edit.lens, w as f32, h as f32);
-    app.state::<LayerCache>().layers(hash, &edit.masks, (w, h), &table, |m| raster_of(&store, hash, m), |p| load_raster(p, lw, lh))
+    app.state::<LayerCache>().layers(
+        hash,
+        &edit.masks,
+        (w, h),
+        &table,
+        |m| raster_of(&store, hash, m),
+        |p| load_raster(p, lw, lh),
+    )
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -73,7 +95,10 @@ pub fn models_dir(app: &AppHandle) -> PathBuf {
     if let Some(p) = std::env::var_os("TONALITY_MODELS").filter(|p| !p.is_empty()) {
         return p.into();
     }
-    app.path().app_data_dir().unwrap_or_else(|_| PathBuf::from(".")).join("models")
+    app.path()
+        .app_data_dir()
+        .unwrap_or_else(|_| PathBuf::from("."))
+        .join("models")
 }
 
 fn installed(app: &AppHandle, m: &Model) -> bool {
@@ -105,7 +130,16 @@ fn ensure(app: &AppHandle, m: &'static Model, image: Option<ImageId>) -> CmdResu
             let d = before + done;
             if d - last > total / 100 || d == total {
                 last = d;
-                let _ = app.emit("ai-progress", Progress { image, stage: "download", model: m.id, done: d, total });
+                let _ = app.emit(
+                    "ai-progress",
+                    Progress {
+                        image,
+                        stage: "download",
+                        model: m.id,
+                        done: d,
+                        total,
+                    },
+                );
             }
         };
         paths.push(download::ensure(&dir, f, &mut progress).map_err(|e| e.to_string())?);
@@ -151,14 +185,24 @@ pub fn detect(
     let model = registry::by_id(model_id).ok_or_else(|| format!("unknown model {model_id}"))?;
     let files = ensure(app, model, photo.image)?;
     let _busy = det.lock.lock().map_err(|_| "detector lock poisoned")?;
-    let _ = app.emit("ai-progress", Progress { image: photo.image, stage: "detect", model: model.id, done: 0, total: 1 });
+    let _ = app.emit(
+        "ai-progress",
+        Progress {
+            image: photo.image,
+            stage: "detect",
+            model: model.id,
+            done: 0,
+            total: 1,
+        },
+    );
 
     // At background priority: the models' threads (created on first use, inheriting it) and
     // the refinement loops yield to the UI.
     let found = crate::priority::pool().install(|| -> CmdResult<bool> {
         let (w, h) = mask_size(photo.full_width, photo.full_height);
         // Downsample before converting: the models never see more than the mask raster.
-        let img = input::neutral_srgb_sized(photo.pixels, photo.width, photo.height, photo.color, w, h);
+        let img =
+            input::neutral_srgb_sized(photo.pixels, photo.width, photo.height, photo.color, w, h);
         let guide = input::guide(&img, w, h);
         let save = |key: &str, r: Vec<u8>| -> CmdResult<bool> {
             let found = r.iter().filter(|&&v| v > 128).count() > (w * h / 500) as usize;
@@ -171,22 +215,44 @@ pub fn detect(
 
         let found = match (model.id, target) {
             ("subject@1", AiTarget::Subject) => {
-                let (p, pw, ph) = subject::detect(&files[0], subject::SubjectModel::U2NET, &img).map_err(err)?;
+                let (p, pw, ph) =
+                    subject::detect(&files[0], subject::SubjectModel::U2NET, &img).map_err(err)?;
                 save("subject", refine::to_raster(&p, pw, ph, &guide, w, h))?
             }
             ("scene@1", AiTarget::Sky | AiTarget::People) => {
                 // One pass gives both; cache both.
-                let (maps, pw, ph) =
-                    scene::detect(&files[0], scene::SceneModel::ADE_512, &img, &[scene::ade::SKY, scene::ade::PERSON]).map_err(err)?;
+                let (maps, pw, ph) = scene::detect(
+                    &files[0],
+                    scene::SceneModel::ADE_512,
+                    &img,
+                    &[scene::ade::SKY, scene::ade::PERSON],
+                )
+                .map_err(err)?;
                 let sky = save("sky", refine::sky_raster(&maps[0], pw, ph, &img))?;
                 let people = save("people", refine::to_raster(&maps[1], pw, ph, &guide, w, h))?;
-                if matches!(target, AiTarget::Sky) { sky } else { people }
+                if matches!(target, AiTarget::Sky) {
+                    sky
+                } else {
+                    people
+                }
             }
             ("sam@1", AiTarget::Object { lasso }) => {
                 // The loop was drawn on the corrected image; the model sees the uncorrected one.
-                let to_src = UvToSource::new(&lens_table(photo.profile, lens, photo.full_width as f32, photo.full_height as f32), photo.full_width, photo.full_height);
+                let to_src = UvToSource::new(
+                    &lens_table(
+                        photo.profile,
+                        lens,
+                        photo.full_width as f32,
+                        photo.full_height as f32,
+                    ),
+                    photo.full_width,
+                    photo.full_height,
+                );
                 let lasso: Vec<[f32; 2]> = lasso.iter().map(|&p| to_src.map(p)).collect();
-                let mut cached = det.embedding.lock().map_err(|_| "embedding lock poisoned")?;
+                let mut cached = det
+                    .embedding
+                    .lock()
+                    .map_err(|_| "embedding lock poisoned")?;
                 let emb = match &*cached {
                     Some((hash, e)) if hash == photo.hash => e.clone(),
                     _ => {
@@ -197,13 +263,25 @@ pub fn detect(
                 };
                 drop(cached);
                 let p = sam::decode(&files[1], &emb, &lasso, w, h).map_err(err)?;
-                save(&target.cache_key(), refine::to_raster(&p, w, h, &guide, w, h))?
+                save(
+                    &target.cache_key(),
+                    refine::to_raster(&p, w, h, &guide, w, h),
+                )?
             }
             _ => return Err(format!("{} can't detect {}", model.label, target.label())),
         };
         Ok(found)
     })?;
-    let _ = app.emit("ai-progress", Progress { image: photo.image, stage: "detect", model: model.id, done: 1, total: 1 });
+    let _ = app.emit(
+        "ai-progress",
+        Progress {
+            image: photo.image,
+            stage: "detect",
+            model: model.id,
+            done: 1,
+            total: 1,
+        },
+    );
     Ok(found)
 }
 
@@ -262,7 +340,9 @@ pub async fn ai_detect(
     tauri::async_runtime::spawn_blocking(move || {
         let images = app.state::<Images>();
         let p = images.get(image_id).ok_or("image not open")?;
-        let (_, hash, _) = app.state::<CatalogState>().with(|c| c.image_file(image_id))?;
+        let (_, hash, _) = app
+            .state::<CatalogState>()
+            .with(|c| c.image_file(image_id))?;
         let photo = Photo {
             image: Some(image_id),
             hash: &hash,
@@ -274,7 +354,15 @@ pub async fn ai_detect(
             full_width: p.full_width,
             full_height: p.full_height,
         };
-        detect(&app, &app.state::<Detector>(), &app.state::<Store>(), &photo, &lens.unwrap_or_default(), &target, &model)
+        detect(
+            &app,
+            &app.state::<Detector>(),
+            &app.state::<Store>(),
+            &photo,
+            &lens.unwrap_or_default(),
+            &target,
+            &model,
+        )
     })
     .await
     .map_err(|e| e.to_string())?
@@ -286,14 +374,22 @@ mod tests {
 
     #[test]
     fn raster_paths_are_per_photo_model_and_target() {
-        let store = Store::open(std::env::temp_dir().join(format!("tonality-ai-{}", std::process::id()))).unwrap();
+        let store =
+            Store::open(std::env::temp_dir().join(format!("tonality-ai-{}", std::process::id())))
+                .unwrap();
         let p = raster_path(&store, "abcdef", "subject@1", "subject");
-        assert!(p.ends_with("cache/masks/ab/cdef-subject-1-subject.png"), "{p:?}");
+        assert!(
+            p.ends_with("cache/masks/ab/cdef-subject-1-subject.png"),
+            "{p:?}"
+        );
 
         let (w, h) = (8, 4);
         save_raster(&p, (0..32).collect(), w, h).unwrap();
         assert_eq!(load_raster(&p, w, h).unwrap(), (0..32).collect::<Vec<u8>>());
-        assert!(load_raster(&p, 4, 4).is_none(), "wrong size counts as missing");
+        assert!(
+            load_raster(&p, 4, 4).is_none(),
+            "wrong size counts as missing"
+        );
         let _ = std::fs::remove_dir_all(store.root());
     }
 }

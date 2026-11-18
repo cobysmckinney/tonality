@@ -12,7 +12,11 @@ export type MaskKind = Exclude<MaskShape["kind"], "ai">;
 /** Mirrors `MAX_MASKS` in tonality-render. */
 export const MAX_MASKS = 16;
 
-export const KIND_LABEL: Record<MaskKind, string> = { linear: "Linear", radial: "Radial", brush: "Brush" };
+export const KIND_LABEL: Record<MaskKind, string> = {
+  linear: "Linear",
+  radial: "Radial",
+  brush: "Brush",
+};
 
 export type Vec2 = [number, number];
 
@@ -26,7 +30,8 @@ export function toUv(fr: Framing, f: Vec2): Vec2 {
 export function toFrame(fr: Framing, uv: Vec2): Vec2 {
   const [a, b, c, d, e, f] = fr.m;
   const det = a * e - b * d || 1e-12;
-  const x = uv[0] - c, y = uv[1] - f;
+  const x = uv[0] - c,
+    y = uv[1] - f;
   return [(e * x - b * y) / det, (a * y - d * x) / det];
 }
 
@@ -61,7 +66,8 @@ export const AI_ICON: Record<AiPreset, string> = {
   subject: "M8 2.5a2.6 2.6 0 1 0 .01 0ZM3 14c0-3 2.2-5 5-5s5 2 5 5",
   background: "M2 2h12v12H2ZM8 5a2 2 0 1 0 .01 0ZM4.5 14c.4-2.2 1.8-3.5 3.5-3.5s3.1 1.3 3.5 3.5",
   sky: "M4 11a3 3 0 0 1 .4-6A4 4 0 0 1 12 6a2.5 2.5 0 0 1 0 5ZM2 14h12",
-  people: "M5.5 3a2 2 0 1 0 .01 0ZM11 4a1.7 1.7 0 1 0 .01 0ZM1.5 13c0-2.5 1.8-4 4-4s4 1.5 4 4M9.5 9.3c.5-.2 1-.3 1.5-.3 2 0 3.5 1.3 3.5 3.5",
+  people:
+    "M5.5 3a2 2 0 1 0 .01 0ZM11 4a1.7 1.7 0 1 0 .01 0ZM1.5 13c0-2.5 1.8-4 4-4s4 1.5 4 4M9.5 9.3c.5-.2 1-.3 1.5-.3 2 0 3.5 1.3 3.5 3.5",
   object: "M8 2c3.6 0 6 2.4 6 5.5S11.4 13 8 13s-6-2.5-6-5.5c0-1 .3-2 .9-2.8M8 6v3M6.5 7.5h3",
 };
 
@@ -89,7 +95,13 @@ export function nextName(masks: Mask[], kind: MaskKind | AiPreset): string {
  * A new mask of `kind`, placed in the middle of the current frame and lined up with the screen:
  * a radial in the centre, a linear fading down from the top (a sky).
  */
-export function newMask(kind: MaskKind, masks: Mask[], fr: Framing, fullW: number, fullH: number): Mask {
+export function newMask(
+  kind: MaskKind,
+  masks: Mask[],
+  fr: Framing,
+  fullW: number,
+  fullH: number,
+): Mask {
   const nm = norm(fullW, fullH);
   const q = (f: Vec2): Vec2 => {
     const uv = toUv(fr, f);
@@ -102,11 +114,19 @@ export function newMask(kind: MaskKind, masks: Mask[], fr: Framing, fullW: numbe
     shape = { kind, from: uv([0.5, 0.05]), to: uv([0.5, 0.45]) };
   } else if (kind === "radial") {
     // The frame's horizontal, in long-edge units, sets the ellipse's angle and scale.
-    const c = q([0.5, 0.5]), e = q([0.6, 0.5]), v = q([0.5, 0.6]);
+    const c = q([0.5, 0.5]),
+      e = q([0.6, 0.5]),
+      v = q([0.5, 0.6]);
     const angle = (Math.atan2(e[1] - c[1], e[0] - c[0]) * 180) / Math.PI;
     const rx = Math.hypot(e[0] - c[0], e[1] - c[1]) * 2.5;
     const ry = Math.hypot(v[0] - c[0], v[1] - c[1]) * 2.5;
-    shape = { kind, center: uv([0.5, 0.5]), radius: [r4(rx), r4(ry)], angle: r4(angle), feather: 0.5 };
+    shape = {
+      kind,
+      center: uv([0.5, 0.5]),
+      radius: [r4(rx), r4(ry)],
+      angle: r4(angle),
+      feather: 0.5,
+    };
   } else {
     shape = { kind, strokes: [] };
   }
@@ -125,14 +145,29 @@ export function newMask(kind: MaskKind, masks: Mask[], fr: Framing, fullW: numbe
 /** Whether `state` uses the Clarity / Dehaze maps (globally or in an enabled mask). */
 export function usesPresenceMaps(state: EditState): boolean {
   const e = state.effects;
-  return !!(e.clarity || e.dehaze) || masksOf(state).some((m) => m.enabled && !!(m.adjust.clarity || m.adjust.dehaze));
+  return (
+    !!(e.clarity || e.dehaze) ||
+    masksOf(state).some((m) => m.enabled && !!(m.adjust.clarity || m.adjust.dehaze))
+  );
 }
 
 export function zeroAdjust(): LocalAdjust {
   return {
-    exposure: 0, contrast: 0, highlights: 0, shadows: 0, whites: 0, blacks: 0,
-    temperature: 0, tint: 0, saturation: 0, vibrance: 0, hue: 0,
-    sharpness: 0, noise: 0, colorHue: 0, colorAmount: 0,
+    exposure: 0,
+    contrast: 0,
+    highlights: 0,
+    shadows: 0,
+    whites: 0,
+    blacks: 0,
+    temperature: 0,
+    tint: 0,
+    saturation: 0,
+    vibrance: 0,
+    hue: 0,
+    sharpness: 0,
+    noise: 0,
+    colorHue: 0,
+    colorAmount: 0,
   };
 }
 
@@ -239,7 +274,10 @@ export const MASK_THUMB_EDGE = 112;
 export const MASK_EDGE = 1024;
 export function maskSize(fullW: number, fullH: number): [number, number] {
   const s = Math.fround(MASK_EDGE / Math.max(fullW, fullH, 1));
-  return [Math.max(1, Math.round(Math.fround(fullW * s))), Math.max(1, Math.round(Math.fround(fullH * s)))];
+  return [
+    Math.max(1, Math.round(Math.fround(fullW * s))),
+    Math.max(1, Math.round(Math.fround(fullH * s))),
+  ];
 }
 
 /** Raster layers, as sent by `mask_layers`. */

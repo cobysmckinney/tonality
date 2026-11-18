@@ -75,8 +75,14 @@ pub enum WbPreset {
 }
 
 impl WbPreset {
-    pub const ALL: [WbPreset; 6] =
-        [WbPreset::Daylight, WbPreset::Cloudy, WbPreset::Shade, WbPreset::Tungsten, WbPreset::Fluorescent, WbPreset::Flash];
+    pub const ALL: [WbPreset; 6] = [
+        WbPreset::Daylight,
+        WbPreset::Cloudy,
+        WbPreset::Shade,
+        WbPreset::Tungsten,
+        WbPreset::Fluorescent,
+        WbPreset::Flash,
+    ];
 
     /// The light's chromaticity (CIE 1931 xy): standard illuminants where there is one.
     pub fn xy(self) -> (f32, f32) {
@@ -152,7 +158,16 @@ pub struct ColorMixer {
 
 impl ColorMixer {
     pub fn bands(&self) -> [&HueBand; 8] {
-        [&self.red, &self.orange, &self.yellow, &self.green, &self.aqua, &self.blue, &self.purple, &self.magenta]
+        [
+            &self.red,
+            &self.orange,
+            &self.yellow,
+            &self.green,
+            &self.aqua,
+            &self.blue,
+            &self.purple,
+            &self.magenta,
+        ]
     }
 }
 
@@ -186,7 +201,13 @@ pub struct Detail {
 
 impl Default for Detail {
     fn default() -> Self {
-        Self { sharpen_amount: 0.0, sharpen_radius: 1.0, sharpen_masking: 0.0, luminance_noise: 0.0, color_noise: 0.0 }
+        Self {
+            sharpen_amount: 0.0,
+            sharpen_radius: 1.0,
+            sharpen_masking: 0.0,
+            luminance_noise: 0.0,
+            color_noise: 0.0,
+        }
     }
 }
 
@@ -231,7 +252,11 @@ pub struct Vignette {
 
 impl Default for Vignette {
     fn default() -> Self {
-        Self { amount: 0.0, midpoint: 50.0, feather: 50.0 }
+        Self {
+            amount: 0.0,
+            midpoint: 50.0,
+            feather: 50.0,
+        }
     }
 }
 
@@ -247,7 +272,10 @@ pub struct Grain {
 
 impl Default for Grain {
     fn default() -> Self {
-        Self { amount: 0.0, size: 25.0 }
+        Self {
+            amount: 0.0,
+            size: 25.0,
+        }
     }
 }
 
@@ -270,7 +298,12 @@ pub struct Crop {
 
 impl Default for Crop {
     fn default() -> Self {
-        Self { turns: 0, flip: false, angle: 0.0, rect: [0.0, 0.0, 1.0, 1.0] }
+        Self {
+            turns: 0,
+            flip: false,
+            angle: 0.0,
+            rect: [0.0, 0.0, 1.0, 1.0],
+        }
     }
 }
 
@@ -346,7 +379,9 @@ impl EditState {
 
     /// Content address of this state (blake3 of canonical JSON, hex).
     pub fn hash(&self) -> String {
-        blake3::hash(self.to_canonical_json().as_bytes()).to_hex().to_string()
+        blake3::hash(self.to_canonical_json().as_bytes())
+            .to_hex()
+            .to_string()
     }
 }
 
@@ -379,41 +414,161 @@ struct Field {
 macro_rules! band {
     ($name:literal, $f:ident) => {
         [
-            Field { label: concat!($name, " Hue"), get: |s| Some(s.color.mixer.$f.hue), fmt: Fmt::Signed(0) },
-            Field { label: concat!($name, " Saturation"), get: |s| Some(s.color.mixer.$f.saturation), fmt: Fmt::Signed(0) },
-            Field { label: concat!($name, " Luminance"), get: |s| Some(s.color.mixer.$f.luminance), fmt: Fmt::Signed(0) },
+            Field {
+                label: concat!($name, " Hue"),
+                get: |s| Some(s.color.mixer.$f.hue),
+                fmt: Fmt::Signed(0),
+            },
+            Field {
+                label: concat!($name, " Saturation"),
+                get: |s| Some(s.color.mixer.$f.saturation),
+                fmt: Fmt::Signed(0),
+            },
+            Field {
+                label: concat!($name, " Luminance"),
+                get: |s| Some(s.color.mixer.$f.luminance),
+                fmt: Fmt::Signed(0),
+            },
         ]
     };
 }
 
 const FIELDS: &[Field] = &[
-    Field { label: "Temperature", get: |s| s.white_balance.temperature, fmt: Fmt::Kelvin },
-    Field { label: "Tint", get: |s| s.white_balance.tint, fmt: Fmt::SignedOpt },
-    Field { label: "Exposure", get: |s| Some(s.light.exposure), fmt: Fmt::Signed(2) },
-    Field { label: "Contrast", get: |s| Some(s.light.contrast), fmt: Fmt::Signed(0) },
-    Field { label: "Highlights", get: |s| Some(s.light.highlights), fmt: Fmt::Signed(0) },
-    Field { label: "Shadows", get: |s| Some(s.light.shadows), fmt: Fmt::Signed(0) },
-    Field { label: "Whites", get: |s| Some(s.light.whites), fmt: Fmt::Signed(0) },
-    Field { label: "Blacks", get: |s| Some(s.light.blacks), fmt: Fmt::Signed(0) },
-    Field { label: "Vibrance", get: |s| Some(s.color.vibrance), fmt: Fmt::Signed(0) },
-    Field { label: "Saturation", get: |s| Some(s.color.saturation), fmt: Fmt::Signed(0) },
-    Field { label: "Sharpening", get: |s| Some(s.detail.sharpen_amount), fmt: Fmt::Plain },
-    Field { label: "Sharpen Radius", get: |s| Some(s.detail.sharpen_radius), fmt: Fmt::Decimal(1) },
-    Field { label: "Sharpen Masking", get: |s| Some(s.detail.sharpen_masking), fmt: Fmt::Plain },
-    Field { label: "Noise Reduction", get: |s| Some(s.detail.luminance_noise), fmt: Fmt::Plain },
-    Field { label: "Color Noise Reduction", get: |s| Some(s.detail.color_noise), fmt: Fmt::Plain },
-    Field { label: "Straighten", get: |s| Some(s.crop.angle), fmt: Fmt::Degrees },
-    Field { label: "Texture", get: |s| Some(s.effects.texture), fmt: Fmt::Signed(0) },
-    Field { label: "Clarity", get: |s| Some(s.effects.clarity), fmt: Fmt::Signed(0) },
-    Field { label: "Dehaze", get: |s| Some(s.effects.dehaze), fmt: Fmt::Signed(0) },
-    Field { label: "Vignette", get: |s| Some(s.effects.vignette.amount), fmt: Fmt::Signed(0) },
-    Field { label: "Vignette Midpoint", get: |s| Some(s.effects.vignette.midpoint), fmt: Fmt::Plain },
-    Field { label: "Vignette Feather", get: |s| Some(s.effects.vignette.feather), fmt: Fmt::Plain },
-    Field { label: "Grain", get: |s| Some(s.effects.grain.amount), fmt: Fmt::Plain },
-    Field { label: "Grain Size", get: |s| Some(s.effects.grain.size), fmt: Fmt::Plain },
-    Field { label: "Lens Distortion", get: |s| Some(s.lens.distortion), fmt: Fmt::Plain },
-    Field { label: "Lens Vignetting", get: |s| Some(s.lens.vignetting), fmt: Fmt::Plain },
-    Field { label: "Manual Distortion", get: |s| Some(s.lens.manual_distortion), fmt: Fmt::Signed(0) },
+    Field {
+        label: "Temperature",
+        get: |s| s.white_balance.temperature,
+        fmt: Fmt::Kelvin,
+    },
+    Field {
+        label: "Tint",
+        get: |s| s.white_balance.tint,
+        fmt: Fmt::SignedOpt,
+    },
+    Field {
+        label: "Exposure",
+        get: |s| Some(s.light.exposure),
+        fmt: Fmt::Signed(2),
+    },
+    Field {
+        label: "Contrast",
+        get: |s| Some(s.light.contrast),
+        fmt: Fmt::Signed(0),
+    },
+    Field {
+        label: "Highlights",
+        get: |s| Some(s.light.highlights),
+        fmt: Fmt::Signed(0),
+    },
+    Field {
+        label: "Shadows",
+        get: |s| Some(s.light.shadows),
+        fmt: Fmt::Signed(0),
+    },
+    Field {
+        label: "Whites",
+        get: |s| Some(s.light.whites),
+        fmt: Fmt::Signed(0),
+    },
+    Field {
+        label: "Blacks",
+        get: |s| Some(s.light.blacks),
+        fmt: Fmt::Signed(0),
+    },
+    Field {
+        label: "Vibrance",
+        get: |s| Some(s.color.vibrance),
+        fmt: Fmt::Signed(0),
+    },
+    Field {
+        label: "Saturation",
+        get: |s| Some(s.color.saturation),
+        fmt: Fmt::Signed(0),
+    },
+    Field {
+        label: "Sharpening",
+        get: |s| Some(s.detail.sharpen_amount),
+        fmt: Fmt::Plain,
+    },
+    Field {
+        label: "Sharpen Radius",
+        get: |s| Some(s.detail.sharpen_radius),
+        fmt: Fmt::Decimal(1),
+    },
+    Field {
+        label: "Sharpen Masking",
+        get: |s| Some(s.detail.sharpen_masking),
+        fmt: Fmt::Plain,
+    },
+    Field {
+        label: "Noise Reduction",
+        get: |s| Some(s.detail.luminance_noise),
+        fmt: Fmt::Plain,
+    },
+    Field {
+        label: "Color Noise Reduction",
+        get: |s| Some(s.detail.color_noise),
+        fmt: Fmt::Plain,
+    },
+    Field {
+        label: "Straighten",
+        get: |s| Some(s.crop.angle),
+        fmt: Fmt::Degrees,
+    },
+    Field {
+        label: "Texture",
+        get: |s| Some(s.effects.texture),
+        fmt: Fmt::Signed(0),
+    },
+    Field {
+        label: "Clarity",
+        get: |s| Some(s.effects.clarity),
+        fmt: Fmt::Signed(0),
+    },
+    Field {
+        label: "Dehaze",
+        get: |s| Some(s.effects.dehaze),
+        fmt: Fmt::Signed(0),
+    },
+    Field {
+        label: "Vignette",
+        get: |s| Some(s.effects.vignette.amount),
+        fmt: Fmt::Signed(0),
+    },
+    Field {
+        label: "Vignette Midpoint",
+        get: |s| Some(s.effects.vignette.midpoint),
+        fmt: Fmt::Plain,
+    },
+    Field {
+        label: "Vignette Feather",
+        get: |s| Some(s.effects.vignette.feather),
+        fmt: Fmt::Plain,
+    },
+    Field {
+        label: "Grain",
+        get: |s| Some(s.effects.grain.amount),
+        fmt: Fmt::Plain,
+    },
+    Field {
+        label: "Grain Size",
+        get: |s| Some(s.effects.grain.size),
+        fmt: Fmt::Plain,
+    },
+    Field {
+        label: "Lens Distortion",
+        get: |s| Some(s.lens.distortion),
+        fmt: Fmt::Plain,
+    },
+    Field {
+        label: "Lens Vignetting",
+        get: |s| Some(s.lens.vignetting),
+        fmt: Fmt::Plain,
+    },
+    Field {
+        label: "Manual Distortion",
+        get: |s| Some(s.lens.manual_distortion),
+        fmt: Fmt::Signed(0),
+    },
 ];
 
 const BANDS: &[[Field; 3]] = &[
@@ -468,8 +623,14 @@ fn all_fields() -> impl Iterator<Item = &'static Field> {
 /// Human description of what changed from `prev` to `next`, e.g. `"Exposure +0.30"`,
 /// `"White Balance As Shot"`, `"Shadows, Blacks"` or `"5 adjustments"`.
 pub fn describe_change(prev: &EditState, next: &EditState) -> String {
-    let mut changed: Vec<&Field> = all_fields().filter(|f| (f.get)(prev) != (f.get)(next)).collect();
-    let mut curves: Vec<&str> = CURVES.iter().filter(|(_, c)| c(prev) != c(next)).map(|(l, _)| *l).collect();
+    let mut changed: Vec<&Field> = all_fields()
+        .filter(|f| (f.get)(prev) != (f.get)(next))
+        .collect();
+    let mut curves: Vec<&str> = CURVES
+        .iter()
+        .filter(|(_, c)| c(prev) != c(next))
+        .map(|(l, _)| *l)
+        .collect();
     // Picking a preset (or switching to Custom) names the mode, rather than the temperature
     // and tint it set.
     let mode = |w: &WhiteBalance| match (w.preset, w.temperature, w.tint) {
@@ -478,7 +639,9 @@ pub fn describe_change(prev: &EditState, next: &EditState) -> String {
         _ => Some("Custom"),
     };
     let (was, now) = (mode(&prev.white_balance), mode(&next.white_balance));
-    let preset_label = now.filter(|_| was != now).map(|m| format!("White Balance {m}"));
+    let preset_label = now
+        .filter(|_| was != now)
+        .map(|m| format!("White Balance {m}"));
     if let Some(label) = &preset_label {
         changed.retain(|f| f.label != "Temperature" && f.label != "Tint");
         curves.insert(0, label.as_str());
@@ -496,10 +659,18 @@ pub fn describe_change(prev: &EditState, next: &EditState) -> String {
     }
     let (a, b) = (&prev.lens, &next.lens);
     if a.profile != b.profile {
-        curves.push(if b.profile { "Lens Profile On" } else { "Lens Profile Off" });
+        curves.push(if b.profile {
+            "Lens Profile On"
+        } else {
+            "Lens Profile Off"
+        });
     }
     if a.chromatic != b.chromatic {
-        curves.push(if b.chromatic { "Chromatic Aberration On" } else { "Chromatic Aberration Off" });
+        curves.push(if b.chromatic {
+            "Chromatic Aberration On"
+        } else {
+            "Chromatic Aberration Off"
+        });
     }
     let masks = describe_masks(&prev.masks, &next.masks);
     if let ([], [], [(_, full)]) = (changed.as_slice(), curves.as_slice(), masks.as_slice()) {
@@ -514,9 +685,12 @@ pub fn describe_change(prev: &EditState, next: &EditState) -> String {
         ([a, b], []) if a.label == "Temperature" && b.label == "Tint" && wb_as_shot => {
             "White Balance As Shot".into()
         }
-        (fs, cs) if fs.len() + cs.len() <= 3 => {
-            fs.iter().map(|f| f.label).chain(cs.iter().copied()).collect::<Vec<_>>().join(", ")
-        }
+        (fs, cs) if fs.len() + cs.len() <= 3 => fs
+            .iter()
+            .map(|f| f.label)
+            .chain(cs.iter().copied())
+            .collect::<Vec<_>>()
+            .join(", "),
         (fs, cs) => format!("{} adjustments", fs.len() + cs.len()),
     }
 }
@@ -536,7 +710,10 @@ mod tests {
         s.effects.clarity = 20.0;
         s.masks[0].adjust.dehaze = 10.0;
         let json = s.to_canonical_json();
-        assert!(json.contains("\"clarity\":20") && json.contains("\"dehaze\":10"), "{json}");
+        assert!(
+            json.contains("\"clarity\":20") && json.contains("\"dehaze\":10"),
+            "{json}"
+        );
         assert_eq!(serde_json::from_str::<EditState>(&json).unwrap(), s);
     }
 
@@ -544,11 +721,22 @@ mod tests {
     fn wb_presets_sit_where_their_lights_do() {
         let v = |p: WbPreset| p.values();
         assert_eq!(v(WbPreset::Daylight), (5500.0, -11.0));
-        assert_eq!(v(WbPreset::Tungsten), (2850.0, 0.0), "illuminant A is on the Planckian locus");
-        let t: Vec<f32> = [WbPreset::Tungsten, WbPreset::Fluorescent, WbPreset::Daylight, WbPreset::Flash, WbPreset::Cloudy, WbPreset::Shade]
-            .iter()
-            .map(|p| p.values().0)
-            .collect();
+        assert_eq!(
+            v(WbPreset::Tungsten),
+            (2850.0, 0.0),
+            "illuminant A is on the Planckian locus"
+        );
+        let t: Vec<f32> = [
+            WbPreset::Tungsten,
+            WbPreset::Fluorescent,
+            WbPreset::Daylight,
+            WbPreset::Flash,
+            WbPreset::Cloudy,
+            WbPreset::Shade,
+        ]
+        .iter()
+        .map(|p| p.values().0)
+        .collect();
         assert!(t.windows(2).all(|w| w[0] < w[1]), "warm to cool: {t:?}");
     }
 
@@ -570,12 +758,19 @@ mod tests {
         c.light.shadows = 40.0;
         assert_eq!(describe_change(&a, &c), "Shadows, White Balance Custom");
         c.light.blacks = -10.0;
-        assert_eq!(describe_change(&a, &c), "Shadows, Blacks, White Balance Custom");
+        assert_eq!(
+            describe_change(&a, &c),
+            "Shadows, Blacks, White Balance Custom"
+        );
         c.light.whites = 5.0;
         assert_eq!(describe_change(&a, &c), "4 adjustments");
 
         let mut w = a.clone();
-        w.white_balance = WhiteBalance { temperature: Some(2850.0), tint: Some(0.0), preset: Some(WbPreset::Tungsten) };
+        w.white_balance = WhiteBalance {
+            temperature: Some(2850.0),
+            tint: Some(0.0),
+            preset: Some(WbPreset::Tungsten),
+        };
         assert_eq!(describe_change(&a, &w), "White Balance Tungsten");
         let mut custom = w.clone();
         custom.white_balance.preset = None;
@@ -593,7 +788,16 @@ mod tests {
         e.curve.red = vec![[0.0, 0.1], [1.0, 1.0]];
         assert_eq!(describe_change(&a, &e), "Red Curve");
         e.effects.vignette.midpoint = 30.0;
-        assert_eq!(describe_change(&EditState { curve: e.curve.clone(), ..a.clone() }, &e), "Vignette Midpoint 30");
+        assert_eq!(
+            describe_change(
+                &EditState {
+                    curve: e.curve.clone(),
+                    ..a.clone()
+                },
+                &e
+            ),
+            "Vignette Midpoint 30"
+        );
         let mut g = a.clone();
         g.crop.angle = 2.34;
         assert_eq!(describe_change(&a, &g), "Straighten +2.3°");

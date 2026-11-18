@@ -53,7 +53,8 @@
     const near = (a: number, b: number) => Math.abs(a - b) <= HANDLE;
     const inX = x >= box.x - HANDLE && x <= box.x + box.w + HANDLE;
     const inY = y >= box.y - HANDLE && y <= box.y + box.h + HANDLE;
-    let v = "", hz = "";
+    let v = "",
+      hz = "";
     if (inX && near(y, box.y)) v = "n";
     else if (inX && near(y, box.y + box.h)) v = "s";
     if (inY && near(x, box.x)) hz = "w";
@@ -100,8 +101,10 @@
       return;
     }
     if (d.mode === "rotate") {
-      const cx = frame.x + frame.w / 2, cy = frame.y + frame.h / 2;
-      const a0 = Math.atan2(d.y - cy, d.x - cx), a1 = Math.atan2(y - cy, x - cx);
+      const cx = frame.x + frame.w / 2,
+        cy = frame.y + frame.h / 2;
+      const a0 = Math.atan2(d.y - cy, d.x - cx),
+        a1 = Math.atan2(y - cy, x - cx);
       let delta = ((a1 - a0) * 180) / Math.PI;
       if (delta > 180) delta -= 360;
       if (delta < -180) delta += 360;
@@ -109,7 +112,8 @@
       onchange({ ...crop, angle, rect: shrinkToFit(d.start, angle, tw, th) });
       return;
     }
-    const dx = (x - d.x) / frame.w, dy = (y - d.y) / frame.h;
+    const dx = (x - d.x) / frame.w,
+      dy = (y - d.y) / frame.h;
     const [sx, sy, sw, sh] = d.start;
     if (d.mode === "move") {
       // Slide along each axis separately, so the box glides along an edge it touches.
@@ -136,12 +140,21 @@
       const wFor = (h: number) => (h * th * aspect) / tw;
       const horizontal = mode.includes("e") || mode.includes("w");
       const vertical = mode.includes("n") || mode.includes("s");
-      let w = next[2], h = next[3];
+      let w = next[2],
+        h = next[3];
       if (horizontal && (!vertical || Math.abs(dx) * tw >= Math.abs(dy) * th)) h = hFor(w);
       else w = wFor(h);
       // Anchor: the fixed corner, or the middle of the fixed side.
-      const ax = mode.includes("w") ? start[0] + start[2] : mode.includes("e") ? start[0] : start[0] + start[2] / 2;
-      const ay = mode.includes("n") ? start[1] + start[3] : mode.includes("s") ? start[1] : start[1] + start[3] / 2;
+      const ax = mode.includes("w")
+        ? start[0] + start[2]
+        : mode.includes("e")
+          ? start[0]
+          : start[0] + start[2] / 2;
+      const ay = mode.includes("n")
+        ? start[1] + start[3]
+        : mode.includes("s")
+          ? start[1]
+          : start[1] + start[3] / 2;
       const nx = mode.includes("w") ? ax - w : mode.includes("e") ? ax : ax - w / 2;
       const ny = mode.includes("n") ? ay - h : mode.includes("s") ? ay : ay - h / 2;
       next = [nx, ny, w, h];
@@ -190,8 +203,22 @@
   />
   <rect class="border" x={box.x} y={box.y} width={box.w} height={box.h} />
   {#each thirds as t (t)}
-    <line class="third" class:on={showGrid} x1={box.x + box.w * t} y1={box.y} x2={box.x + box.w * t} y2={box.y + box.h} />
-    <line class="third" class:on={showGrid} x1={box.x} y1={box.y + box.h * t} x2={box.x + box.w} y2={box.y + box.h * t} />
+    <line
+      class="third"
+      class:on={showGrid}
+      x1={box.x + box.w * t}
+      y1={box.y}
+      x2={box.x + box.w * t}
+      y2={box.y + box.h}
+    />
+    <line
+      class="third"
+      class:on={showGrid}
+      x1={box.x}
+      y1={box.y + box.h * t}
+      x2={box.x + box.w}
+      y2={box.y + box.h * t}
+    />
   {/each}
   {#each [[0, 0, 1, 1], [1, 0, -1, 1], [0, 1, 1, -1], [1, 1, -1, -1]] as [cx, cy, sx, sy] (`${cx}${cy}`)}
     {@const px = box.x + cx * box.w}
