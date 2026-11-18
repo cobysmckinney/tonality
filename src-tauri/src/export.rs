@@ -8,6 +8,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
 use tonality_core::agx::{Display, GAIN_LOG2, GAIN_OFFSET, HDR_RATIO};
+use tonality_core::exif::{Capture, Export};
 use tonality_core::{EditState, ImageId};
 use tonality_raw::FullImage;
 use tonality_render::{curve_lut_rgba16f, DevelopParams, Gpu, Rendered, Source};
@@ -101,6 +102,9 @@ pub struct ExportSettings {
     /// JPEG only: write Ultra HDR (a gain map to AgX HDR, 1000 nits).
     #[serde(default)]
     pub hdr: bool,
+    /// Write the GPS position the camera recorded.
+    #[serde(default)]
+    pub include_location: bool,
 }
 
 impl ExportSettings {
@@ -143,6 +147,27 @@ struct Job {
     hash: String,
     stem: String,
     versions: Vec<(Option<String>, EditState)>,
+    /// tonality's star rating, 0–5.
+    rating: u8,
+}
+
+/// What an exported file says about itself besides pixels.
+struct Meta {
+    capture: Capture,
+    rating: u8,
+}
+
+impl Meta {
+    fn export(&self, r: &Rendered, s: &ExportSettings) -> Export {
+        Export {
+            width: r.width,
+            height: r.height,
+            srgb: s.color_space == ExportColorSpace::Srgb,
+            rating: (self.rating > 0).then_some(self.rating),
+            include_location: s.include_location,
+            exported_at: chrono::Local::now().format("%Y:%m:%d %H:%M:%S").to_string(),
+        }
+    }
 }
 
 #[tauri::command]
@@ -174,6 +199,7 @@ fn gather(app: &AppHandle, ids: &[ImageId], settings: &ExportSettings) -> CmdRes
     let mut jobs = Vec::new();
     for &id in ids {
         let (rel, hash, name) = catalog.with(|c| c.image_file(id))?;
+        let rating = catalog.with(|c| c.image_rating(id))?;
         // `edit`, not `with`: opening a never-edited photo's history creates its first commit,
         // which its sidecar should record.
         let versions = catalog.edit(&[id], |c| {
@@ -205,6 +231,7 @@ fn gather(app: &AppHandle, ids: &[ImageId], settings: &ExportSettings) -> CmdRes
             hash,
             stem,
             versions,
+            rating,
         });
     }
     Ok(jobs)
@@ -254,6 +281,12 @@ fn run(
                 done += job.versions.len();
                 continue;
             }
+        };
+        // What the camera recorded (no pixel decode); a file it can't be read from exports
+        // without it.
+        let meta = Meta {
+            capture: tonality_raw::read_capture(&job.path).unwrap_or_default(),
+            rating: job.rating,
         };
         // Downscaled sources, by source long edge (versions with the same crop share one).
         let mut scaled: Vec<(u32, Scaled)> = Vec::new();
@@ -395,7 +428,7 @@ fn run(
                     None
                 };
                 let target = unique_path(&folder, &sanitize(&label), settings.format.extension());
-                write(&rendered, gain.as_ref(), &target, &settings)?;
+                write(&rendered, gain.as_ref(), &target, &settings, &meta)?;
                 Ok(target)
             })();
             match result {
@@ -416,30 +449,37 @@ fn eight(pixels: &[u16]) -> Vec<u8> {
         .collect()
 }
 
-/// `r` written to `target` as `s` says; `gain`: the Ultra HDR gain map render, for HDR JPEGs.
+/// `r` written to `target` as `s` says, with `meta`'s EXIF (and XMP rating); `gain`: the Ultra
+/// HDR gain map render, for HDR JPEGs.
 fn write(
     r: &Rendered,
     gain: Option<&Rendered>,
     target: &Path,
     s: &ExportSettings,
+    meta: &Meta,
 ) -> Result<(), String> {
-    use image::codecs::{jpeg::JpegEncoder, png::PngEncoder, tiff::TiffEncoder};
+    use image::codecs::{jpeg::JpegEncoder, png::PngEncoder};
     use image::{ExtendedColorType, ImageEncoder};
+    use std::io::Write;
 
-    let part = target.with_extension(format!("{}.part", s.format.extension()));
-    let file = std::fs::File::create(&part).map_err(|e| e.to_string())?;
-    let mut out = std::io::BufWriter::new(file);
+    let export = meta.export(r, s);
+    let exif = tonality_core::exif::tiff_exif(&meta.capture, &export);
+    let xmp = export.rating.map(tonality_core::exif::xmp_rating);
     let icc = s.color_space.icc();
     let quality = s.quality.clamp(1, 100);
-    let res = match (s.format, gain) {
+    let bytes: Result<Vec<u8>, String> = match (s.format, gain) {
         (ExportFormat::Jpeg, Some(gain)) => {
-            ultra_hdr(r, gain, quality, s.color_space).and_then(|bytes| {
-                use std::io::Write;
-                out.write_all(&bytes).map_err(|e| e.to_string())
+            ultra_hdr(r, gain, quality, s.color_space).and_then(|f| {
+                crate::jpeg::ultra_hdr_with(
+                    &f,
+                    Some(crate::jpeg::exif_segment(&exif)),
+                    export.rating,
+                )
             })
         }
         (ExportFormat::Jpeg, None) => {
-            let mut e = JpegEncoder::new_with_quality(&mut out, quality);
+            let mut buf = Vec::new();
+            let mut e = JpegEncoder::new_with_quality(&mut buf, quality);
             e.set_icc_profile(icc).map_err(|e| e.to_string())?;
             e.write_image(
                 &eight(&r.pixels),
@@ -447,32 +487,37 @@ fn write(
                 r.height,
                 ExtendedColorType::Rgb8,
             )
-            .map_err(|e| e.to_string())
+            .map_err(|e| e.to_string())?;
+            let mut front = vec![crate::jpeg::exif_segment(&exif)];
+            front.extend(xmp.as_deref().map(crate::jpeg::xmp_segment));
+            crate::jpeg::with_front(&buf, &front)
         }
         (ExportFormat::Png, _) => {
-            let mut e = PngEncoder::new(&mut out);
+            let mut buf = Vec::new();
+            let mut e = PngEncoder::new(&mut buf);
             e.set_icc_profile(icc).map_err(|e| e.to_string())?;
+            e.set_exif_metadata(exif).map_err(|e| e.to_string())?;
             e.write_image(
                 &eight(&r.pixels),
                 r.width,
                 r.height,
                 ExtendedColorType::Rgb8,
             )
-            .map_err(|e| e.to_string())
+            .map_err(|e| e.to_string())?;
+            Ok(buf)
         }
         (ExportFormat::Tiff, _) => {
-            let bytes: Vec<u8> = r.pixels.iter().flat_map(|v| v.to_ne_bytes()).collect();
-            let mut e = TiffEncoder::new(&mut out);
-            e.set_icc_profile(icc).map_err(|e| e.to_string())?;
-            e.write_image(&bytes, r.width, r.height, ExtendedColorType::Rgb16)
-                .map_err(|e| e.to_string())
+            let ifds = tonality_core::exif::ifds(&meta.capture, &export);
+            let mut buf = std::io::Cursor::new(Vec::new());
+            tiff(&mut buf, r, &icc, &ifds, xmp.as_deref()).map(|_| buf.into_inner())
         }
     };
-    let res = res.and_then(|_| {
-        use std::io::Write;
-        out.flush().map_err(|e| e.to_string())
+    let part = target.with_extension(format!("{}.part", s.format.extension()));
+    let res = bytes.and_then(|b| {
+        std::fs::File::create(&part)
+            .and_then(|mut f| f.write_all(&b))
+            .map_err(|e| e.to_string())
     });
-    drop(out);
     match res {
         Ok(()) => std::fs::rename(&part, target).map_err(|e| e.to_string()),
         Err(e) => {
@@ -480,6 +525,73 @@ fn write(
             Err(e)
         }
     }
+}
+
+/// A 16-bit RGB TIFF with the ICC profile, the EXIF tags (IFD0 in the image's directory, the
+/// Exif and GPS directories beside it) and the XMP rating.
+fn tiff(
+    out: &mut std::io::Cursor<Vec<u8>>,
+    r: &Rendered,
+    icc: &[u8],
+    ifds: &tonality_core::exif::Ifds,
+    xmp: Option<&str>,
+) -> Result<(), String> {
+    use tiff::encoder::{colortype::RGB16, DirectoryEncoder, TiffEncoder, TiffKindStandard};
+    use tiff::tags::{Tag, Type};
+    use tonality_core::exif::{Field, EXIF_POINTER, GPS_POINTER};
+    type Dir<'a, 'b> = DirectoryEncoder<'a, &'b mut std::io::Cursor<Vec<u8>>, TiffKindStandard>;
+
+    // The EXIF fields' bytes are little-endian, as the tiff crate writes on this machine.
+    const _: () = assert!(cfg!(target_endian = "little"));
+    let e = |e: tiff::TiffError| e.to_string();
+    let add = |d: &mut Dir, fields: &[Field]| -> Result<(), String> {
+        let mut dir = tiff::Directory::empty();
+        for f in fields {
+            let ty = Type::from_u16(f.ty).ok_or("bad EXIF type")?;
+            dir.extend([(
+                Tag::from_u16_exhaustive(f.tag),
+                d.write_entry_bytes(ty, &f.bytes).map_err(e)?,
+            )]);
+        }
+        d.extend_from(&dir);
+        Ok(())
+    };
+    let mut enc = TiffEncoder::new(out).map_err(e)?;
+    let exif_at = {
+        let mut d = enc.extra_directory().map_err(e)?;
+        add(&mut d, &ifds.exif)?;
+        d.finish_with_offsets().map_err(e)?.offset
+    };
+    let gps_at = match &ifds.gps {
+        Some(gps) => {
+            let mut d = enc.extra_directory().map_err(e)?;
+            add(&mut d, gps)?;
+            Some(d.finish_with_offsets().map_err(e)?.offset)
+        }
+        None => None,
+    };
+    let mut img = enc.new_image::<RGB16>(r.width, r.height).map_err(e)?;
+    let d = img.encoder();
+    add(d, &ifds.ifd0)?;
+    let mut extra = tiff::Directory::empty();
+    extra.extend([(
+        Tag::IccProfile,
+        d.write_entry_bytes(Type::UNDEFINED, icc).map_err(e)?,
+    )]);
+    if let Some(x) = xmp {
+        extra.extend([(
+            Tag::from_u16_exhaustive(700),
+            d.write_entry_bytes(Type::BYTE, x.as_bytes()).map_err(e)?,
+        )]);
+    }
+    d.extend_from(&extra);
+    d.write_tag(Tag::from_u16_exhaustive(EXIF_POINTER), exif_at)
+        .map_err(e)?;
+    if let Some(at) = gps_at {
+        d.write_tag(Tag::from_u16_exhaustive(GPS_POINTER), at)
+            .map_err(e)?;
+    }
+    img.write_data(&r.pixels).map_err(e)
 }
 
 /// An Ultra HDR JPEG: `r` as the SDR base image, and the gain map render at half size (as
@@ -499,7 +611,7 @@ fn ultra_hdr(
         JpegEncoder::new_with_quality(&mut buf, quality)
             .write_image(px, w, h, ExtendedColorType::Rgb8)
             .map_err(|e| e.to_string())?;
-        Ok(without_jfif(buf))
+        crate::jpeg::with_front(&buf, &[])
     };
     let base = jpeg(&eight(&r.pixels), r.width, r.height)?;
     let (gw, gh, gpx) = halve(gain);
@@ -515,20 +627,6 @@ fn ultra_hdr(
     metadata.use_base_color_space = true;
     metadata.backward_direction = false;
     ultrahdr_rs::encode_ultrahdr(&base, &map, &metadata, space.gamut()).map_err(|e| e.to_string())
-}
-
-/// `jpeg` without its JFIF APP0 segment. JFIF must be the first segment after SOI, but the Ultra
-/// HDR container puts its MPF index there (the gain map's offset is counted from it); camera
-/// Ultra HDR files have no JFIF either, and JPEG doesn't need one.
-fn without_jfif(jpeg: Vec<u8>) -> Vec<u8> {
-    if jpeg.len() > 11 && jpeg[..4] == [0xFF, 0xD8, 0xFF, 0xE0] && &jpeg[6..11] == b"JFIF\0" {
-        let end = 4 + u16::from_be_bytes([jpeg[4], jpeg[5]]) as usize;
-        let mut out = jpeg[..2].to_vec();
-        out.extend_from_slice(&jpeg[end..]);
-        out
-    } else {
-        jpeg
-    }
 }
 
 /// A render at half size (2×2 means; the last row or column alone when odd).
@@ -582,38 +680,33 @@ fn unique_path(folder: &Path, name: &str, ext: &str) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use exif::{In, Tag};
+    use tonality_core::exif::Gps;
 
-    #[test]
-    fn writes_every_format() {
-        let dir = std::env::temp_dir().join(format!("tonality-export-fmt-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let r = Rendered {
-            width: 4,
-            height: 3,
-            pixels: (0..36).map(|i| i * 1800).collect(),
-        };
-        for space in [ExportColorSpace::Srgb, ExportColorSpace::DisplayP3] {
-            for format in [ExportFormat::Jpeg, ExportFormat::Png, ExportFormat::Tiff] {
-                let s = settings(&dir, format, space, false);
-                let p = dir.join(format!("t.{}", format.extension()));
-                write(&r, None, &p, &s).unwrap();
-                let img = image::open(&p).unwrap();
-                assert_eq!((img.width(), img.height()), (4, 3));
-                if format == ExportFormat::Tiff {
-                    assert_eq!(img.color(), image::ColorType::Rgb16);
-                }
-                // The profile goes in, and says which space.
-                let icc = icc_of(&p, format);
-                assert_eq!(icc, space.icc(), "{format:?} {space:?}");
-                std::fs::remove_file(&p).unwrap();
-            }
+    fn meta(rating: u8) -> Meta {
+        Meta {
+            capture: Capture {
+                make: Some("SONY".into()),
+                model: Some("ILCE-7M3".into()),
+                lens_model: Some("FE 35mm F1.8".into()),
+                exposure_time: Some([1, 250]),
+                f_number: Some([18, 10]),
+                iso: Some(800),
+                focal_length: Some([35, 1]),
+                date_time_original: Some("2026:11:02 14:03:11".into()),
+                artist: Some("Coby".into()),
+                copyright: Some("(c) 2026".into()),
+                gps: Some(Gps {
+                    latitude_ref: Some("N".into()),
+                    latitude: Some([[37, 1], [46, 1], [30, 1]]),
+                    longitude_ref: Some("W".into()),
+                    longitude: Some([[122, 1], [25, 1], [9, 1]]),
+                    ..Gps::default()
+                }),
+                ..Capture::default()
+            },
+            rating,
         }
-        assert!(std::fs::read_dir(&dir).unwrap().all(|e| !e
-            .unwrap()
-            .path()
-            .to_string_lossy()
-            .ends_with(".part")));
-        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     fn settings(
@@ -630,6 +723,7 @@ mod tests {
             versions: ExportVersions::Current,
             color_space,
             hdr,
+            include_location: false,
         }
     }
 
@@ -648,6 +742,114 @@ mod tests {
                 .icc_profile(),
         };
         icc.unwrap().expect("an embedded profile")
+    }
+
+    /// The file's EXIF, read by an independent reader (kamadak-exif).
+    fn exif_of(p: &Path) -> exif::Exif {
+        let mut f = std::io::BufReader::new(std::fs::File::open(p).unwrap());
+        exif::Reader::new()
+            .read_from_container(&mut f)
+            .expect("EXIF")
+    }
+
+    fn text(x: &exif::Exif, tag: Tag) -> Option<String> {
+        x.get_field(tag, In::PRIMARY)
+            .map(|f| f.display_value().to_string().trim_matches('"').to_string())
+    }
+
+    /// What every export should say, whatever the format.
+    fn check_exif(p: &Path, location: bool) {
+        let x = exif_of(p);
+        assert_eq!(text(&x, Tag::Make).as_deref(), Some("SONY"), "{p:?}");
+        assert_eq!(text(&x, Tag::Model).as_deref(), Some("ILCE-7M3"));
+        assert_eq!(text(&x, Tag::LensModel).as_deref(), Some("FE 35mm F1.8"));
+        assert_eq!(
+            text(&x, Tag::DateTimeOriginal).as_deref(),
+            Some("2026-11-02 14:03:11")
+        );
+        assert_eq!(text(&x, Tag::Artist).as_deref(), Some("Coby"));
+        assert_eq!(
+            x.get_field(Tag::PhotographicSensitivity, In::PRIMARY)
+                .unwrap()
+                .value
+                .get_uint(0),
+            Some(800)
+        );
+        assert_eq!(
+            x.get_field(Tag::Orientation, In::PRIMARY)
+                .unwrap()
+                .value
+                .get_uint(0),
+            Some(1)
+        );
+        let rating = x
+            .fields()
+            .find(|f| f.tag.number() == 0x4746)
+            .and_then(|f| f.value.get_uint(0));
+        assert_eq!(rating, Some(4), "{p:?}");
+        assert_eq!(
+            x.get_field(Tag::GPSLatitude, In::PRIMARY).is_some(),
+            location,
+            "{p:?}"
+        );
+    }
+
+    #[test]
+    fn writes_every_format() {
+        let dir = std::env::temp_dir().join(format!("tonality-export-fmt-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let r = Rendered {
+            width: 4,
+            height: 3,
+            pixels: (0..36).map(|i| i * 1800).collect(),
+        };
+        for space in [ExportColorSpace::Srgb, ExportColorSpace::DisplayP3] {
+            for format in [ExportFormat::Jpeg, ExportFormat::Png, ExportFormat::Tiff] {
+                for location in [false, true] {
+                    let s = ExportSettings {
+                        include_location: location,
+                        ..settings(&dir, format, space, false)
+                    };
+                    let p = dir.join(format!("t.{}", format.extension()));
+                    write(&r, None, &p, &s, &meta(4)).unwrap();
+                    let img = image::open(&p).unwrap();
+                    assert_eq!((img.width(), img.height()), (4, 3));
+                    if format == ExportFormat::Tiff {
+                        assert_eq!(img.color(), image::ColorType::Rgb16);
+                    }
+                    // The profile goes in, and says which space.
+                    assert_eq!(icc_of(&p, format), space.icc(), "{format:?} {space:?}");
+                    check_exif(&p, location);
+                    // The rating in XMP too, where Lightroom reads it (PNG: EXIF only).
+                    let bytes = std::fs::read(&p).unwrap();
+                    let xmp = bytes.windows(14).any(|w| w == br#"xmp:Rating="4""#);
+                    assert_eq!(xmp, format != ExportFormat::Png, "{format:?}");
+                    std::fs::remove_file(&p).unwrap();
+                }
+            }
+        }
+        // Unrated: no rating anywhere.
+        let p = dir.join("u.jpg");
+        write(
+            &r,
+            None,
+            &p,
+            &settings(&dir, ExportFormat::Jpeg, ExportColorSpace::Srgb, false),
+            &meta(0),
+        )
+        .unwrap();
+        assert!(exif_of(&p).fields().all(|f| f.tag.number() != 0x4746));
+        assert!(!std::fs::read(&p)
+            .unwrap()
+            .windows(10)
+            .any(|w| w == b"xmp:Rating"));
+        std::fs::remove_file(&p).unwrap();
+        assert!(std::fs::read_dir(&dir).unwrap().all(|e| !e
+            .unwrap()
+            .path()
+            .to_string_lossy()
+            .ends_with(".part")));
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
@@ -670,25 +872,33 @@ mod tests {
         };
         for space in [ExportColorSpace::Srgb, ExportColorSpace::DisplayP3] {
             let p = dir.join("hdr.jpg");
-            write(
-                &r,
-                Some(&gain),
-                &p,
-                &settings(&dir, ExportFormat::Jpeg, space, true),
-            )
-            .unwrap();
+            let s = ExportSettings {
+                include_location: true,
+                ..settings(&dir, ExportFormat::Jpeg, space, true)
+            };
+            write(&r, Some(&gain), &p, &s, &meta(4)).unwrap();
             let bytes = std::fs::read(&p).unwrap();
-            // Still an ordinary JPEG of the SDR image, with the space's profile.
+            // Still an ordinary JPEG of the SDR image, with the space's profile and the EXIF.
             let img = image::load_from_memory(&bytes).unwrap();
             assert_eq!((img.width(), img.height()), (w, h));
             assert_eq!(icc_of(&p, ExportFormat::Jpeg), space.icc());
-            // And an Ultra HDR one: the gain map at half size, the metadata as written.
-            // No JFIF segment, in either image: MPF follows SOI directly.
+            check_exif(&p, true);
+            // EXIF first after SOI (as cameras write it), no JFIF in either image.
+            let (segs, _) = crate::jpeg::split_head(&bytes).unwrap();
+            assert!(segs[0].marker == 0xE1 && segs[0].payload.starts_with(b"Exif\0\0"));
             assert!(
-                bytes[..64].windows(5).all(|w| w != b"JFIF\0"),
+                segs.iter().all(|s| !s.payload.starts_with(b"JFIF\0")),
                 "JFIF in the primary"
             );
-            assert_eq!(&bytes[..4], &[0xFF, 0xD8, 0xFF, 0xE2]);
+            // The MPF index follows the move: the primary size it records, and the gain map
+            // where it says.
+            let (primary, gain_at) = crate::jpeg::mpf_targets(&bytes);
+            assert_eq!(primary, gain_at);
+            assert_eq!(&bytes[gain_at..gain_at + 2], &[0xFF, 0xD8]);
+            // The rating joined the primary's XMP; the Ultra HDR metadata is intact.
+            assert!(bytes[..gain_at]
+                .windows(14)
+                .any(|w| w == br#"xmp:Rating="4""#));
             let d = ultrahdr_rs::Decoder::new(&bytes).unwrap();
             assert!(d.is_ultrahdr());
             let m = d.metadata().unwrap();
@@ -702,6 +912,7 @@ mod tests {
                 "{m:?}"
             );
             let map_jpeg = d.gainmap_jpeg().unwrap();
+            assert_eq!(map_jpeg, &bytes[gain_at..]);
             assert!(
                 !map_jpeg.windows(5).any(|w| w == b"JFIF\0"),
                 "JFIF in the gain map"
@@ -715,9 +926,10 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
-    /// A real photo through the export path (decode, render, write), for looking at:
+    /// A real photo through the export path (decode, metadata, render, write), for looking at:
     /// `TONALITY_EXPORT_RAW=photo.ARW TONALITY_EXPORT_OUT=dir cargo test -p tonality --lib
-    /// export_real_photo -- --ignored` writes sRGB and Display P3 Ultra HDR JPEGs and a P3 PNG.
+    /// export_real_photo -- --ignored` writes Ultra HDR JPEGs (sRGB, P3 with location), a P3
+    /// PNG and a TIFF, rated 3 stars.
     #[test]
     #[ignore]
     fn export_real_photo() {
@@ -729,6 +941,10 @@ mod tests {
         };
         let out = PathBuf::from(out);
         let full = tonality_raw::decode_full(raw.as_ref()).unwrap();
+        let meta = Meta {
+            capture: tonality_raw::read_capture(raw.as_ref()).unwrap(),
+            rating: 3,
+        };
         let edit = EditState::default();
         let maps = tonality_render::presence::presence_maps(
             &full.pixels,
@@ -745,24 +961,34 @@ mod tests {
         };
         let layers = tonality_core::mask::brush_layers(&[], full.width, full.height);
         let gpu = Gpu::new().unwrap();
-        for (space, format, hdr, name) in [
+        for (space, format, hdr, location, name) in [
             (
                 ExportColorSpace::Srgb,
                 ExportFormat::Jpeg,
                 true,
+                false,
                 "srgb-hdr.jpg",
             ),
             (
                 ExportColorSpace::DisplayP3,
                 ExportFormat::Jpeg,
                 true,
-                "p3-hdr.jpg",
+                true,
+                "p3-hdr-gps.jpg",
             ),
             (
                 ExportColorSpace::DisplayP3,
                 ExportFormat::Png,
                 false,
+                false,
                 "p3.png",
+            ),
+            (
+                ExportColorSpace::Srgb,
+                ExportFormat::Tiff,
+                false,
+                true,
+                "srgb-gps.tif",
             ),
         ] {
             let params = DevelopParams::new(
@@ -789,13 +1015,11 @@ mod tests {
                 )
                 .unwrap()
             });
-            write(
-                &r,
-                g.as_ref(),
-                &out.join(name),
-                &settings(&out, format, space, hdr),
-            )
-            .unwrap();
+            let s = ExportSettings {
+                include_location: location,
+                ..settings(&out, format, space, hdr)
+            };
+            write(&r, g.as_ref(), &out.join(name), &s, &meta).unwrap();
         }
     }
 
@@ -804,11 +1028,14 @@ mod tests {
         let dir = Path::new("/");
         assert!(settings(dir, ExportFormat::Jpeg, ExportColorSpace::Srgb, true).ultra_hdr());
         assert!(!settings(dir, ExportFormat::Png, ExportColorSpace::Srgb, true).ultra_hdr());
-        // Settings saved before HDR existed still load.
+        // Settings saved before HDR or location existed still load, without them.
         let old =
             r#"{"folder":"/x","format":"jpeg","quality":90,"longEdge":null,"versions":"current"}"#;
         let s: ExportSettings = serde_json::from_str(old).unwrap();
-        assert_eq!((s.color_space, s.hdr), (ExportColorSpace::Srgb, false));
+        assert_eq!(
+            (s.color_space, s.hdr, s.include_location),
+            (ExportColorSpace::Srgb, false, false)
+        );
     }
 
     #[test]

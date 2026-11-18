@@ -28,6 +28,11 @@ image = { version = "0.25", default-features = false, features = ["jpeg", "png",
 rayon.workspace = true
 tauri-plugin-opener = "2"
 ultrahdr-rs = "0.3.5"
+tiff = { version = "0.11", default-features = false }
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = "0.2"
+
+[dev-dependencies]
+kamadak-exif = "0.6"

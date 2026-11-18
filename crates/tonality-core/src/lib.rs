@@ -4,6 +4,7 @@ pub mod catalog;
 pub mod color;
 pub mod curve;
 pub mod edit;
+pub mod exif;
 pub mod geometry;
 pub mod history;
 pub mod lens;

@@ -15,4 +15,8 @@ longEdge: number | null, versions: ExportVersions, colorSpace: ExportColorSpace,
 /**
  * JPEG only: write Ultra HDR (a gain map to AgX HDR, 1000 nits).
  */
-hdr: boolean, };
+hdr: boolean, 
+/**
+ * Write the GPS position the camera recorded.
+ */
+includeLocation: boolean, };

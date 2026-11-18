@@ -175,6 +175,21 @@
         {/if}
 
         <div class="row">
+          <span class="label">Location</span>
+          <div class="seg">
+            <button
+              class:active={!s.includeLocation}
+              onclick={() => (exporter.settings.includeLocation = false)}>Leave out</button
+            >
+            <button
+              class:active={s.includeLocation}
+              onclick={() => (exporter.settings.includeLocation = true)}
+              title="The GPS position the camera recorded, if any">Include</button
+            >
+          </div>
+        </div>
+
+        <div class="row">
           <span class="label">Long edge</span>
           <div class="seg">
             {#each sizes as z (z.label)}

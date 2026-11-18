@@ -13,4 +13,5 @@ blake3.workspace = true
 rusqlite.workspace = true
 
 [dev-dependencies]
+kamadak-exif = "0.6"
 proptest = "1"

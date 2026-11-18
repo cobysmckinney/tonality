@@ -12,7 +12,7 @@ mod thumbnail;
 use std::path::Path;
 
 pub use lens::{lens_profile, lens_profiles};
-pub use meta::read_meta;
+pub use meta::{read_capture, read_meta};
 pub use preview::{decode_full, decode_preview, FullImage, Preview, Region};
 pub use thumbnail::thumbnail;
 

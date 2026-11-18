@@ -26,6 +26,7 @@ class Exporter {
     versions: "current",
     colorSpace: "srgb",
     hdr: false,
+    includeLocation: false,
     ...stored(),
   });
   running = $state(false);

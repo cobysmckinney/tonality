@@ -2,6 +2,7 @@ mod ai;
 mod export;
 mod history;
 mod images;
+mod jpeg;
 mod layers;
 mod library;
 mod priority;

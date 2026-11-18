@@ -279,6 +279,16 @@ impl Catalog {
             .ok_or_else(|| CatalogError::NotFound(format!("image {id}")))
     }
 
+    /// An image's star rating, 0 (unrated) to 5.
+    pub fn image_rating(&self, id: ImageId) -> Result<u8> {
+        self.conn
+            .query_row("SELECT rating FROM images WHERE id = ?1", [id], |r| {
+                r.get::<_, u8>(0)
+            })
+            .optional()?
+            .ok_or_else(|| CatalogError::NotFound(format!("image {id}")))
+    }
+
     /// Every image id, oldest first.
     pub fn image_ids(&self) -> Result<Vec<ImageId>> {
         let mut stmt = self.conn.prepare("SELECT id FROM images ORDER BY id")?;
