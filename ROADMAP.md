@@ -15,23 +15,7 @@ Add new ideas to **Later**, and move finished items to **Done** with the date an
 
 ## Now
 
-### 1. AgX done properly (the only tone mapping)
-**Status:** built on branch `agx`, seen in the app; waiting for Coby's review. The math, its
-sources and the checks are in `docs/agx.md`.
-- [x] Researched Sobotka's AgX, Eary Chow's AgX_LUT_Gen and Blender's config; wrote the chain down.
-- [x] References from Blender's real config and LUTs through OpenColorIO
-  (`scripts/agx_reference.py` → `crates/tonality-core/tests/data/agx_reference.json`). The written
-  math reproduces Blender's LUT grid points (mean 8e-6).
-- [x] `tonality_core::agx`: matrices computed from AgX's parameters (they match Blender's to 8
-  digits), CPU reference; the shader gets them in the params uniform. The real sigmoid, guard
-  rails and 40% hue restore replace the polynomial.
-- [x] Tests: matrices, CPU vs exact and vs Blender, GPU shader vs CPU (`tests/agx_gpu.rs`).
-- [x] Compared old and new on real photos: grey 0.50 → 0.46, shadows more open, colour holds better.
-- [ ] Coby tries it (existing edits will look a little different).
-- Later: Display P3 output; keep negatives through the pipeline so AgX's first guard rail sees
-  out-of-gamut colours (goes with the noise-reduction leftover).
-
-### 2. Texture, Clarity and Dehaze (global and on masks)
+### 1. Texture, Clarity and Dehaze (global and on masks)
 The most used local adjustments in other editors, and missing globally too. Each compares a
 pixel with a blurred copy of its neighbourhood, so they need a multi-scale blur (or a
 precomputed blurred pyramid) rather than a per-pixel formula.
@@ -43,7 +27,7 @@ precomputed blurred pyramid) rather than a per-pixel formula.
 - [ ] Global sliders (Effects or a new Presence section) and the same three on masks.
 - [ ] Watch preview speed: blurs at full resolution while zoomed, and at tile edges in export.
 
-### 3. Leftovers from the code review
+### 2. Leftovers from the code review
 - [ ] Try in the app: the content security policy (watch the console for blocked loads), the
   white balance presets (does "Fluorescent" fit?), the library thumbnail after leaving Edit
   quickly, and switching photos quickly with masks.
@@ -62,8 +46,10 @@ precomputed blurred pyramid) rather than a per-pixel formula.
 
 ## Later
 _(new ideas go here)_
+- AgX for Display P3 (and HDR) output: swap the display matrix and guard-rail weights (`docs/agx.md`).
 
 ## Done
+- 2026-11-17 — AgX done properly: Blender's AgX Base from its parameters, checked against Blender's LUTs (`agx`, `8237c3b`; `docs/agx.md`).
 - 2026-11-17 — Reset history, from Edit or for selected photos in the Library (`history-reset`). Cleaned the real library of 9 duplicate branches left by the old sidecar bug (backup in `~/Pictures/tonality-backup-2026-11-17-before-dedupe`), and fixed the merge so a copy in today's format can't capture the original.
 - 2026-11-17 — Logo: italic Playfair `t` mark and wordmark, app icons, startup animation (`logo`, `e22ba27`).
 - 2026-11-17 — Crop: aspect presets as icon buttons, orientation switch, 3:4; sidecar merge no longer duplicates histories when a new setting is added (`crop-buttons`, `7fbec47`).
