@@ -29,6 +29,7 @@ _(new ideas go here)_
 - P3 / HDR preview, once the webview can show one and there's a wide-gamut HDR display to check on (`docs/agx.md`, Later).
 
 ## Done
+- 2026-11-17 — Ultra HDR files without JFIF (MPF must follow SOI), one ICC profile per space (fixed a flaky test); repo formatted with rustfmt and Prettier, format checks added to the checklist (`leftovers-2`).
 - 2026-11-17 — Display P3 and Ultra HDR export: AgX Base for P3 and AgX HDR (1000 nits) from Eary's scripts, each matching Blender's LUT at every grid point; export colour space (sRGB / Display P3, ICC embedded) and Ultra HDR JPEG (SDR base + gain map to AgX HDR) (`p3-hdr`; `docs/agx.md`).
 - 2026-11-17 — Out-of-gamut colours carried to AgX: no Rec.2020 clamp after the camera matrix or in Colour; Tone's luminance floored so negative-luminance colours can't blow up; Dehaze keeps negatives; GPU tests for both (`out-of-gamut`).
 - 2026-11-17 — Leftovers: values below black kept through noise reduction, own pool for prefetch decodes, catalog v4 (HEAD → branch key), in-app checks (`leftovers`, `b096c0e`).
