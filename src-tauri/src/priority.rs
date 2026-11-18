@@ -33,6 +33,20 @@ pub fn pool() -> &'static rayon::ThreadPool {
     })
 }
 
+/// A low-priority pool of its own for full-resolution decodes ahead of need. Not shared with
+/// [`pool`]: a zoom that has to wait for a decode already under way shouldn't also wait for the
+/// AI detection or thumbnails that happen to be sharing its threads.
+pub fn decode_pool() -> &'static rayon::ThreadPool {
+    static POOL: OnceLock<rayon::ThreadPool> = OnceLock::new();
+    POOL.get_or_init(|| {
+        rayon::ThreadPoolBuilder::new()
+            .thread_name(|i| format!("full-decode-{i}"))
+            .start_handler(|_| lower_this_thread())
+            .build()
+            .expect("decode pool")
+    })
+}
+
 #[cfg(all(test, target_os = "linux"))]
 mod tests {
     #[test]

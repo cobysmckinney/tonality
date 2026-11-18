@@ -5,6 +5,7 @@ use image::{imageops, ImageBuffer, Rgb};
 use rawler::decoders::{Orientation, RawDecodeParams};
 use rawler::rawsource::RawSource;
 use rawler::imgop::xyz::Illuminant;
+use rawler::formats::tiff::Rational;
 use rawler::rawimage::{RawImage, RawImageData, RawPhotometricInterpretation};
 use rayon::prelude::*;
 use tonality_core::color::{CameraColor, Mat3};
@@ -73,7 +74,7 @@ pub fn decode_preview(path: &Path, max_edge: usize) -> Result<Preview> {
     let pixels = img
         .as_raw()
         .par_iter()
-        .map(|&v| f16::from_f32(v.clamp(0.0, 65504.0)).to_bits())
+        .map(|&v| f16::from_f32(v.clamp(-65504.0, 65504.0)).to_bits())
         .collect();
 
     Ok(Preview {
@@ -231,7 +232,7 @@ fn resample(src: &[u16], sw: usize, sh: usize, dw: usize, dh: usize) -> Vec<u16>
             }
         }
         for (o, a) in row.iter_mut().zip(acc) {
-            *o = f16::from_f32(a.clamp(0.0, 65504.0)).to_bits();
+            *o = f16::from_f32(a.clamp(-65504.0, 65504.0)).to_bits();
         }
     });
     out
@@ -283,7 +284,7 @@ pub fn decode_full(path: &Path) -> Result<FullImage> {
     };
     drop(d.raw);
 
-    let halves: Vec<u16> = rgb.par_iter().map(|&v| f16::from_f32(v.clamp(0.0, 65504.0)).to_bits()).collect();
+    let halves: Vec<u16> = rgb.par_iter().map(|&v| f16::from_f32(v.clamp(-65504.0, 65504.0)).to_bits()).collect();
     drop(rgb);
     let img = ImageBuffer::<Rgb<u16>, Vec<u16>>::from_raw(w as u32, h as u32, halves).expect("buffer size matches");
     let img = orient(img, d.orientation);
@@ -305,13 +306,57 @@ impl Decoded {
         let decoder = rawler::get_decoder(&src).map_err(err)?;
         let params = RawDecodeParams::default();
         let mut raw = decoder.raw_image(&src, &params, false).map_err(err)?;
-        raw.apply_scaling().map_err(err)?;
+        scale(&mut raw);
         // Not every decoder fills `RawImage::orientation` (e.g. Sony ARW), so prefer EXIF.
         let orientation = exif_orientation(decoder.as_ref(), &src).unwrap_or(raw.orientation);
         let color = camera_color(&raw);
         let metadata = Metadata { make: raw.clean_make.clone(), model: raw.clean_model.clone() };
         Ok(Self { raw, orientation, color, metadata })
     }
+}
+
+/// Black-subtract and normalise to 0..1 (white), like rawler's `apply_scaling` but keeping values
+/// below black: sensor noise around black is symmetric, and clipping it here (before the
+/// demosaic, downsampling and noise reduction average it) lifts and tints the shadows. The
+/// shader clips black after noise reduction.
+fn scale(raw: &mut RawImage) {
+    let mut px = raw.data.as_f32().into_owned();
+    match &raw.photometric {
+        RawPhotometricInterpretation::Cfa(_) => {
+            // Levels per position in the 2×2 CFA block: (0,0), (1,0), (0,1), (1,1).
+            let black = raw.blacklevel.as_bayer_array();
+            let white = raw.whitelevel.as_bayer_array();
+            let range = [0, 1, 2, 3].map(|i| (white[i] - black[i]).max(1.0));
+            let w = raw.width.max(1);
+            px.par_chunks_mut(w).enumerate().for_each(|(y, row)| {
+                for (x, v) in row.iter_mut().enumerate() {
+                    let i = (y % 2) * 2 + x % 2;
+                    *v = (*v - black[i]) / range[i];
+                }
+            });
+        }
+        _ => {
+            let black = raw.blacklevel.as_vec();
+            let white = raw.whitelevel.as_vec();
+            let ch = black.len().max(1);
+            if white.len() == ch {
+                let range: Vec<f32> = (0..ch).map(|i| (white[i] - black[i]).max(1.0)).collect();
+                px.par_chunks_mut(ch).for_each(|b| {
+                    for (i, v) in b.iter_mut().enumerate() {
+                        *v = (*v - black[i]) / range[i];
+                    }
+                });
+            }
+        }
+    }
+    if std::env::var("TONALITY_DEBUG_BLACK").is_ok() {
+        let neg = px.iter().filter(|v| **v < 0.0).count();
+        let min = px.iter().copied().fold(f32::INFINITY, f32::min);
+        eprintln!("[scale] black {:?} white {:?} negatives {:.3}% min {min}", raw.blacklevel.as_vec(), raw.whitelevel.as_vec(), 100.0 * neg as f64 / px.len() as f64);
+    }
+    raw.data = RawImageData::Float(px);
+    raw.blacklevel.levels.iter_mut().for_each(|x| *x = Rational::new(0, 1));
+    raw.whitelevel.0.iter_mut().for_each(|x| *x = 1);
 }
 
 fn transposes(o: Orientation) -> bool {
@@ -330,8 +375,8 @@ pub(crate) fn exif_orientation(decoder: &dyn rawler::decoders::Decoder, src: &Ra
 fn float_data(raw: &RawImage) -> &[f32] {
     match &raw.data {
         RawImageData::Float(d) => d,
-        // apply_scaling() always produces Float.
-        RawImageData::Integer(_) => unreachable!("apply_scaling converts to float"),
+        // `scale` always produces Float.
+        RawImageData::Integer(_) => unreachable!("scale converts to float"),
     }
 }
 
@@ -457,7 +502,7 @@ mod tests {
         let max = ours
             .iter()
             .zip(theirs.as_raw())
-            .map(|(&a, &b)| (f16::from_bits(a).to_f32() - b.clamp(0.0, 65504.0)).abs())
+            .map(|(&a, &b)| (f16::from_bits(a).to_f32() - b.clamp(-65504.0, 65504.0)).abs())
             .fold(0f32, f32::max);
         assert!(max < 0.02, "max difference {max}");
         // Flat stays flat.

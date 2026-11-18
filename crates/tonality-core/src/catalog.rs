@@ -111,6 +111,30 @@ const MIGRATIONS: &[&str] = &[
     r#"
     ALTER TABLE images ADD COLUMN aspect REAL;
     "#,
+    // v4: a photo's HEAD must name one of its branches. First repair any that doesn't (older
+    // versions could leave one): point it at a branch with the same tip, else bring the branch
+    // back. The check is deferred to commit, so a transaction can move HEAD off a branch it then
+    // deletes; renaming a branch carries HEAD along.
+    r#"
+    UPDATE heads SET branch = (
+        SELECT name FROM refs r WHERE r.image_id = heads.image_id AND r.commit_id = heads.commit_id ORDER BY r.id LIMIT 1
+    )
+    WHERE NOT EXISTS (SELECT 1 FROM refs r WHERE r.image_id = heads.image_id AND r.name = heads.branch)
+      AND EXISTS (SELECT 1 FROM refs r WHERE r.image_id = heads.image_id AND r.commit_id = heads.commit_id);
+    INSERT INTO refs (image_id, name, commit_id)
+        SELECT image_id, branch, commit_id FROM heads h
+        WHERE NOT EXISTS (SELECT 1 FROM refs r WHERE r.image_id = h.image_id AND r.name = h.branch);
+    CREATE TABLE heads_v4 (
+        image_id    INTEGER PRIMARY KEY REFERENCES images(id) ON DELETE CASCADE,
+        branch      TEXT NOT NULL,
+        commit_id   INTEGER NOT NULL REFERENCES commits(id),
+        FOREIGN KEY (image_id, branch) REFERENCES refs(image_id, name)
+            ON UPDATE CASCADE DEFERRABLE INITIALLY DEFERRED
+    );
+    INSERT INTO heads_v4 (image_id, branch, commit_id) SELECT image_id, branch, commit_id FROM heads;
+    DROP TABLE heads;
+    ALTER TABLE heads_v4 RENAME TO heads;
+    "#,
 ];
 
 pub fn system_clock() -> Clock {
@@ -177,6 +201,36 @@ impl Catalog {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn v4_repairs_a_dangling_head_then_enforces_it() {
+        // A catalog at v3 whose HEAD names a branch that doesn't exist (the old sidecar bug).
+        let conn = Connection::open_in_memory().unwrap();
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+        for (i, sql) in MIGRATIONS[..3].iter().enumerate() {
+            conn.execute_batch(sql).unwrap();
+            conn.pragma_update(None, "user_version", i + 1).unwrap();
+        }
+        conn.execute_batch(
+            "INSERT INTO images (id, hash, file, name, file_size, imported_at) VALUES (1, 'h', 'f', 'n', 1, 0), (2, 'h2', 'f2', 'n2', 1, 0);
+             INSERT INTO edit_states (hash, json) VALUES ('s', '{}');
+             INSERT INTO commits (id, image_id, parent, state_hash, summary, created_at, updated_at) VALUES
+                 (1, 1, NULL, 's', 'Original', 0, 0), (2, 2, NULL, 's', 'Original', 0, 0);
+             INSERT INTO refs (image_id, name, commit_id) VALUES (1, 'main', 1);
+             INSERT INTO heads (image_id, branch, commit_id) VALUES (1, 'main-2', 1), (2, 'gone', 2);",
+        )
+        .unwrap();
+        let cat = Catalog::init(conn).unwrap();
+        let head = |img: i64| -> String { cat.conn.query_row("SELECT branch FROM heads WHERE image_id = ?1", [img], |r| r.get(0)).unwrap() };
+        assert_eq!(head(1), "main", "pointed at the branch with its tip");
+        assert_eq!(head(2), "gone", "branch brought back");
+        let refs: i64 = cat.conn.query_row("SELECT COUNT(*) FROM refs WHERE image_id = 2 AND name = 'gone'", [], |r| r.get(0)).unwrap();
+        assert_eq!(refs, 1);
+        // Enforced from now on, and renames carry HEAD along.
+        assert!(cat.conn.execute("DELETE FROM refs WHERE image_id = 1 AND name = 'main'", []).is_err());
+        cat.conn.execute("UPDATE refs SET name = 'renamed' WHERE image_id = 1", []).unwrap();
+        assert_eq!(head(1), "renamed");
+    }
 
     #[test]
     fn migrates_and_reopens() {

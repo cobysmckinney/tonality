@@ -140,8 +140,10 @@ impl Images {
                                 Err(RecvTimeoutError::Timeout) => {
                                     let (id, path) = job.take().unwrap();
                                     if me.latest.load(Ordering::Relaxed) == id {
-                                        // At low priority (it's ahead of need).
-                                        let _ = crate::priority::pool().install(|| me.full(id, &path));
+                                        // At low priority (it's ahead of need), on threads of its
+                                        // own: a zoom that ends up waiting for it shouldn't also
+                                        // wait for detection or thumbnails on the shared pool.
+                                        let _ = crate::priority::decode_pool().install(|| me.full(id, &path));
                                     }
                                     continue;
                                 }

@@ -12,7 +12,10 @@ fn main() {
     let full = tonality_raw::decode_full(args[0].as_ref()).expect("decode");
     println!("decode {}×{} in {:?}", full.width, full.height, t.elapsed());
     let mut edit = EditState::default();
-    edit.light.exposure = 1.0;
+    // EXPOSURE=stops (default 1).
+    edit.light.exposure = std::env::var("EXPOSURE").ok().and_then(|v| v.parse().ok()).unwrap_or(1.0);
+    let neg = full.pixels.iter().filter(|&&b| half::f16::from_bits(b).to_f32() < 0.0).count();
+    println!("negative samples: {:.2}%", 100.0 * neg as f64 / full.pixels.len() as f64);
     edit.detail.sharpen_amount = args.get(2).map_or(0.0, |v| v.parse().unwrap());
     edit.detail.luminance_noise = args.get(3).map_or(0.0, |v| v.parse().unwrap());
     edit.detail.color_noise = args.get(3).map_or(0.0, |v| v.parse().unwrap());

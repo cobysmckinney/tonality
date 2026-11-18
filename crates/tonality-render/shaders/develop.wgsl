@@ -108,8 +108,11 @@ fn vs_main(@builtin(vertex_index) i: u32) -> VsOut {
 }
 
 // ---- Detail: noise reduction and sharpening ----------------------------------------------------
-// Runs on white-balanced camera RGB. Luminance is handled as sqrt(L), where photon (shot) noise
-// is roughly uniform, so one strength works across shadows and highlights. Kernel sizes are in
+// Runs on white-balanced camera RGB, negatives included: sensor noise around black is
+// symmetric, and clipping it before averaging would lift and tint the shadows. Colour splits into
+// luminance L and an additive chroma difference d = c − L (as YCbCr does), so nothing divides by
+// a near-zero L. Luminance is handled as a signed √L, where photon (shot) noise is roughly
+// uniform, so one strength works across shadows and highlights. Kernel sizes are in
 // full-resolution pixels: on the downscaled preview the taps fall within a texel and the effect
 // shrinks accordingly, just as it would in a downscaled export.
 
@@ -117,12 +120,19 @@ const CAM_LUMA = vec3<f32>(0.25, 0.5, 0.25);
 
 fn cam_at(tc: vec2<f32>) -> vec3<f32> {
     let c = textureSampleLevel(image, image_sampler, tc, 0.0).rgb;
-    // White balance, then clip so blown highlights stay neutral.
-    return clamp(c * params.wb.xyz, vec3<f32>(0.0), vec3<f32>(params.wb.w));
+    // White balance, then clip so blown highlights stay neutral (the low end is clipped after
+    // noise reduction, in fs_main).
+    return min(c * params.wb.xyz, vec3<f32>(params.wb.w));
 }
 
+// Signed square root of camera luminance, and back.
 fn root_luma(c: vec3<f32>) -> f32 {
-    return sqrt(max(dot(c, CAM_LUMA), 0.0));
+    let l = dot(c, CAM_LUMA);
+    return sign(l) * sqrt(abs(l));
+}
+
+fn unroot(s: f32) -> f32 {
+    return s * abs(s);
 }
 
 // `local`: what masks add here: x: sharpness, y: luminance noise reduction (-1..1).
@@ -137,9 +147,11 @@ fn detail(tc: vec2<f32>, px: vec2<f32>, local: vec2<f32>) -> vec3<f32> {
     }
     let s0 = root_luma(c0);
     var s = s0;
-    var chroma = c0 / max(s0 * s0, 1e-6);
+    var chroma = c0 - vec3<f32>(unroot(s0));
 
-    // Luminance: 5×5 bilateral filter.
+    // Luminance: 5×5 bilateral filter. Neighbours are weighted by their difference in √L (where
+    // noise is uniform), but averaged linearly: averaging √L and squaring back would darken
+    // noisy shadows (the mean of a square root is below the square root of the mean).
     let sigma_r = 0.06 * lnr + 1e-4;
     if (lnr > 0.0) {
         var acc = 0.0;
@@ -150,14 +162,15 @@ fn detail(tc: vec2<f32>, px: vec2<f32>, local: vec2<f32>) -> vec3<f32> {
                 let v = root_luma(cam_at(tc + o * px));
                 let d = (v - s0) / sigma_r;
                 let w = exp(-dot(o, o) / 4.5 - 0.5 * d * d);
-                acc = acc + v * w;
+                acc = acc + unroot(v) * w;
                 wsum = wsum + w;
             }
         }
-        s = mix(s0, acc / wsum, min(1.0, lnr * 2.0));
+        let l = mix(unroot(s0), acc / wsum, min(1.0, lnr * 2.0));
+        s = sign(l) * sqrt(abs(l));
     }
 
-    // Colour: average the chroma ratio over a wide window, stopping at luminance edges.
+    // Colour: average the chroma difference over a wide window, stopping at luminance edges.
     if (cnr > 0.0) {
         let step = 1.5 + 2.5 * cnr;
         var acc = vec3<f32>(0.0);
@@ -169,7 +182,7 @@ fn detail(tc: vec2<f32>, px: vec2<f32>, local: vec2<f32>) -> vec3<f32> {
                 let v = root_luma(c);
                 let d = (v - s0) / 0.05;
                 let w = exp(-dot(o, o) / 8.0 - 0.5 * d * d);
-                acc = acc + w * c / max(v * v, 1e-6);
+                acc = acc + w * (c - vec3<f32>(unroot(v)));
                 wsum = wsum + w;
             }
         }
@@ -203,10 +216,9 @@ fn detail(tc: vec2<f32>, px: vec2<f32>, local: vec2<f32>) -> vec3<f32> {
         let mask = select(1.0, smoothstep(m * 0.5, m, edge), m > 0.0 && !soften);
         let margin = 0.02 + 0.1 * (mx - mn);
         s = clamp(s + amount * d * mask, mn - margin, mx + margin);
-        s = max(s, 0.0);
     }
 
-    return max(chroma * s * s, vec3<f32>(0.0));
+    return chroma + vec3<f32>(unroot(s));
 }
 
 const REC2020_LUMA = vec3<f32>(0.2627, 0.6780, 0.0593);
@@ -735,7 +747,8 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     if (params.masks_head.w > 0.5) {
         local = local_detail(tc, uv);
     }
-    var cam = detail(tc, in.px.xy, local);
+    // Black clips here, after noise reduction has averaged the noise around it.
+    var cam = max(detail(tc, in.px.xy, local), vec3<f32>(0.0));
     if (lens_on) {
         // Lateral chromatic aberration: red and blue come from slightly different radii.
         if (k.x != k.y || k.z != k.y) {

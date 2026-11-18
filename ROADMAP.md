@@ -16,16 +16,19 @@ Add new ideas to **Later**, and move finished items to **Done** with the date an
 ## Now
 
 ### 1. Leftovers from the code review
-- [ ] Try in the app: the content security policy (watch the console for blocked loads), the
-  white balance presets (does "Fluorescent" fit?), the library thumbnail after leaving Edit
-  quickly, and switching photos quickly with masks.
-- [ ] Shadows lifted/tinted before noise reduction (`crates/tonality-raw/src/preview.rs`):
-  negatives are clipped to 0 before NR. Keep them through NR; clamp later. Compare before
-  and after on real photos.
-- [ ] Background prefetch can make a zoom-in wait right after opening a photo
-  (`src-tauri/src/images.rs`: `detail_region` waits on the low-priority decode).
-- [ ] Optional: a foreign key from branch heads to branches (`crates/tonality-core/src/catalog.rs`);
-  needs a schema migration.
+**Status:** done on branch `leftovers`; waiting for Coby's review.
+- [x] Tried in the app (scripted): no content-security-policy violations or script errors;
+  the library thumbnail is saved after leaving Edit right after an edit; stepping quickly
+  through photos with masks ends on the right photo and edit. "Fluorescent" is CIE F2 (cool
+  white, ≈4230 K), as it should be.
+- [x] Values below black are kept: the decoder no longer clips them (rawler's scaling did), noise
+  reduction averages them (luminance linearly, weighted in √L; chroma as differences), and black
+  is clipped after. A GPU test: a noisy patch around black stays within ~15% of the clean one,
+  against +45% when clipped first. (Sony and Nikon clip at black in camera; Canon doesn't.)
+- [x] Full-resolution prefetch decodes on a low-priority pool of their own, so a zoom waiting
+  for one doesn't also wait behind AI detection or thumbnails.
+- [x] Catalog v4: HEAD must name one of the photo's branches (foreign key, deferred; renames
+  carry HEAD). The migration repairs a dangling HEAD first; tried on a copy of Coby's catalog.
 
 ---
 
