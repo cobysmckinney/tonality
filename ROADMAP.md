@@ -15,19 +15,7 @@ Add new ideas to **Later**, and move finished items to **Done** with the date an
 
 ## Now
 
-### 1. Texture, Clarity and Dehaze (global and on masks)
-**Status:** built on branch `presence`, seen in the app; waiting for Coby's review. Methods
-and numbers in `docs/presence.md`.
-- [x] Coby: sliders go in **Effects** (a "Presence" group above Vignette); masks get an Effects
-  section with the same three.
-- [x] Texture: band-pass of as-shot luminance (2 px vs 6 px rings), cored against noise.
-- [x] Clarity: fast guided filter (edge-preserving, no halos), mid-tone weighted.
-- [x] Dehaze: dark channel prior + guided-filter refinement; small patch (no halos round poles).
-- [x] Per-photo maps (512 px) made once, shared by preview and export (tiles agree).
-- [x] Tests: maps (flat photo, edge kept, airlight), params offsets, hash stability.
-- [ ] Coby tries it.
-
-### 2. Leftovers from the code review
+### 1. Leftovers from the code review
 - [ ] Try in the app: the content security policy (watch the console for blocked loads), the
   white balance presets (does "Fluorescent" fit?), the library thumbnail after leaving Edit
   quickly, and switching photos quickly with masks.
@@ -49,6 +37,7 @@ _(new ideas go here)_
 - AgX for Display P3 (and HDR) output: swap the display matrix and guard-rail weights (`docs/agx.md`).
 
 ## Done
+- 2026-11-17 — Texture, Clarity, Dehaze in Effects and on masks (`presence`, `9b08681`; `docs/presence.md`).
 - 2026-11-17 — AgX done properly: Blender's AgX Base from its parameters, checked against Blender's LUTs (`agx`, `8237c3b`; `docs/agx.md`).
 - 2026-11-17 — Reset history, from Edit or for selected photos in the Library (`history-reset`). Cleaned the real library of 9 duplicate branches left by the old sidecar bug (backup in `~/Pictures/tonality-backup-2026-11-17-before-dedupe`), and fixed the merge so a copy in today's format can't capture the original.
 - 2026-11-17 — Logo: italic Playfair `t` mark and wordmark, app icons, startup animation (`logo`, `e22ba27`).
