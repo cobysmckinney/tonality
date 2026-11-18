@@ -1,6 +1,7 @@
 <script lang="ts">
   import { open } from "@tauri-apps/plugin-dialog";
   import { revealItemInDir } from "@tauri-apps/plugin-opener";
+  import type { ExportColorSpace } from "$lib/bindings/ExportColorSpace";
   import type { ExportFormat } from "$lib/bindings/ExportFormat";
   import { exporter } from "./export.svelte";
 
@@ -11,6 +12,10 @@
     { id: "jpeg", label: "JPEG", hint: "8-bit, for sharing" },
     { id: "png", label: "PNG", hint: "8-bit, lossless" },
     { id: "tiff", label: "TIFF", hint: "16-bit, for further editing" },
+  ];
+  const spaces: { id: ExportColorSpace; label: string; hint: string }[] = [
+    { id: "srgb", label: "sRGB", hint: "Looks the same everywhere" },
+    { id: "displayP3", label: "Display P3", hint: "Wider colour, for phones, Macs and wide-gamut screens" },
   ];
   const sizes: { label: string; value: number | null }[] = [
     { label: "Full", value: null },
@@ -89,7 +94,28 @@
           </div>
         </div>
 
+        <div class="row">
+          <span class="label">Colour</span>
+          <div class="seg">
+            {#each spaces as c (c.id)}
+              <button class:active={s.colorSpace === c.id} onclick={() => (exporter.settings.colorSpace = c.id)} title={c.hint}>{c.label}</button>
+            {/each}
+          </div>
+        </div>
+
         {#if s.format === "jpeg"}
+          <div class="row">
+            <span class="label">HDR</span>
+            <div class="seg">
+              <button class:active={!s.hdr} onclick={() => (exporter.settings.hdr = false)}>Off</button>
+              <button class:active={s.hdr} onclick={() => (exporter.settings.hdr = true)}>Ultra HDR</button>
+            </div>
+          </div>
+          {#if s.hdr}
+            <p class="hint">
+              HDR screens show highlights up to 10× brighter (1,000 nits); others show the photo as it is here.
+            </p>
+          {/if}
           <div class="row">
             <span class="label">Quality</span>
             <input

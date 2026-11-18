@@ -24,9 +24,10 @@ _Nothing queued. Pick the next item from **Later** or add a new one._
 
 ## Later
 _(new ideas go here)_
-- AgX for Display P3 (and HDR) output: swap the display matrix and guard-rail weights (`docs/agx.md`).
+- P3 / HDR preview, once the webview can show one and there's a wide-gamut HDR display to check on (`docs/agx.md`, Later).
 
 ## Done
+- 2026-11-17 — Display P3 and Ultra HDR export: AgX Base for P3 and AgX HDR (1000 nits) from Eary's scripts, each matching Blender's LUT at every grid point; export colour space (sRGB / Display P3, ICC embedded) and Ultra HDR JPEG (SDR base + gain map to AgX HDR) (`p3-hdr`; `docs/agx.md`).
 - 2026-11-17 — Out-of-gamut colours carried to AgX: no Rec.2020 clamp after the camera matrix or in Colour; Tone's luminance floored so negative-luminance colours can't blow up; Dehaze keeps negatives; GPU tests for both (`out-of-gamut`).
 - 2026-11-17 — Leftovers: values below black kept through noise reduction, own pool for prefetch decodes, catalog v4 (HEAD → branch key), in-app checks (`leftovers`, `b096c0e`).
 - 2026-11-17 — Texture, Clarity, Dehaze in Effects and on masks (`presence`, `9b08681`; `docs/presence.md`).

@@ -1,12 +1,15 @@
 # AgX in tonality
 
-tonality's only display transform is **AgX Base**, as Blender ships it (Blender 4.0 and later,
-view "AgX" on an sRGB display). This page writes the transform down, says where every number
-comes from, and records how tonality's implementation was checked against Blender's.
+tonality's only display transform is **AgX**, as Blender ships it: **AgX Base** for SDR displays
+(Blender 4.0 and later, view "AgX" on an sRGB or Display P3 display) and **AgX HDR** at 1000 nits
+(Blender 5.0, view "AgX - HDR 1000 nits"), which exports use for Ultra HDR JPEGs. This page writes
+the transforms down, says where every number comes from, and records how tonality's
+implementation was checked against Blender's.
 
 The code: `crates/tonality-core/src/agx.rs` (parameters, matrices, a CPU reference) and `agx()` in
 `crates/tonality-render/shaders/develop.wgsl` (the same steps on the GPU, for the preview,
-export, histogram and mask luminance ranges).
+export, histogram and mask luminance ranges). The preview is sRGB; exports are sRGB or Display
+P3, optionally with an HDR gain map ([HDR](#hdr-ultra-hdr-export)).
 
 ## Sources
 
@@ -15,9 +18,11 @@ export, histogram and mask luminance ranges).
   and the inset / outset working-space construction).
 - **Eary Chow**, the AgX that Blender adopted: <https://github.com/EaryChow/AgX> (config) and
   <https://github.com/EaryChow/AgX_LUT_Gen> (`AgXBaseRec2020.py`, `AgXBasesRGB.py`,
-  `sigmoid.py`, `working_space.py`, `luminance_compenstation_*.py`).
+  `AgXBaseP3.py`, `AgXHLG.py`, `sigmoid.py`, `working_space.py`,
+  `luminance_compenstation_*.py`).
 - **Blender's OCIO config**, `release/datafiles/colormanagement/config.ocio` and
-  `luts/AgX_Base_sRGB.cube` in <https://github.com/blender/blender>: what users actually see.
+  `luts/AgX_Base_sRGB.cube`, `AgX_Base_P3.cube` and `AgX_Rec2100-HLG_p3_lim.cube` in
+  <https://github.com/blender/blender>: what users actually see.
 - **Jed Smith's tunable sigmoid** (<https://www.desmos.com/calculator/yrysofmx8h>), which
   Sobotka's `sigmoid.py` ports.
 
@@ -27,7 +32,8 @@ same math per pixel instead of through a LUT.
 ## The transform
 
 Input: scene-linear **Rec.2020** (D65), tonality's working space, after every edit. Output:
-**sRGB** code values (0–1) for the display. Constants are listed after the steps.
+**sRGB** code values (0–1) for the display. Constants are listed after the steps; Display P3 and
+HDR follow, as differences from these.
 
 1. **Input domain.** Blender's LUT takes **E-Gamut** log2 from −10 to +15 stops around middle grey
    (0.18), so each E-Gamut channel is clamped to `[0.18·2⁻¹⁰, 0.18·2¹⁵]`. In Rec.2020:
@@ -108,42 +114,97 @@ INSET  = [0.856627 0.095121 0.048252]     OUTSET = [ 1.127101 -0.110607 -0.01649
 parameters above reproduce the same matrices starting from Rec.2020.)
 
 **Luminance weights.** In June 2025 Eary's scripts switched the guard rails' weights to
-[0.2589, 0.6105, 0.1306]. Blender's shipped LUTs were made with the earlier ones, and only the
-earlier weights reproduce them (see below), so tonality uses those. The difference is visible only
-in colours outside the display gamut.
+[0.2589235355689848, 0.6104985346066525, 0.13057792982436284]. Blender's AgX Base LUTs (sRGB, P3)
+were made with the earlier ones, its HDR LUT (August 2025, the same week as `AgXHLG.py`) with the
+new ones, in both guard rails; each set reproduces only its own LUTs (see below), so tonality uses
+the earlier weights for AgX Base and the new ones for HDR. The difference is visible only in
+colours outside the display gamut.
+
+## Display P3
+
+The same chain with P3 (D65) in place of Rec.709 in steps 10 and 11 (`AgXBaseP3.py`): `c =
+2020→P3 · c`, and the guard rail's weights `WP3 = (P3→2020)ᵀ · W`. Display P3 uses the sRGB curve,
+so step 12 is unchanged. Exports in Display P3 embed its ICC profile; so do sRGB ones (they didn't
+carry one before).
+
+## HDR (Ultra HDR export)
+
+`AgXHLG.py`, Blender's "AgX - HDR 1000 nits" view: the image AgX forms for a 1000-nit display with
+reference white at 100 nits. It differs from AgX Base in five places:
+
+- **Weights:** the June 2025 ones (above), in both guard rails.
+- **Step 5:** the log is clipped to 0–1 (−10 to +6.5 stops) before the sigmoid.
+- **Step 6:** the shoulder's power is multiplied by `(1000 / 100)^log₁₀(2)` = 2, so 3.0.
+- **After step 7, darken middle grey** by the HDR ratio (10), so it stays at 18 nits while white
+  goes to 1000. Per channel, on a log2 scale from −20 stops below grey to linear 1.0
+  (`x = (log₂(v / 0.18) + 20) / (20 + log₂(1 / 0.18))`), through the same tunable sigmoid with
+  pivot `(x(0.18), x(0.018))`, slope 1.000001, toe power 3, shoulder power 1 (its shoulder scale
+  is negative: it steepens toward 1.0, which stays 1.0). Then, in HSV, hue and saturation move
+  back halfway (`HDR_purity` 0.5) toward what they were before darkening; the value is the
+  darkened one. A channel at 0 stays 0.
+- **Steps 10–12:** the guard rail is in P3 whatever the display ("P3 limited"); then back to
+  Rec.2020, clipped to 0–1 (1 = 1000 nits). Blender encodes that with Rec.2100 HLG.
+
+tonality writes HDR as **Ultra HDR JPEG** (Android's format, read by Chrome, Android 14+, iOS 18
+and macOS 15): an ordinary JPEG (the SDR export, AgX Base in sRGB or P3, with the tone curve and
+grain) plus a gain map, a second, half-size JPEG that says per pixel and channel how much
+brighter the HDR image is: `G = log₂((HDR + k) / (SDR + k))`, `k = 1/64`, with both linear in the
+base image's primaries and HDR relative to SDR white (0–10). The shader's gain-map pass computes
+it from the same pixel (`output.x = 1`); the curve and grain stay in the base image and so apply
+to the HDR rendition too. `G` is stored over −4.5…3.75 (8 bits, 0.03 stops a step), which covers
+every colour (`gain_range_covers_hdr_over_sdr`): up to the 10× peak, a little more where SDR
+clips a channel, and down where SDR's guard rail lifts a channel HDR leaves dark. The metadata
+(Ultra HDR XMP and ISO 21496-1, written by `ultrahdr-rs`) gives HDR capacity log₂(10), so a
+display with 10× headroom shows the HDR image in full and one with less shows part of the way.
+Middle grey has `G = 0`: HDR only adds highlights. Colours outside sRGB in an sRGB file's HDR
+rendition clip (the gain map can't make the base image's colours wider); a P3 file keeps them.
 
 ## How it was checked
 
 `scripts/agx_reference.py` evaluates both of these for 350 colours (greys from −12 to +12 stops,
 Rec.2020 and Rec.709 primaries and secondaries across exposures, everyday colours, colours with a
-negative component, and 200 random ones):
+negative component, and 200 random ones), for sRGB, Display P3 and HDR (Rec.2100 HLG, 1000 nits):
 
-- **Blender**: its `config.ocio` and LUT files through OpenColorIO 2.6
-  (`Linear Rec.2020` → display `sRGB`, view `AgX`), and
+- **Blender**: its `config.ocio` and LUT files through OpenColorIO 2.6 (`Linear Rec.2020` →
+  display `sRGB` / `Display P3`, view `AgX`; display `Rec.2100-HLG`, view `AgX - HDR 1000 nits`),
+  and
 - **exact**: the steps above, in numpy, written from the sources (no downloaded code runs).
 
 The results are in `crates/tonality-core/tests/data/agx_reference.json`.
 
-- **At the LUT's own grid points** (the 57³ nodes of `AgX_Base_sRGB.cube`, decoded from E-Gamut
-  log2 and pushed through the steps above) the exact values match Blender's table with a mean
-  difference of 0.000008 and 0.00026 at the 99.9th percentile. The largest, 0.013 (in the table's
-  2.4-power encoding), are on nearly black channels, where the 1/2.4 power magnifies tiny
-  differences: 0.013 there is about 0.00003 linear, 0.0004 in sRGB. (The script checks a random
-  4000 of the nodes; all 185,193 were checked once, November 2026.)
+- **At the LUTs' own grid points** (the 57³ nodes of each LUT, decoded from E-Gamut log2 and
+  pushed through the steps above; all 185,193 checked in November 2026, the script checks a random
+  4000 per LUT) the exact values match Blender's tables:
+
+  | LUT | mean | 99.9th pct | max |
+  |---|---|---|---|
+  | `AgX_Base_sRGB.cube` | 0.000008 | 0.00026 | 0.013 |
+  | `AgX_Base_P3.cube` | 0.000007 | 0.00011 | 0.0042 |
+  | `AgX_Rec2100-HLG_p3_lim.cube` | 0.000006 | 0.00008 | 0.00044 |
+
+  The largest Base differences (in the tables' 2.4-power encoding) are on nearly black channels,
+  where the 1/2.4 power magnifies tiny differences: 0.013 there is about 0.00003 linear, 0.0004
+  in sRGB.
 - **Between grid points** Blender interpolates (tetrahedral, 57 points over 25 stops), so for
-  arbitrary colours the two differ by 0.0013 on average (sRGB code value, 0–1), 0.018 at the 99th
-  percentile, and up to 0.063 for very saturated colours where one channel heads to zero and the
-  table can't follow. That is Blender's approximation of AgX, not a difference in the transform.
+  arbitrary colours the two differ by about 0.0013 on average (code value, 0–1; 0.0008 for HLG),
+  0.01–0.02 at the 99th percentile, and up to 0.06 for very saturated colours where one channel
+  heads to zero and the table can't follow. That is Blender's approximation of AgX, not a
+  difference in the transform.
 
 Rust tests:
 
-- `agx::tests` compare the Rust CPU version with the exact values (within 1e-5) and with
-  Blender's (mean below 0.002, 99th percentile below 0.02), and the matrices with Blender's.
+- `agx::tests` compare the Rust CPU version with the exact values (within 1e-5; 1e-4 for HLG,
+  whose square-root toe magnifies rounding at black) and with Blender's (mean below 0.002, 99th
+  percentile below 0.02) for all three targets, and the matrices with Blender's.
 - `tonality-render/tests/agx_gpu.rs` renders the reference colours through the export shader
-  (every other adjustment off) and compares them with the CPU version: within 1e-3, measured
-  0.00025 on an Intel UHD 630. The colours outside Rec.2020 come in through a camera matrix with
+  (every other adjustment off), for sRGB and Display P3, and compares them with the CPU version:
+  within 1e-3, measured 0.00025 on an Intel UHD 630; the gain-map pass likewise, within one 8-bit
+  step (measured 0.00025). The colours outside Rec.2020 come in through a camera matrix with
   negative entries (camera = XYZ), as they would from a real camera, so the whole develop pass
   carries them to AgX. The preview runs the same shader, transpiled to GLSL.
+- `export::tests::writes_ultra_hdr` writes an Ultra HDR JPEG and reads it back with
+  `ultrahdr-rs`'s decoder (metadata, half-size gain map) and as a plain JPEG (the SDR image and
+  its ICC profile).
 
 Middle grey (0.18) displays as sRGB 0.4614, display-linear 0.18.
 
@@ -173,6 +234,8 @@ mid-tones, more open shadows, and saturated highlights keep their hue better.
 
 ## Later
 
-- **Display P3** and HDR: swap step 10's matrix and step 11's weights for the target display
-  (Blender's P3 view is the same chain with P3 in place of Rec.709).
+- **A P3 or HDR preview**, once the webview can show one (WebKitGTK's canvas is sRGB) and there's
+  a wide-gamut, HDR display to check it on.
+- **Other HDR files** (AVIF or HEIF with HLG or PQ): the HDR rendition is `Agx::hdr_light`
+  already; they need encoders and no SDR fallback.
 - **Looks** (Punchy, contrast variants) are CDL grades in AgX log space in Blender; not planned.
