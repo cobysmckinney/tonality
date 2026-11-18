@@ -11,6 +11,8 @@ import type { ImageQuery } from "$lib/bindings/ImageQuery";
 import type { ImageRow } from "$lib/bindings/ImageRow";
 import type { ImportInfo } from "$lib/bindings/ImportInfo";
 import { session } from "$lib/edit/session.svelte";
+import { dropLibraryThumbs } from "$lib/edit/versions";
+import { invalidateThumb } from "$lib/library/thumbs";
 
 const SIZE_KEY = "tonality.library.thumbSize";
 const RAW_FILTER = [{ name: "RAW photos", extensions: [...RAW_EXTENSIONS, ...RAW_EXTENSIONS.map((e) => e.toUpperCase())] }];
@@ -279,6 +281,32 @@ class LibraryState {
     if (!ids.length) return;
     this.patch(ids, (i) => ({ ...i, flag }));
     await api.library.setFlag(ids, flag).catch((e) => (this.message = String(e)));
+  }
+
+  /** Take the selected photos back to as-shot, deleting all their versions and steps. */
+  async resetHistory() {
+    const ids = this.targets();
+    const edited = ids.filter((id) => this.images.find((i) => i.id === id)?.head != null);
+    if (!edited.length) {
+      this.message = ids.length === 1 ? "This photo has no edits" : "These photos have no edits";
+      return;
+    }
+    const what = edited.length === 1 ? "this photo" : `these ${edited.length} photos`;
+    const ok = await ask(
+      `Reset ${what} to as-shot? Every version and every step of ${edited.length === 1 ? "its" : "their"} history is deleted. This can't be undone.\n\nRatings, flags and albums stay.`,
+      { title: "Reset history", kind: "warning", okLabel: "Reset", cancelLabel: "Cancel" },
+    );
+    if (!ok) return;
+    await dropLibraryThumbs(edited);
+    try {
+      await api.history.reset(edited);
+      this.message = `Reset ${edited.length} photo${edited.length === 1 ? "" : "s"} to as-shot`;
+    } catch (e) {
+      this.message = String(e);
+    }
+    for (const id of edited) invalidateThumb(id);
+    if (session.history && edited.includes(session.history.imageId)) await session.reloadHistory();
+    await this.refresh();
   }
 
   // ---- albums ----

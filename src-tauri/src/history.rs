@@ -2,9 +2,11 @@
 
 use std::sync::{Arc, Mutex, OnceLock};
 
-use tauri::State;
+use tauri::{Manager, State};
 use tonality_core::{Catalog, Checkout, CommitId, EditState, ImageId, Panel};
 
+use crate::sidecar::Sidecars;
+use crate::store::Store;
 use crate::CmdResult;
 
 type ChangeHook = Box<dyn Fn(&[ImageId]) + Send + Sync>;
@@ -146,4 +148,34 @@ pub async fn history_apply_from(
 #[tauri::command]
 pub async fn history_state(commit: CommitId, catalog: State<'_, CatalogState>) -> CmdResult<EditState> {
     catalog.read(move |c| c.state_at(commit)).await
+}
+
+/// Take photos back to as-shot and delete all their history (see
+/// [`Catalog::reset_history`]), with their edited thumbnails. Sidecars are rewritten before this
+/// returns, so a crash can't bring the old history back in from them at the next start.
+#[tauri::command]
+pub async fn history_reset(
+    image_ids: Vec<ImageId>,
+    catalog: State<'_, CatalogState>,
+    store: State<'_, Store>,
+    app: tauri::AppHandle,
+) -> CmdResult<()> {
+    let ids = image_ids.clone();
+    let hashes = catalog
+        .change(image_ids, move |c| {
+            c.reset_history(&ids)?;
+            ids.iter().map(|&id| Ok(c.image_file(id)?.1)).collect::<tonality_core::catalog::Result<Vec<_>>>()
+        })
+        .await?;
+    for hash in hashes {
+        match std::fs::remove_file(store.edited_thumb_path(&hash)) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e.to_string()),
+            _ => {}
+        }
+    }
+    crate::blocking(move || {
+        app.state::<Sidecars>().flush();
+        Ok(())
+    })
+    .await
 }

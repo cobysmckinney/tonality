@@ -129,6 +129,19 @@ export function scheduleLibraryThumb(imageId: number, state: EditState) {
   }, SAVE_DELAY_MS);
 }
 
+/**
+ * Forget any library thumbnail about to be saved for `ids` (their history is being reset) and
+ * wait for a save already under way, so none lands after the reset.
+ */
+export async function dropLibraryThumbs(ids: number[]): Promise<void> {
+  if (pending && ids.includes(pending.imageId)) {
+    clearTimeout(timer);
+    timer = undefined;
+    pending = null;
+  }
+  await serial(async () => {}).catch(() => {});
+}
+
 /** Render the pending job now, synchronously, if its photo is on screen and inputs are in. */
 function flushSave() {
   clearTimeout(timer);

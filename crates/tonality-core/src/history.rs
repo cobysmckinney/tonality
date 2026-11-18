@@ -494,6 +494,24 @@ impl Catalog {
         tx.commit()?;
         self.checkout_result(image)
     }
+
+    /// Take photos back to as-shot and delete **all** their history: every branch and commit,
+    /// and any edit state no other commit uses. Can't be undone. The photos look as if they
+    /// were never edited (history is created again on the next open); their shape is forgotten
+    /// so the library relearns it from the plain thumbnail. Ratings, flags and albums stay.
+    pub fn reset_history(&mut self, images: &[ImageId]) -> Result<()> {
+        let tx = self.conn.transaction()?;
+        for image in images {
+            tx.execute("DELETE FROM heads WHERE image_id = ?1", [image])?;
+            tx.execute("DELETE FROM refs WHERE image_id = ?1", [image])?;
+            // One statement: the parent links are only checked once it has finished.
+            tx.execute("DELETE FROM commits WHERE image_id = ?1", [image])?;
+            tx.execute("UPDATE images SET aspect = NULL WHERE id = ?1", [image])?;
+        }
+        tx.execute("DELETE FROM edit_states WHERE hash NOT IN (SELECT state_hash FROM commits)", [])?;
+        tx.commit()?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -519,6 +537,37 @@ mod tests {
 
     fn summaries(c: &Checkout) -> Vec<&str> {
         c.view.commits.iter().map(|c| c.summary.as_str()).collect()
+    }
+
+    #[test]
+    fn reset_removes_all_history_of_only_those_photos() {
+        let (mut cat, _, img) = catalog();
+        let other = cat.test_image("y");
+        let root = cat.history_open(img).unwrap().view.head.commit;
+        cat.commit(img, &exp(1.0), None).unwrap();
+        cat.create_branch(img, root, Some("bw")).unwrap();
+        cat.commit(img, &exp(2.0), None).unwrap();
+        cat.history_open(other).unwrap();
+        cat.commit(other, &exp(1.0), None).unwrap(); // shares a state with `img`
+        cat.set_aspect(img, 1.0, false).unwrap();
+
+        cat.reset_history(&[img]).unwrap();
+
+        let count = |sql: &str| -> i64 { cat.conn.query_row(sql, [img], |r| r.get(0)).unwrap() };
+        assert_eq!(count("SELECT COUNT(*) FROM commits WHERE image_id = ?1"), 0);
+        assert_eq!(count("SELECT COUNT(*) FROM refs WHERE image_id = ?1"), 0);
+        assert_eq!(count("SELECT COUNT(*) FROM heads WHERE image_id = ?1"), 0);
+        assert_eq!(count("SELECT COUNT(*) FROM images WHERE id = ?1 AND aspect IS NULL"), 1);
+        // exp(2) was only `img`'s: gone. exp(1) and the default are still used by `other`.
+        let states: i64 = cat.conn.query_row("SELECT COUNT(*) FROM edit_states", [], |r| r.get(0)).unwrap();
+        assert_eq!(states, 2);
+        assert_eq!(cat.history_view(other).unwrap().commits.len(), 2);
+
+        // Opening it again starts over from as-shot, on a single `main`.
+        let c = cat.history_open(img).unwrap();
+        assert_eq!(summaries(&c), ["Original"]);
+        assert_eq!(c.view.branches.len(), 1);
+        assert_eq!(c.state, EditState::default());
     }
 
     #[test]

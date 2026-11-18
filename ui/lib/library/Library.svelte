@@ -361,6 +361,9 @@
               </div>
             {/if}
           </div>
+          <button class="btn" onclick={() => library.resetHistory()} title="Take the selected photos back to as-shot, deleting all their versions and steps">
+            Reset History…
+          </button>
           {#if inAlbum}
             <button class="btn" onclick={() => library.removeFromAlbum()} title="Remove from this album (Delete). The photos stay in your library.">
               Remove

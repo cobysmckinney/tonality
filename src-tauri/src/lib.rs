@@ -263,6 +263,7 @@ pub fn run() {
             history::history_delete,
             history::history_apply_from,
             history::history_state,
+            history::history_reset,
             thumbs::library_save_edited,
             library::library_overview,
             library::library_import,

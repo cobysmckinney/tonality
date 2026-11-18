@@ -11,7 +11,8 @@ import type { HistoryView } from "$lib/bindings/HistoryView";
 import type { ImageInfo } from "$lib/bindings/ImageInfo";
 import type { Panel } from "$lib/bindings/Panel";
 import type { Mask } from "$lib/bindings/Mask";
-import { scheduleLibraryThumb } from "./versions";
+import { invalidateThumb } from "$lib/library/thumbs";
+import { dropLibraryThumbs, scheduleLibraryThumb } from "./versions";
 import { MAX_MASKS, aiKey, masksOf, newAiMask, newMask, type AiPreset, type BrushTool, type MaskKind } from "./masks";
 
 /** Where an AI mask's detection stands (keyed by `aiKey`). */
@@ -389,6 +390,41 @@ class EditSession {
   };
   deleteBranch = (name: string) => this.run((id) => api.history.deleteBranch(id, name), true);
   applyFrom = (source: string, panels: Panel[]) => this.run((id) => api.history.applyFrom(id, source, panels), true);
+
+  /**
+   * The open photo's history was reset (here or from the Library): load the fresh one, and
+   * drop anything that pointed into the old history.
+   */
+  async reloadHistory(): Promise<void> {
+    const id = this.history?.imageId;
+    if (id === undefined) return;
+    this.compare = null;
+    this.applying = null;
+    this.cropEntry = null;
+    this.masking = false;
+    this.maskIndex = null;
+    this.lassoing = null;
+    await this.run((i) => api.history.open(i), true);
+    // The fresh HEAD is as-shot: the plain thumbnail is right, so don't render an edited one.
+    await dropLibraryThumbs([id]);
+    invalidateThumb(id);
+  }
+
+  /** Delete every version and step of the open photo and start again from as-shot. */
+  async resetHistory(): Promise<void> {
+    const id = this.history?.imageId;
+    if (id === undefined) return;
+    // After any edit still being recorded, so it can't land on the fresh history.
+    await this.queue;
+    await dropLibraryThumbs([id]);
+    try {
+      await api.history.reset([id]);
+    } catch (e) {
+      this.flashError(String(e));
+      return;
+    }
+    await this.reloadHistory();
+  }
 
   /** Show `branch` next to the current version. */
   async startCompare(branch: string) {

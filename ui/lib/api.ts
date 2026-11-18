@@ -80,6 +80,8 @@ export const api = {
     applyFrom: (imageId: number, source: string, panels: Panel[]) =>
       invoke<Checkout>("history_apply_from", { imageId, source, panels }),
     state: (commit: number) => invoke<EditState>("history_state", { commit }),
+    /** Back to as-shot, deleting every version and step. Can't be undone. */
+    reset: (imageIds: number[]) => invoke<void>("history_reset", { imageIds }),
   },
 
   library: {
