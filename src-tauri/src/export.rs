@@ -61,9 +61,16 @@ impl ExportColorSpace {
         }
     }
 
-    /// The ICC profile embedded in every file (sRGB or Display P3, sRGB curve).
+    /// The ICC profile embedded in every file (sRGB or Display P3, sRGB curve). Made once:
+    /// moxcms stamps the time of making in the header, so every file gets the same bytes.
     fn icc(self) -> Vec<u8> {
-        ultrahdr_rs::jpeg::get_icc_profile_for_gamut(self.gamut())
+        static SRGB: OnceLock<Vec<u8>> = OnceLock::new();
+        static P3: OnceLock<Vec<u8>> = OnceLock::new();
+        let cell = match self {
+            Self::Srgb => &SRGB,
+            Self::DisplayP3 => &P3,
+        };
+        cell.get_or_init(|| ultrahdr_rs::jpeg::get_icc_profile_for_gamut(self.gamut())).clone()
     }
 }
 
@@ -377,7 +384,7 @@ fn ultra_hdr(r: &Rendered, gain: &Rendered, quality: u8, space: ExportColorSpace
         JpegEncoder::new_with_quality(&mut buf, quality)
             .write_image(px, w, h, ExtendedColorType::Rgb8)
             .map_err(|e| e.to_string())?;
-        Ok(buf)
+        Ok(without_jfif(buf))
     };
     let base = jpeg(&eight(&r.pixels), r.width, r.height)?;
     let (gw, gh, gpx) = halve(gain);
@@ -393,6 +400,20 @@ fn ultra_hdr(r: &Rendered, gain: &Rendered, quality: u8, space: ExportColorSpace
     metadata.use_base_color_space = true;
     metadata.backward_direction = false;
     ultrahdr_rs::encode_ultrahdr(&base, &map, &metadata, space.gamut()).map_err(|e| e.to_string())
+}
+
+/// `jpeg` without its JFIF APP0 segment. JFIF must be the first segment after SOI, but the Ultra
+/// HDR container puts its MPF index there (the gain map's offset is counted from it); camera
+/// Ultra HDR files have no JFIF either, and JPEG doesn't need one.
+fn without_jfif(jpeg: Vec<u8>) -> Vec<u8> {
+    if jpeg.len() > 11 && jpeg[..4] == [0xFF, 0xD8, 0xFF, 0xE0] && &jpeg[6..11] == b"JFIF\0" {
+        let end = 4 + u16::from_be_bytes([jpeg[4], jpeg[5]]) as usize;
+        let mut out = jpeg[..2].to_vec();
+        out.extend_from_slice(&jpeg[end..]);
+        out
+    } else {
+        jpeg
+    }
 }
 
 /// A render at half size (2×2 means; the last row or column alone when odd).
@@ -504,12 +525,17 @@ mod tests {
             assert_eq!((img.width(), img.height()), (w, h));
             assert_eq!(icc_of(&p, ExportFormat::Jpeg), space.icc());
             // And an Ultra HDR one: the gain map at half size, the metadata as written.
+            // No JFIF segment, in either image: MPF follows SOI directly.
+            assert!(bytes[..64].windows(5).all(|w| w != b"JFIF\0"), "JFIF in the primary");
+            assert_eq!(&bytes[..4], &[0xFF, 0xD8, 0xFF, 0xE2]);
             let d = ultrahdr_rs::Decoder::new(&bytes).unwrap();
             assert!(d.is_ultrahdr());
             let m = d.metadata().unwrap();
             assert!((m.gain_map_min[0] - GAIN_LOG2[0]).abs() < 1e-3 && (m.gain_map_max[2] - GAIN_LOG2[1]).abs() < 1e-3, "{m:?}");
             assert!((m.alternate_hdr_headroom - HDR_RATIO.log2()).abs() < 1e-3, "{m:?}");
-            let map = image::load_from_memory(d.gainmap_jpeg().unwrap()).unwrap().to_rgb8();
+            let map_jpeg = d.gainmap_jpeg().unwrap();
+            assert!(!map_jpeg.windows(5).any(|w| w == b"JFIF\0"), "JFIF in the gain map");
+            let map = image::load_from_memory(map_jpeg).unwrap().to_rgb8();
             assert_eq!(map.dimensions(), (w.div_ceil(2), h.div_ceil(2)));
             let (left, right) = (map.get_pixel(0, 1)[0], map.get_pixel(map.width() - 1, 1)[0]);
             assert!(left < 40 && right > 215, "{left} {right}");
