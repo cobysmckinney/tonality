@@ -16,42 +16,20 @@ Add new ideas to **Later**, and move finished items to **Done** with the date an
 ## Now
 
 ### 1. AgX done properly (the only tone mapping)
-AgX is already the display transform (`agx()` in `develop.wgsl`), but it's an approximation:
-- The sigmoid is a 6th-order polynomial fit (from the "minimal AgX" approximations), not
-  AgX's actual curve.
-- The inset/outset matrices are the commonly copied ones made for **sRGB** input, while
-  tonality's working space is **Rec.2020**. Check whether that mismatch is real.
-- The Rec.2020→sRGB matrix is rounded to 4 digits, and the `pow(2.2)` after the outset needs a
-  reason (or removal).
-- Out-of-gamut values are only clipped at the end.
-
-The same shader drives the preview (WebGL via naga), export (wgpu), the mask luminance range
-and the histogram, so a fix lands everywhere at once.
-
-**Research first, from primary sources, and write down the math before changing the shader:**
-- Troy Sobotka's original AgX (github.com/sobotka/AgX) and his writings on it.
-- Blender 4.x's AgX by Eary Chow (github.com/EaryChow/AgX and `AgX_LUT_Gen`): the inset
-  (primary attenuation and rotation in Rec.2020), the log2 encoding range, the tunable
-  sigmoid, the outset (restoring purity), and the "Base" look.
-- Blender's OCIO config (the actual transform chain shipped with Blender).
-- Shader ports to compare against (three.js `AgXToneMapping`, Filament), noting where they
-  approximate.
-
-**Plan**
-- [ ] Write the transform chain, with parameters and sources, in a short doc
-  (`docs/agx.md`): input space, inset, log encoding range, sigmoid, outset, EOTF/display
-  encoding, target display (sRGB; later P3).
-- [ ] Generate reference values from the real thing (Blender's OCIO config through PyOpenColorIO,
-  or the reference scripts) for a grid of test colors: greys, saturated primaries, very
-  bright values, out-of-gamut values.
-- [ ] Compute the matrices in Rust from their parameters (not pasted constants), pass them to
-  the shader, and replace the polynomial with the real sigmoid (exact formula or a LUT
-  generated from it).
-- [ ] A Rust test comparing a CPU version of the transform to the references, within a
-  stated tolerance; a GPU test that the shader matches the CPU version.
-- [ ] Check mid grey, white point, black point and how saturated highlights desaturate, on the
-  sample photos. Note in the commit that existing edits will look different.
-- [ ] Remove any wording or code suggesting other tone mappers.
+**Status:** built on branch `agx`, seen in the app; waiting for Coby's review. The math, its
+sources and the checks are in `docs/agx.md`.
+- [x] Researched Sobotka's AgX, Eary Chow's AgX_LUT_Gen and Blender's config; wrote the chain down.
+- [x] References from Blender's real config and LUTs through OpenColorIO
+  (`scripts/agx_reference.py` → `crates/tonality-core/tests/data/agx_reference.json`). The written
+  math reproduces Blender's LUT grid points (mean 8e-6).
+- [x] `tonality_core::agx`: matrices computed from AgX's parameters (they match Blender's to 8
+  digits), CPU reference; the shader gets them in the params uniform. The real sigmoid, guard
+  rails and 40% hue restore replace the polynomial.
+- [x] Tests: matrices, CPU vs exact and vs Blender, GPU shader vs CPU (`tests/agx_gpu.rs`).
+- [x] Compared old and new on real photos: grey 0.50 → 0.46, shadows more open, colour holds better.
+- [ ] Coby tries it (existing edits will look a little different).
+- Later: Display P3 output; keep negatives through the pipeline so AgX's first guard rail sees
+  out-of-gamut colours (goes with the noise-reduction leftover).
 
 ### 2. Texture, Clarity and Dehaze (global and on masks)
 The most used local adjustments in other editors, and missing globally too. Each compares a
