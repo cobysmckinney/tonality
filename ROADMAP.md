@@ -27,6 +27,7 @@ _(new ideas go here)_
 - AgX for Display P3 (and HDR) output: swap the display matrix and guard-rail weights (`docs/agx.md`).
 
 ## Done
+- 2026-11-17 — Out-of-gamut colours carried to AgX: no Rec.2020 clamp after the camera matrix or in Colour; Tone's luminance floored so negative-luminance colours can't blow up; Dehaze keeps negatives; GPU tests for both (`out-of-gamut`).
 - 2026-11-17 — Leftovers: values below black kept through noise reduction, own pool for prefetch decodes, catalog v4 (HEAD → branch key), in-app checks (`leftovers`, `b096c0e`).
 - 2026-11-17 — Texture, Clarity, Dehaze in Effects and on masks (`presence`, `9b08681`; `docs/presence.md`).
 - 2026-11-17 — AgX done properly: Blender's AgX Base from its parameters, checked against Blender's LUTs (`agx`, `8237c3b`; `docs/agx.md`).

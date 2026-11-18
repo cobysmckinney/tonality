@@ -50,7 +50,9 @@ haze. On the 512 px copy, in as-shot Rec.2020:
   (poles, branches). It's refined by a guided filter (radius 1.5%, ε = 10⁻⁴) with luminance ÷ the
   airlight's as the guide, and rebuilt at full resolution like Clarity's base.
 
-Positive amounts recover the scene: `J = (I − A) / max(1 − amount·(1 − t), 0.1) + A`. Negative
+Positive amounts recover the scene: `J = (I − A) / max(1 − amount·(1 − t), 0.1) + A`, floored at
+black per component (a component already below black, a colour outside Rec.2020, is divided by the
+same denominator instead, so it scales with the rest of the signal). Negative
 amounts add haze: `I` mixes toward `A` by `|amount| · (0.08 + 0.4·(1 − t))`, more where there's
 already haze.
 

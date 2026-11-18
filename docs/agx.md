@@ -141,7 +141,9 @@ Rust tests:
   Blender's (mean below 0.002, 99th percentile below 0.02), and the matrices with Blender's.
 - `tonality-render/tests/agx_gpu.rs` renders the reference colours through the export shader
   (every other adjustment off) and compares them with the CPU version: within 1e-3, measured
-  0.00025 on an Intel UHD 630. The preview runs the same shader, transpiled to GLSL.
+  0.00025 on an Intel UHD 630. The colours outside Rec.2020 come in through a camera matrix with
+  negative entries (camera = XYZ), as they would from a real camera, so the whole develop pass
+  carries them to AgX. The preview runs the same shader, transpiled to GLSL.
 
 Middle grey (0.18) displays as sRGB 0.4614, display-linear 0.18.
 
@@ -157,10 +159,16 @@ mid-tones, more open shadows, and saturated highlights keep their hue better.
 
 ## Notes
 
-- The develop pass clamps negative components to 0 right after the camera matrix, so colours
-  outside Rec.2020 don't reach AgX and its first guard rail (step 2) rarely has work. The display
-  guard rail (step 11) does: Rec.2020 colours outside sRGB go negative in step 10. Keeping
-  negatives through the pipeline is on the roadmap (with noise reduction).
+- Colours outside Rec.2020 reach AgX as they are. Camera RGB clips at black (after noise
+  reduction), but the camera matrix can still give a saturated colour a negative Rec.2020
+  component, and Saturation can push one out; nothing clamps them before AgX, whose first guard
+  rail (step 2) brings them in. On the way, Tone scales colours by a luminance floored at
+  0.0593 × the largest component (`scaling_luma`; a colour inside Rec.2020 never goes below it),
+  because a colour with a negative component can have a luminance near or below zero while
+  another component is large, and the ratio would blow it up. Dehaze floors its result at black
+  per component, except one already below black, which scales with the rest of the signal.
+  `agx_gpu.rs` checks a dark blue with negative luminance against its in-gamut neighbour at
+  Contrast −100.
 - Masks' luminance ranges and the histogram see the same AgX output as the photo.
 
 ## Later

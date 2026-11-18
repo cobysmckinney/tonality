@@ -224,12 +224,20 @@ fn detail(tc: vec2<f32>, px: vec2<f32>, local: vec2<f32>) -> vec3<f32> {
 const REC2020_LUMA = vec3<f32>(0.2627, 0.6780, 0.0593);
 const MIDDLE_GREY: f32 = 0.18;
 
+// Luminance for scaling a colour by a luminance ratio. Colours outside Rec.2020 (a negative
+// component) can have a luminance near zero, or below it, while another component is large, and
+// the ratio would blow them up; so it's floored at the smallest weight × the largest component,
+// which a colour inside the gamut never goes below (it changes nothing there).
+fn scaling_luma(rgb: vec3<f32>) -> f32 {
+    return max(max(dot(rgb, REC2020_LUMA), REC2020_LUMA.z * max(rgb.x, max(rgb.y, rgb.z))), 1e-7);
+}
+
 // ---- Tone ------------------------------------------------------------------------------------
 // Operates on log2 luminance relative to middle grey and rescales RGB by the luminance ratio,
 // which preserves hue and saturation.
 // `t`: contrast, highlights, shadows, whites; `blacks` (-1..1, larger where masks add up).
 fn tone(rgb: vec3<f32>, t: vec4<f32>, blacks: f32) -> vec3<f32> {
-    let y = max(dot(rgb, REC2020_LUMA), 1e-7);
+    let y = scaling_luma(rgb);
     var ev = log2(y / MIDDLE_GREY);
 
     let contrast = t.x;
@@ -248,7 +256,8 @@ fn tone(rgb: vec3<f32>, t: vec4<f32>, blacks: f32) -> vec3<f32> {
 }
 
 // ---- Colour (in OkLCh) -----------------------------------------------------------------------
-// Rec.2020 linear ↔ OkLab, with the XYZ step folded into the LMS matrices.
+// Rec.2020 linear ↔ OkLab, with the XYZ step folded into the LMS matrices. Colours outside
+// Rec.2020 go through as they are (the cube root is signed); AgX brings them in.
 fn rows(r0: vec3<f32>, r1: vec3<f32>, r2: vec3<f32>, v: vec3<f32>) -> vec3<f32> {
     return vec3<f32>(dot(r0, v), dot(r1, v), dot(r2, v));
 }
@@ -307,7 +316,7 @@ fn band_value(lo: vec4<f32>, hi: vec4<f32>, h: f32) -> f32 {
 
 // `saturation`, `vibrance`, `hue` (-1..1: ±30°): global plus what masks add here.
 fn color(rgb: vec3<f32>, saturation: f32, vibrance: f32, hue: f32) -> vec3<f32> {
-    let lab = to_oklab(max(rgb, vec3<f32>(0.0)));
+    let lab = to_oklab(rgb);
     var l = lab.x;
     var c = length(lab.yz);
     var h = degrees(atan2(lab.z, lab.y));
@@ -327,7 +336,7 @@ fn color(rgb: vec3<f32>, saturation: f32, vibrance: f32, hue: f32) -> vec3<f32> 
     c = c * max(0.0, 1.0 + saturation);
 
     let hr = radians(h);
-    return max(from_oklab(vec3<f32>(l, c * cos(hr), c * sin(hr))), vec3<f32>(0.0));
+    return from_oklab(vec3<f32>(l, c * cos(hr), c * sin(hr)));
 }
 
 // ---- Effects ---------------------------------------------------------------------------------
@@ -510,8 +519,7 @@ fn srgb_encode(c: vec3<f32>) -> vec3<f32> {
 // ---- Masks -------------------------------------------------------------------------------------
 // Display luminance of camera RGB `cam`: what masks' luminance ranges compare against.
 fn display_lum(cam: vec3<f32>) -> f32 {
-    var rgb = vec3<f32>(dot(params.cam0.xyz, cam), dot(params.cam1.xyz, cam), dot(params.cam2.xyz, cam));
-    rgb = max(rgb, vec3<f32>(0.0)) * params.light0.x;
+    let rgb = vec3<f32>(dot(params.cam0.xyz, cam), dot(params.cam1.xyz, cam), dot(params.cam2.xyz, cam)) * params.light0.x;
     return srgb_encode(agx(vec3<f32>(max(dot(rgb, REC2020_LUMA), 0.0)))).y;
 }
 
@@ -603,8 +611,10 @@ fn presence(rgb: vec3<f32>, tc: vec2<f32>, px: vec2<f32>, src: vec2<f32>, amount
             let t = clamp(m.z * l0 / max(params.presence[1].w, 1e-6) + m.w, 0.0, 1.0);
             let a = airlight();
             if (amount.z > 0.0) {
-                let te = 1.0 - amount.z * (1.0 - t);
-                c = max((c - a) / max(te, 0.1) + a, vec3<f32>(0.0));
+                let te = max(1.0 - amount.z * (1.0 - t), 0.1);
+                // Floored so an over-corrected component stops at black; one that was already
+                // below it (a colour outside Rec.2020) scales with the rest of the signal.
+                c = max((c - a) / te + a, min(c, vec3<f32>(0.0)) / te);
             } else {
                 c = mix(c, a, -amount.z * (0.08 + 0.4 * (1.0 - t)));
             }
@@ -650,8 +660,9 @@ fn presence(rgb: vec3<f32>, tc: vec2<f32>, px: vec2<f32>, src: vec2<f32>, amount
 }
 
 fn develop(cam: vec3<f32>, f: vec2<f32>, uv: vec2<f32>, aspect: f32, tc: vec2<f32>, px: vec2<f32>, src: vec2<f32>) -> vec3<f32> {
-    var rgb = vec3<f32>(dot(params.cam0.xyz, cam), dot(params.cam1.xyz, cam), dot(params.cam2.xyz, cam));
-    rgb = max(rgb, vec3<f32>(0.0)) * params.light0.x;
+    // Rec.2020, unclipped: saturated colours the camera saw outside it go negative here and stay
+    // so until AgX, whose guard rail brings them in smoothly.
+    var rgb = vec3<f32>(dot(params.cam0.xyz, cam), dot(params.cam1.xyz, cam), dot(params.cam2.xyz, cam)) * params.light0.x;
 
     // Local adjustments: each mask adds its settings, weighted by how much it selects here, to
     // the global ones; then the pipeline runs once.

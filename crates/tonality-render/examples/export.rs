@@ -39,6 +39,10 @@ fn main() {
         let v: Vec<f32> = v.split(',').map(|x| x.parse().unwrap()).collect();
         (edit.effects.texture, edit.effects.clarity, edit.effects.dehaze) = (v[0], v[1], v[2]);
     }
+    // SATURATION=-100..100.
+    if let Some(v) = std::env::var("SATURATION").ok().and_then(|v| v.parse().ok()) {
+        edit.color.saturation = v;
+    }
     let maps = tonality_render::presence::presence_maps(&full.pixels, full.width, full.height, &full.color);
     let params = DevelopParams::new(&edit, &full.color, full.lens.as_ref(), full.width, full.height).with_presence(&maps);
     let brush = tonality_core::mask::brush_layers(&edit.masks, full.width, full.height);
@@ -47,7 +51,9 @@ fn main() {
     let out = gpu.render(&src, &params, &curve_lut_rgba16f(&edit), &brush, Some(&maps), |_| {}).expect("render");
     println!("render in {:?}", t.elapsed());
     println!("output {}×{}", out.width, out.height);
-    if std::env::var("CROP").is_ok() || std::env::var("MASKS").is_ok() || std::env::var("LENS").is_ok() || std::env::var("PRESENCE").is_ok() {
+    if std::env::var("CROP").is_ok() || std::env::var("MASKS").is_ok() || std::env::var("LENS").is_ok() || std::env::var("PRESENCE").is_ok()
+        || std::env::var("SATURATION").is_ok()
+    {
         let rgb: Vec<u8> = out.pixels.iter().map(|v| (v >> 8) as u8).collect();
         let img = image::RgbImage::from_raw(out.width, out.height, rgb).unwrap();
         // SCALE=n: output 1/n size (default 6).
