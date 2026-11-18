@@ -1,0 +1,550 @@
+//! Auto settings: a starting point for Light (exposure, contrast, highlights, shadows, whites,
+//! blacks) and for white balance, from the photo itself (its preview, inside the crop).
+//!
+//! **Tone** predicts what the screen will show: the shader's `tone()` (ported as [`tone_ev`],
+//! kept in step by a GPU test) followed by AgX Base on grey, which is exact for luminance. It
+//! reads the scene's luminance percentiles (sensor-clipped pixels left out: no setting brings
+//! them back), and searches the six sliders for the settings whose predicted percentiles land on
+//! targets: the median a little under middle grey, the brightest 0.5% just short of white, the
+//! darkest 0.5% just above black, enough spread between the 10th and 90th percentiles. Small
+//! penalties on each slider keep ordinary photos to gentle settings. The search is a plain
+//! coordinate descent from a fixed start, so the same photo always gets the same values.
+//!
+//! **White balance** estimates the light's colour in camera RGB by "shades of grey" (Finlayson &
+//! Trezzi 2004: the p = 6 Minkowski mean of unclipped pixels, which holds up better than the plain
+//! average when one colour fills the frame), then names it with temperature and tint the way As
+//! Shot is named ([`CameraColor::temperature_tint_of`]).
+
+use std::sync::OnceLock;
+
+use crate::agx::{Agx, Display, GREY};
+use crate::color::{CameraColor, Vec3};
+use crate::edit::{Crop, Light};
+use crate::geometry::Geometry;
+
+/// Rec.2020 luminance weights, as the shader's `REC2020_LUMA`.
+const LUMA: Vec3 = [0.2627, 0.6780, 0.0593];
+
+/// Camera RGB of the photo inside the crop on an `n × n` grid over the framed output (nearest
+/// pixel). `pixel(x, y)` reads the `width × height` preview; `full_w × full_h` is the full-size
+/// image the crop is defined on.
+pub fn sample(
+    width: u32,
+    height: u32,
+    pixel: impl Fn(u32, u32) -> Vec3,
+    crop: &Crop,
+    full_w: u32,
+    full_h: u32,
+    n: u32,
+) -> Vec<Vec3> {
+    let g = Geometry::new(crop, full_w as f32, full_h as f32);
+    let mut out = Vec::with_capacity((n * n) as usize);
+    for j in 0..n {
+        for i in 0..n {
+            let (fx, fy) = ((i as f32 + 0.5) / n as f32, (j as f32 + 0.5) / n as f32);
+            let u = g.m[0][0] * fx + g.m[0][1] * fy + g.m[0][2];
+            let v = g.m[1][0] * fx + g.m[1][1] * fy + g.m[1][2];
+            if !(0.0..1.0).contains(&u) || !(0.0..1.0).contains(&v) {
+                continue;
+            }
+            let (x, y) = ((u * width as f32) as u32, (v * height as f32) as u32);
+            out.push(pixel(x.min(width - 1), y.min(height - 1)));
+        }
+    }
+    out
+}
+
+fn smoothstep(e0: f32, e1: f32, x: f32) -> f32 {
+    let t = ((x - e0) / (e1 - e0)).clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
+}
+
+/// The shader's `tone()` on log2 luminance relative to middle grey. Slider values as the edit
+/// stores them (−100…100).
+pub fn tone_ev(ev: f32, l: &Light) -> f32 {
+    let n = |v: f32| (v / 100.0).clamp(-1.0, 1.0);
+    let mut ev = ev * (1.0 + 0.6 * n(l.contrast));
+    ev += 1.5 * n(l.highlights) * smoothstep(-0.5, 3.5, ev);
+    ev += 1.5 * n(l.shadows) * (1.0 - smoothstep(-6.0, -0.5, ev));
+    ev += n(l.whites) * smoothstep(1.0, 4.5, ev);
+    ev += 1.5 * n(l.blacks) * (1.0 - smoothstep(-10.0, -4.0, ev));
+    ev
+}
+
+/// What the screen shows (sRGB code value) for grey at `ev` stops from middle grey, after AgX.
+pub fn display_of_ev(ev: f32) -> f32 {
+    const LO: f32 = -24.0;
+    const HI: f32 = 12.0;
+    const STEPS: usize = 36 * 32;
+    static TABLE: OnceLock<Vec<f32>> = OnceLock::new();
+    let t = TABLE.get_or_init(|| {
+        let agx = Agx::sdr(Display::Srgb);
+        (0..=STEPS)
+            .map(|k| {
+                let ev = LO as f64 + (HI - LO) as f64 * k as f64 / STEPS as f64;
+                agx.display([GREY * ev.exp2(); 3])[0] as f32
+            })
+            .collect()
+    });
+    let x = ((ev.clamp(LO, HI) - LO) / (HI - LO)) * STEPS as f32;
+    let i = (x as usize).min(STEPS - 1);
+    t[i] + (t[i + 1] - t[i]) * (x - i as f32)
+}
+
+/// Percentiles the tone search looks at.
+const PCTS: [f32; 7] = [0.5, 10.0, 25.0, 50.0, 75.0, 90.0, 99.5];
+
+/// The photo's luminance in stops from middle grey, white-balanced with `wb` (camera
+/// multipliers), unedited: sensor-clipped pixels left out (unless that's nearly all of them).
+fn scene_evs(cam: &[Vec3], color: &CameraColor, wb: Vec3) -> Vec<f32> {
+    let m = color.cam_to_working();
+    let mut clipped = Vec::new();
+    let mut evs = Vec::with_capacity(cam.len());
+    for c in cam {
+        // As the shader: white balance, then clip at the sensor's white (1).
+        let b = [0, 1, 2].map(|k| c[k].max(0.0) * wb[k]);
+        let clip = b.iter().any(|&v| v >= 0.999);
+        let b = b.map(|v| v.min(1.0));
+        let rgb = [0, 1, 2].map(|r| m[r][0] * b[0] + m[r][1] * b[1] + m[r][2] * b[2]);
+        let max = rgb[0].max(rgb[1]).max(rgb[2]);
+        let y = (LUMA[0] * rgb[0] + LUMA[1] * rgb[1] + LUMA[2] * rgb[2])
+            .max(LUMA[2] * max)
+            .max(1e-7);
+        let ev = (y / GREY as f32).log2();
+        if clip {
+            clipped.push(ev);
+        } else {
+            evs.push(ev);
+        }
+    }
+    if evs.len() < cam.len() / 20 {
+        evs.extend(clipped);
+    }
+    evs.sort_by(f32::total_cmp);
+    evs
+}
+
+fn percentiles(sorted: &[f32]) -> [f32; 7] {
+    PCTS.map(|p| {
+        let x = p / 100.0 * (sorted.len() - 1) as f32;
+        let i = x as usize;
+        let j = (i + 1).min(sorted.len() - 1);
+        sorted[i] + (sorted[j] - sorted[i]) * (x - i as f32)
+    })
+}
+
+/// How far `l` puts the photo (percentiles `q`, stops) from the targets. `median`: where the
+/// median should land (exposure aims at mid-grey; the other sliders keep what exposure chose).
+fn loss(q: &[f32; 7], l: &Light, median: f32) -> f32 {
+    let d = q.map(|ev| display_of_ev(tone_ev(ev + l.exposure, l)));
+    let [p005, p10, _, p50, _, p90, p995] = d;
+    let sq = |v: f32| v * v;
+    let mut e = 3.0 * sq(p50 - median);
+    // Highlights short of white; clipping costs far more than leaving them dim (a scene without
+    // bright things shouldn't be stretched to have some).
+    e += 12.0 * sq((p995 - 0.95).max(0.0)) + 0.5 * sq((0.75 - p995).max(0.0));
+    // Blacks just above black; crushing costs more than lifting (but a night scene's darkest
+    // corner may be black).
+    e += 100.0 * sq((0.004 - p005).max(0.0)) + 2.0 * sq((p005 - 0.06).max(0.0));
+    // Enough mid-tone spread that a flat scene gets some contrast.
+    e += sq((0.4 - (p90 - p10)).max(0.0));
+    // Gentle settings: each slider costs a little, and exposure beyond two stops more (a night
+    // scene stays a night scene).
+    let n = |v: f32| v / 100.0;
+    e += 0.01
+        * (sq(n(l.contrast))
+            + sq(n(l.highlights))
+            + sq(n(l.shadows))
+            + sq(n(l.whites))
+            + sq(n(l.blacks)));
+    e + 0.03 * sq((l.exposure.abs() - 2.0).max(0.0))
+}
+
+/// Mid-grey on screen, the median's target.
+const MEDIAN: f32 = 0.42;
+
+/// Auto Light for the photo sampled as `cam` (camera RGB, see [`sample`]), white-balanced with
+/// `wb`.
+pub fn tone(cam: &[Vec3], color: &CameraColor, wb: Vec3) -> Light {
+    let evs = scene_evs(cam, color, wb);
+    if evs.is_empty() {
+        return Light::default();
+    }
+    let q = percentiles(&evs);
+    // 1. Exposure sets the brightness: over its whole range, the other sliders at zero.
+    let mut l = Light::default();
+    let mut best = f32::MAX;
+    for k in -100..=100 {
+        let e = k as f32 * 0.05;
+        let c = loss(
+            &q,
+            &Light {
+                exposure: e,
+                ..Light::default()
+            },
+            MEDIAN,
+        );
+        if c < best {
+            (best, l.exposure) = (c, e);
+        }
+    }
+    // 2. The rest shape the range around it, holding the median where exposure put it (so they
+    // don't stand in for exposure where its cost stopped it, as in a night scene).
+    let median = display_of_ev(q[3] + l.exposure);
+    let mut best = loss(&q, &l, median);
+    for step in [20.0, 10.0, 5.0, 2.0, 1.0] {
+        loop {
+            let mut moved = false;
+            for k in 0..5 {
+                for dir in [-1.0, 1.0] {
+                    let mut t = l.clone();
+                    let (v, lo, hi) = match k {
+                        0 => (&mut t.contrast, -40.0, 40.0),
+                        1 => (&mut t.highlights, -80.0, 40.0),
+                        2 => (&mut t.shadows, -40.0, 50.0),
+                        3 => (&mut t.whites, -60.0, 60.0),
+                        _ => (&mut t.blacks, -60.0, 60.0),
+                    };
+                    *v = (*v + dir * step).clamp(lo, hi);
+                    let c = loss(&q, &t, median);
+                    if c < best - 1e-7 {
+                        (best, l, moved) = (c, t, true);
+                    }
+                }
+            }
+            if !moved {
+                break;
+            }
+        }
+    }
+    Light {
+        exposure: (l.exposure * 100.0).round() / 100.0,
+        contrast: l.contrast.round(),
+        highlights: l.highlights.round(),
+        shadows: l.shadows.round(),
+        whites: l.whites.round(),
+        blacks: l.blacks.round(),
+    }
+}
+
+/// Auto white balance: `(temperature, tint)` on the sliders' scales, rounded as they show them.
+///
+/// Grey pixels (after Huo et al. 2006): starting from the camera's own estimate (As Shot), take
+/// the pixels that look neutral under the current estimate, average their colour, and repeat
+/// with a tightening tolerance. Coloured surfaces, however large, don't vote, so a blue car or a
+/// lawn doesn't tint the result. With no neutral-looking pixels it stays As Shot. `None` when
+/// too little of the photo is usable (nearly all clipped or black).
+pub fn white_balance(cam: &[Vec3], color: &CameraColor) -> Option<(f32, f32)> {
+    // Unclipped pixels bright enough for their colour to mean something.
+    let mut bright: Vec<f32> = cam.iter().map(|c| c[0].max(c[1]).max(c[2])).collect();
+    bright.sort_by(f32::total_cmp);
+    let floor = bright.get(bright.len() * 99 / 100).copied().unwrap_or(0.0) * 0.01;
+    let usable: Vec<&Vec3> = cam
+        .iter()
+        .filter(|c| {
+            let m = c[0].max(c[1]).max(c[2]);
+            m < 0.98 && m > floor.max(1e-4) && c.iter().all(|&v| v > 0.0)
+        })
+        .collect();
+    if usable.len() < 64 {
+        return None;
+    }
+    let m = color.cam_to_working();
+    let saturation = |c: &Vec3, g: Vec3| {
+        let b = [0, 1, 2].map(|k| c[k] * g[k]);
+        let w = [0, 1, 2].map(|r| m[r][0] * b[0] + m[r][1] * b[1] + m[r][2] * b[2]);
+        let (hi, lo) = (w[0].max(w[1]).max(w[2]), w[0].min(w[1]).min(w[2]));
+        if hi > 0.0 {
+            (hi - lo) / hi
+        } else {
+            1.0
+        }
+    };
+    let need = (usable.len() / 100).max(32);
+    let mut g = color.as_shot_multipliers();
+    let mut found = false;
+    for it in 0..16 {
+        // Tolerance from loose to tight; widened (to 0.4) if too few pixels qualify.
+        let mut tol = (0.4 - 0.025 * it as f32).max(0.08);
+        let greys = loop {
+            let greys: Vec<(&&Vec3, f32)> = usable
+                .iter()
+                .map(|c| (c, saturation(c, g)))
+                .filter(|(_, s)| *s < tol)
+                .collect();
+            if greys.len() >= need || tol >= 0.4 {
+                break greys;
+            }
+            tol *= 1.25;
+        };
+        if greys.len() < need {
+            break;
+        }
+        // Their mean chromaticity (each pixel counts by how grey it looks, however bright) is
+        // the light.
+        let mut light = [0.0f64; 3];
+        let mut total = 0.0f64;
+        for (c, s) in &greys {
+            let w = ((1.0 - s / tol) as f64).powi(2);
+            let sum = (c[0] + c[1] + c[2]) as f64;
+            for k in 0..3 {
+                light[k] += w * c[k] as f64 / sum;
+            }
+            total += w;
+        }
+        let next = [0, 1, 2].map(|k| (total / light[k]) as f32);
+        let lo = next.iter().copied().fold(f32::MAX, f32::min);
+        let next = next.map(|v| v / lo);
+        let moved = (0..3)
+            .map(|k| (next[k] / g[k] - 1.0).abs())
+            .fold(0.0, f32::max);
+        (g, found) = (next, true);
+        if moved < 1e-4 && it >= 8 {
+            break;
+        }
+    }
+    let (shot_t, shot_tint) = color.as_shot_temperature_tint();
+    let (t, tint) = if found {
+        let (t, tint) = color.temperature_tint_of([1.0 / g[0], 1.0 / g[1], 1.0 / g[2]]);
+        // A scene that fools this (a sky, a lawn) mostly shifts the tint; the camera's tint is
+        // seldom far off, so keep within ±15 of it.
+        (t, tint.clamp(shot_tint - 15.0, shot_tint + 15.0))
+    } else {
+        (shot_t, shot_tint)
+    };
+    if !(t.is_finite() && tint.is_finite()) {
+        return None;
+    }
+    Some((
+        ((t / 50.0).round() * 50.0).clamp(2000.0, 12000.0),
+        tint.round().clamp(-150.0, 150.0),
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::color::{invert, mul_vec, white_xy, REC2020_TO_XYZ};
+
+    /// A camera whose RGB is Rec.2020 (as shot: no correction), so scenes can be written in
+    /// stops directly.
+    fn camera() -> CameraColor {
+        CameraColor {
+            xyz_to_cam: invert(&REC2020_TO_XYZ).unwrap(),
+            as_shot_wb: [1.0; 3],
+        }
+    }
+
+    /// Greys whose stops from middle grey follow `evs`, kept under the sensor's white.
+    fn scene(evs: impl Iterator<Item = f32>) -> Vec<Vec3> {
+        evs.map(|ev| [(GREY as f32 * ev.exp2()).min(0.95); 3])
+            .collect()
+    }
+
+    /// A deterministic spread: `n` stops values evenly through a normal(mean, sd) by inverse CDF
+    /// (approximated well enough with a logistic).
+    fn normal(mean: f32, sd: f32, n: usize) -> impl Iterator<Item = f32> {
+        (0..n).map(move |i| {
+            let p = (i as f32 + 0.5) / n as f32;
+            mean + sd * 0.5513 * (p / (1.0 - p)).ln()
+        })
+    }
+
+    /// The display percentiles a result gives.
+    fn shown(cam: &[Vec3], l: &Light) -> [f32; 7] {
+        let q = percentiles(&scene_evs(cam, &camera(), [1.0; 3]));
+        q.map(|ev| display_of_ev(tone_ev(ev + l.exposure, l)))
+    }
+
+    #[test]
+    fn tone_ev_is_the_shader_formula() {
+        let zero = Light::default();
+        for ev in [-8.0, -2.0, 0.0, 1.5, 4.0] {
+            assert_eq!(tone_ev(ev, &zero), ev);
+        }
+        // Contrast scales around grey; highlights only move the top, shadows only the bottom.
+        let c = Light {
+            contrast: 50.0,
+            ..zero.clone()
+        };
+        assert!((tone_ev(2.0, &c) - 2.6).abs() < 1e-6 && tone_ev(0.0, &c) == 0.0);
+        let h = Light {
+            highlights: -100.0,
+            ..zero.clone()
+        };
+        assert!(tone_ev(4.0, &h) < 3.0 && (tone_ev(-3.0, &h) + 3.0).abs() < 1e-6);
+        let s = Light {
+            shadows: 100.0,
+            ..zero
+        };
+        assert!(tone_ev(-7.0, &s) > -6.0 && (tone_ev(2.0, &s) - 2.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn display_table_is_agx() {
+        let agx = Agx::sdr(Display::Srgb);
+        for ev in [-9.3, -4.0, 0.0, 0.37, 2.5, 6.0] {
+            let want = agx.display([GREY * (ev as f64).exp2(); 3])[0] as f32;
+            assert!(
+                (display_of_ev(ev) - want).abs() < 2e-4,
+                "{ev}: {} vs {want}",
+                display_of_ev(ev)
+            );
+        }
+    }
+
+    #[test]
+    fn a_dark_photo_gets_brighter() {
+        let cam = scene(normal(-3.5, 1.2, 4000));
+        let l = tone(&cam, &camera(), [1.0; 3]);
+        assert!(l.exposure > 2.0, "{l:?}");
+        // Most of the way to mid-grey (beyond two stops, exposure costs extra).
+        assert!(shown(&cam, &l)[3] > 0.3, "{l:?}");
+    }
+
+    #[test]
+    fn a_bright_photo_gets_darker() {
+        let cam = scene(normal(1.5, 0.8, 4000));
+        let l = tone(&cam, &camera(), [1.0; 3]);
+        assert!(l.exposure < -1.0, "{l:?}");
+        assert!(shown(&cam, &l)[6] <= 0.97, "{l:?}");
+    }
+
+    #[test]
+    fn a_well_exposed_photo_is_left_mostly_alone() {
+        let cam = scene(normal(-0.6, 1.6, 4000));
+        let l = tone(&cam, &camera(), [1.0; 3]);
+        assert!(l.exposure.abs() < 0.6, "{l:?}");
+        for v in [l.contrast, l.highlights, l.shadows, l.whites, l.blacks] {
+            assert!(v.abs() <= 30.0, "{l:?}");
+        }
+    }
+
+    #[test]
+    fn a_high_contrast_photo_keeps_both_ends() {
+        // Deep shadow and bright sky, 10 stops apart.
+        let cam = scene(normal(-6.0, 0.8, 2000).chain(normal(3.0, 0.6, 2000)));
+        let l = tone(&cam, &camera(), [1.0; 3]);
+        let d = shown(&cam, &l);
+        assert!(d[6] <= 0.97, "highlights clip: {l:?} {d:?}");
+        assert!(d[0] >= 0.003, "shadows crushed: {l:?} {d:?}");
+        // (AgX spans 16.5 stops, so 10 needs no pulling in; both ends are what matters.)
+    }
+
+    #[test]
+    fn a_flat_photo_gets_contrast() {
+        let cam = scene(normal(-0.5, 0.35, 4000));
+        let l = tone(&cam, &camera(), [1.0; 3]);
+        assert!(l.contrast > 10.0, "{l:?}");
+    }
+
+    #[test]
+    fn clipped_pixels_dont_drag_exposure_down() {
+        // A dark room with a blown window: the window can't be recovered, so exposure follows
+        // the room.
+        let mut cam = scene(normal(-3.0, 1.0, 3000));
+        cam.extend(std::iter::repeat_n([1.0; 3], 600));
+        let with = tone(&cam, &camera(), [1.0; 3]);
+        let without = tone(&cam[..3000], &camera(), [1.0; 3]);
+        assert!(
+            (with.exposure - without.exposure).abs() < 0.11,
+            "{with:?} {without:?}"
+        );
+    }
+
+    #[test]
+    fn auto_tone_is_deterministic() {
+        let cam = scene(normal(-2.0, 2.0, 3000));
+        assert_eq!(
+            tone(&cam, &camera(), [1.0; 3]),
+            tone(&cam, &camera(), [1.0; 3])
+        );
+    }
+
+    /// The light of `t` kelvin in camera RGB.
+    fn light(t: f32) -> Vec3 {
+        let (x, y) = white_xy(t, 0.0);
+        mul_vec(&camera().xyz_to_cam, [x / y, 1.0, (1.0 - x - y) / y])
+    }
+
+    /// A scene lit by `t` kelvin, in camera RGB: half of it one strong blue (a car, the sky: what
+    /// fools an average), a quarter neutral surfaces, a quarter assorted colours.
+    fn lit_scene(t: f32) -> Vec<Vec3> {
+        let l = light(t);
+        let k = 0.3 / l[1];
+        (0..4000)
+            .map(|i| {
+                let a = 0.2 + 0.3 * ((i * 7919 % 1000) as f32 / 1000.0);
+                let refl = match i % 4 {
+                    0 | 1 => [0.25 * a, 0.45 * a, 1.0 * a],
+                    2 => [a; 3],
+                    _ => {
+                        let h = i as f32 * 2.399; // golden-angle hues
+                        [0.0, 2.094, 4.189].map(|o| a * (1.0 + 0.6 * (h + o).cos()))
+                    }
+                };
+                [0, 1, 2].map(|j| refl[j] * l[j] * k)
+            })
+            .collect()
+    }
+
+    /// The camera's own guess was `shot` kelvin.
+    fn shot_at(shot: f32) -> CameraColor {
+        let l = light(shot);
+        CameraColor {
+            as_shot_wb: [1.0 / l[0], 1.0 / l[1], 1.0 / l[2]],
+            ..camera()
+        }
+    }
+
+    #[test]
+    fn white_balance_finds_the_light() {
+        // The camera's guess roughly right (as its own auto white balance usually is): the
+        // neutral surfaces decide, the big blue doesn't. (Starting far off, with half the frame
+        // one colour, some of that colour can look greyer than the greys: a known limit of
+        // grey-pixel methods, and why the tint stays near the camera's.)
+        for (t, shot) in [
+            (2850.0, 3100.0),
+            (4000.0, 4400.0),
+            (6500.0, 5900.0),
+            (5000.0, 5000.0),
+        ] {
+            let (got, tint) = white_balance(&lit_scene(t), &shot_at(shot)).unwrap();
+            assert!((got - t).abs() <= 0.05 * t, "{t} K (shot {shot}) → {got} K");
+            assert!(tint.abs() <= 5.0, "{t} K → tint {tint}");
+        }
+    }
+
+    #[test]
+    fn white_balance_without_neutrals_stays_as_shot() {
+        // Only the strong blue: nothing looks grey, so the camera's estimate stands.
+        let blue: Vec<Vec3> = lit_scene(4000.0).into_iter().step_by(4).collect();
+        let c = shot_at(4500.0);
+        let (t, tint) = c.as_shot_temperature_tint();
+        assert_eq!(
+            white_balance(&blue, &c),
+            Some(((t / 50.0).round() * 50.0, tint.round()))
+        );
+    }
+
+    #[test]
+    fn white_balance_needs_usable_pixels() {
+        assert_eq!(white_balance(&vec![[1.0; 3]; 1000], &camera()), None);
+        assert_eq!(white_balance(&[], &camera()), None);
+    }
+
+    #[test]
+    fn samples_only_inside_the_crop() {
+        // Left half dark, right half bright; a crop of the right half sees only bright.
+        let px = |x: u32, _: u32| if x < 50 { [0.01; 3] } else { [0.5; 3] };
+        let all = sample(100, 50, px, &Crop::default(), 1000, 500, 20);
+        assert_eq!(all.len(), 400);
+        assert!(all.iter().any(|c| c[0] < 0.1) && all.iter().any(|c| c[0] > 0.1));
+        let crop = Crop {
+            rect: [0.5, 0.0, 0.5, 1.0],
+            ..Crop::default()
+        };
+        let right = sample(100, 50, px, &crop, 1000, 500, 20);
+        assert!(!right.is_empty() && right.iter().all(|c| c[0] > 0.1));
+    }
+}

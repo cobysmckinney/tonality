@@ -3,4 +3,4 @@
 /**
  * A named lighting condition for white balance.
  */
-export type WbPreset = "daylight" | "cloudy" | "shade" | "tungsten" | "fluorescent" | "flash";
+export type WbPreset = "daylight" | "cloudy" | "shade" | "tungsten" | "fluorescent" | "flash" | "auto";

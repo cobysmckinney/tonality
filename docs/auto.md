@@ -1,0 +1,51 @@
+# Auto
+
+Two buttons in Edit give a starting point from the photo itself: **Auto** in the Light section
+header (exposure, contrast, highlights, shadows, whites, blacks) and **Auto** among the White
+Balance modes. Each is one undoable step. Both read the preview inside the crop
+(`tonality_core::auto::sample`, a 192×192 grid), so cropping changes what they see. Code:
+`crates/tonality-core/src/auto.rs`; commands `auto_tone`, `auto_white_balance` in
+`src-tauri/src/lib.rs`.
+
+## Tone
+
+Auto predicts the screen: the shader's `tone()` ported to Rust (`tone_ev`) and AgX Base on grey
+(`display_of_ev`, a table of the exact transform; luminance is what Light changes). A GPU test
+(`auto_tone_model_matches_the_shader`) renders greys through the shader with several Light
+settings and checks the prediction within 0.002, so the two can't drift apart.
+
+It reads the photo's luminance (white-balanced as the edit has it, through the camera matrix) as
+percentiles, leaving out sensor-clipped pixels, which no setting brings back. Then, in two
+stages:
+
+1. **Exposure** (−5…+5, 0.05 steps): the median on screen near 0.42 (just under AgX's middle
+   grey, 0.46), without clipping the brightest 0.5%. Beyond ±2 stops exposure costs extra, so a
+   night scene is brightened but stays a night scene.
+2. **The other five sliders**, by coordinate descent (steps 20 → 1), hold the median where
+   exposure put it and shape the range: the brightest 0.5% under 0.95 (clipping costs a lot;
+   being dimmer than 0.75 a little), the darkest 0.5% off black (above 0.004) but not lifted past
+   0.06, and at least 0.4 between the 10th and 90th percentiles. Each slider costs a little, and
+   Auto keeps contrast within ±40, highlights −80…40, shadows −40…50, whites and blacks ±60.
+
+Same photo, same crop and white balance: same result.
+
+## White balance
+
+Grey pixels (after Huo et al., 2006): start from the camera's own estimate (As Shot), take the
+pixels that look neutral under it (HSV saturation in Rec.2020 under a tolerance going from 0.4 to
+0.08, widened up to 0.4 if too few qualify), weight each by how grey it looks, average their
+chromaticity, and repeat. Large coloured areas (a blue car, the sky, a lawn) don't vote, which an
+average over the whole photo can't avoid. The result is named with temperature and tint the way
+As Shot is. Its tint stays within ±15 of the camera's: what fools this method mostly shifts tint,
+and cameras seldom get tint far wrong. With no neutral-looking pixels, Auto gives As Shot.
+
+Known limit: when the camera's estimate is far off (hundreds of kelvin) **and** much of the frame
+is one colour, some of that colour can look greyer than the real greys. The tests cover guesses
+about 10% off.
+
+## Checked
+
+`auto::tests` (synthetic scenes: dark, bright, well exposed, flat, ten stops of range, a blown
+window; white balance under 2850–6500 K with half the frame one strong blue; crop sampling), the
+GPU test above, and real photos through `export::tests::auto_on_real_photos` (ignored; renders
+before/after).

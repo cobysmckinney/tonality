@@ -1,5 +1,6 @@
 pub mod agx;
 pub mod album;
+pub mod auto;
 pub mod catalog;
 pub mod color;
 pub mod curve;

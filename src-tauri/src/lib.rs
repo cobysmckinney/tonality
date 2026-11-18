@@ -42,16 +42,65 @@ pub struct WbPresetInfo {
 fn wb_presets() -> Vec<WbPresetInfo> {
     tonality_core::WbPreset::ALL
         .iter()
-        .map(|&p| {
-            let (temperature, tint) = p.values();
-            WbPresetInfo {
+        .filter_map(|&p| {
+            let (temperature, tint) = p.values()?;
+            Some(WbPresetInfo {
                 preset: p,
                 label: p.label().into(),
                 temperature,
                 tint,
-            }
+            })
         })
         .collect()
+}
+
+/// The open photo's preview sampled inside `edit`'s crop, in camera RGB (for Auto).
+fn auto_samples(p: &tonality_raw::Preview, edit: &EditState) -> Vec<[f32; 3]> {
+    let px = |x: u32, y: u32| {
+        let i = ((y * p.width + x) * 3) as usize;
+        [0, 1, 2].map(|k| half::f16::from_bits(p.pixels[i + k]).to_f32())
+    };
+    tonality_core::auto::sample(
+        p.width,
+        p.height,
+        px,
+        &edit.crop,
+        p.full_width,
+        p.full_height,
+        192,
+    )
+}
+
+/// Auto Light for the open photo, as `edit` has it (its white balance and crop).
+#[tauri::command]
+async fn auto_tone(
+    id: ImageId,
+    edit: EditState,
+    images: State<'_, Images>,
+) -> CmdResult<tonality_core::edit::Light> {
+    let p = images.get(id).ok_or("image not open")?;
+    blocking(move || {
+        let cam = auto_samples(&p, &edit);
+        let wb = p.color.wb_multipliers(&edit.white_balance);
+        Ok(tonality_core::auto::tone(&cam, &p.color, wb))
+    })
+    .await
+}
+
+/// Auto white balance for the open photo: `[temperature, tint]`, or `None` when the photo has
+/// too little usable (nearly all clipped or black).
+#[tauri::command]
+async fn auto_white_balance(
+    id: ImageId,
+    edit: EditState,
+    images: State<'_, Images>,
+) -> CmdResult<Option<[f32; 2]>> {
+    let p = images.get(id).ok_or("image not open")?;
+    blocking(move || {
+        let cam = auto_samples(&p, &edit);
+        Ok(tonality_core::auto::white_balance(&cam, &p.color).map(|(t, tint)| [t, tint]))
+    })
+    .await
 }
 
 /// Dev convenience: `TONALITY_OPEN=/path/to/file.ARW npm run tauri dev` imports a file and opens it.
@@ -305,6 +354,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             default_edit_state,
             wb_presets,
+            auto_tone,
+            auto_white_balance,
             startup_path,
             startup_import,
             dev_log,

@@ -8,6 +8,7 @@ import type { ImageRow } from "$lib/bindings/ImageRow";
 import type { ImportSummary } from "$lib/bindings/ImportSummary";
 import type { LibraryOverview } from "$lib/bindings/LibraryOverview";
 import type { EditState } from "$lib/bindings/EditState";
+import type { Light } from "$lib/bindings/Light";
 import type { Panel } from "$lib/bindings/Panel";
 import type { GlslProgram } from "$lib/bindings/GlslProgram";
 import type { ImageInfo } from "$lib/bindings/ImageInfo";
@@ -31,6 +32,11 @@ function inOrder<T>(f: () => Promise<T>): Promise<T> {
 export const api = {
   defaultEditState: () => invoke<EditState>("default_edit_state"),
   wbPresets: () => invoke<WbPresetInfo[]>("wb_presets"),
+  /** Auto Light for the open photo, from its preview inside the crop, with `edit`'s white balance. */
+  autoTone: (id: number, edit: EditState) => invoke<Light>("auto_tone", { id, edit }),
+  /** Auto white balance for the open photo: `[temperature, tint]`, or null if it can't tell. */
+  autoWhiteBalance: (id: number, edit: EditState) =>
+    invoke<[number, number] | null>("auto_white_balance", { id, edit }),
   startupPath: () => invoke<string | null>("startup_path"),
   startupImport: () => invoke<string | null>("startup_import"),
   devSnapshotPath: () => invoke<string | null>("dev_snapshot_path"),

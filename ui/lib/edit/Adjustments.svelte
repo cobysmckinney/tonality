@@ -66,9 +66,43 @@
     edit.whiteBalance = { temperature: null, tint: null };
     oncommit?.(null);
   }
+  // ---- auto (tone, white balance): computed from the preview by the backend ----
+  let autoBusy = $state<"tone" | "wb" | null>(null);
+  async function autoTone() {
+    if (autoBusy) return;
+    const id = image.id;
+    autoBusy = "tone";
+    try {
+      const light = await api.autoTone(id, $state.snapshot(edit));
+      if (image.id !== id) return; // another photo opened meanwhile
+      edit.light = light;
+      oncommit?.(null);
+    } catch (e) {
+      console.warn("[auto] tone:", e);
+    } finally {
+      autoBusy = null;
+    }
+  }
+  async function autoWb() {
+    if (autoBusy) return;
+    const id = image.id;
+    autoBusy = "wb";
+    try {
+      const r = await api.autoWhiteBalance(id, $state.snapshot(edit));
+      if (!r || image.id !== id) return;
+      edit.whiteBalance = { temperature: r[0], tint: r[1], preset: "auto" };
+      oncommit?.(null);
+    } catch (e) {
+      console.warn("[auto] white balance:", e);
+    } finally {
+      autoBusy = null;
+    }
+  }
+
   function chooseWb(mode: WbMode) {
     if (mode === wbMode) return;
     if (mode === "asShot") return resetWb();
+    if (mode === "auto") return void autoWb();
     if (mode === "custom") {
       // Start the sliders where the current balance is.
       edit.whiteBalance = {
@@ -230,6 +264,16 @@
         >
           As Shot
         </button>
+        <button
+          role="radio"
+          aria-checked={wbMode === "auto"}
+          class:active={wbMode === "auto"}
+          disabled={autoBusy !== null}
+          onclick={() => chooseWb("auto")}
+          title="Measure the light from this photo"
+        >
+          Auto
+        </button>
         {#each presets as p (p.preset)}
           <button
             role="radio"
@@ -291,6 +335,15 @@
     </Section>
 
     <Section title="Light" edited={edited.light} onreset={() => reset("light")}>
+      {#snippet actions()}
+        <button
+          onclick={autoTone}
+          disabled={autoBusy !== null}
+          title="Set exposure, contrast, highlights, shadows, whites and blacks from this photo"
+        >
+          {autoBusy === "tone" ? "…" : "Auto"}
+        </button>
+      {/snippet}
       {#each lightControls as c, i (c.key)}
         {#if i === 2}<div class="spacer"></div>{/if}
         <Slider

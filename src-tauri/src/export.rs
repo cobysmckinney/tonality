@@ -1023,6 +1023,73 @@ mod tests {
         }
     }
 
+    /// Auto on real photos, for looking at: `TONALITY_AUTO_RAWS="a.ARW b.ARW"
+    /// TONALITY_EXPORT_OUT=dir cargo test -p tonality --lib auto_on_real_photos -- --ignored
+    /// --nocapture` prints the values and writes `<name>.before.jpg` / `<name>.auto.jpg`.
+    #[test]
+    #[ignore]
+    fn auto_on_real_photos() {
+        let (Ok(raws), Ok(out)) = (
+            std::env::var("TONALITY_AUTO_RAWS"),
+            std::env::var("TONALITY_EXPORT_OUT"),
+        ) else {
+            return;
+        };
+        let out = PathBuf::from(out);
+        let gpu = Gpu::new().unwrap();
+        for raw in raws.split_whitespace() {
+            let p = tonality_raw::decode_preview(raw.as_ref(), 1600).unwrap();
+            let mut edit = EditState::default();
+            let cam = crate::auto_samples(&p, &edit);
+            let wb = tonality_core::auto::white_balance(&cam, &p.color);
+            let (shot_t, shot_tint) = p.color.as_shot_temperature_tint();
+            let before = edit.clone();
+            if let Some((t, tint)) = wb {
+                edit.white_balance.temperature = Some(t);
+                edit.white_balance.tint = Some(tint);
+            }
+            edit.light = tonality_core::auto::tone(
+                &cam,
+                &p.color,
+                p.color.wb_multipliers(&edit.white_balance),
+            );
+            let name = Path::new(raw)
+                .file_stem()
+                .unwrap()
+                .to_string_lossy()
+                .into_owned();
+            println!(
+                "{name}: as shot {shot_t:.0} K {shot_tint:+.0} → auto WB {wb:?}; {:?}",
+                edit.light
+            );
+            for (e, tag) in [(&before, "before"), (&edit, "auto")] {
+                let params = DevelopParams::new(e, &p.color, None, p.full_width, p.full_height);
+                let src = Source {
+                    width: p.width,
+                    height: p.height,
+                    pixels: &p.pixels,
+                    frame: [p.full_width, p.full_height],
+                };
+                let layers = tonality_core::mask::brush_layers(&[], p.full_width, p.full_height);
+                let r = gpu
+                    .render(&src, &params, &curve_lut_rgba16f(e), &layers, None, |_| {})
+                    .unwrap();
+                let s = settings(&out, ExportFormat::Jpeg, ExportColorSpace::Srgb, false);
+                write(
+                    &r,
+                    None,
+                    &out.join(format!("{name}.{tag}.jpg")),
+                    &s,
+                    &Meta {
+                        capture: Capture::default(),
+                        rating: 0,
+                    },
+                )
+                .unwrap();
+            }
+        }
+    }
+
     #[test]
     fn ultra_hdr_is_jpeg_only() {
         let dir = Path::new("/");

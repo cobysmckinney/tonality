@@ -72,6 +72,8 @@ pub enum WbPreset {
     Tungsten,
     Fluorescent,
     Flash,
+    /// Measured from the photo (`auto::white_balance`); its values are whatever that found.
+    Auto,
 }
 
 impl WbPreset {
@@ -84,10 +86,11 @@ impl WbPreset {
         WbPreset::Flash,
     ];
 
-    /// The light's chromaticity (CIE 1931 xy): standard illuminants where there is one.
-    pub fn xy(self) -> (f32, f32) {
+    /// The light's chromaticity (CIE 1931 xy): standard illuminants where there is one. `None`
+    /// for Auto, which has no fixed light.
+    pub fn xy(self) -> Option<(f32, f32)> {
         use crate::color::daylight_xy;
-        match self {
+        Some(match self {
             WbPreset::Daylight => daylight_xy(5500.0),
             WbPreset::Cloudy => daylight_xy(6500.0),
             WbPreset::Shade => daylight_xy(7500.0),
@@ -96,14 +99,15 @@ impl WbPreset {
             // F2, cool white fluorescent.
             WbPreset::Fluorescent => (0.37208, 0.37529),
             WbPreset::Flash => daylight_xy(5900.0),
-        }
+            WbPreset::Auto => return None,
+        })
     }
 
     /// `(temperature, tint)` on the sliders' scales, rounded as the sliders show them.
-    pub fn values(self) -> (f32, f32) {
-        let (x, y) = self.xy();
+    pub fn values(self) -> Option<(f32, f32)> {
+        let (x, y) = self.xy()?;
         let (t, tint) = crate::color::temperature_tint(x, y);
-        ((t / 50.0).round() * 50.0, tint.round())
+        Some(((t / 50.0).round() * 50.0, tint.round()))
     }
 
     pub fn label(self) -> &'static str {
@@ -114,6 +118,7 @@ impl WbPreset {
             WbPreset::Tungsten => "Tungsten",
             WbPreset::Fluorescent => "Fluorescent",
             WbPreset::Flash => "Flash",
+            WbPreset::Auto => "Auto",
         }
     }
 }
@@ -719,7 +724,7 @@ mod tests {
 
     #[test]
     fn wb_presets_sit_where_their_lights_do() {
-        let v = |p: WbPreset| p.values();
+        let v = |p: WbPreset| p.values().unwrap();
         assert_eq!(v(WbPreset::Daylight), (5500.0, -11.0));
         assert_eq!(
             v(WbPreset::Tungsten),
@@ -735,9 +740,11 @@ mod tests {
             WbPreset::Shade,
         ]
         .iter()
-        .map(|p| p.values().0)
+        .map(|p| p.values().unwrap().0)
         .collect();
-        assert!(t.windows(2).all(|w| w[0] < w[1]), "warm to cool: {t:?}");
+        assert!(t.windows(2).all(|w| w[0] < w[1]), "warm to cool: {t:?}"); // Auto has no fixed light, and isn't one of the listed presets.
+        assert_eq!(WbPreset::Auto.values(), None);
+        assert!(!WbPreset::ALL.contains(&WbPreset::Auto));
     }
 
     #[test]

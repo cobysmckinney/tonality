@@ -222,3 +222,60 @@ fn colours_outside_rec2020_survive_tone() {
         }
     }
 }
+
+/// Auto's model of the screen (`tonality_core::auto`: `tone()` ported, then AgX on grey) against
+/// the shader, for greys across the range and a few Light settings, so the two can't drift.
+#[test]
+fn auto_tone_model_matches_the_shader() {
+    use tonality_core::auto::{display_of_ev, tone_ev};
+    use tonality_core::edit::Light;
+    let Some(gpu) = gpu() else { return };
+    let m = invert(&REC2020_TO_XYZ).unwrap();
+    let evs: Vec<f32> = (0..=56).map(|i| -10.0 + i as f32 * 0.25).collect();
+    let cam: Vec<[f32; 3]> = evs
+        .iter()
+        .map(|&ev| camera(&m, [0.18 * (ev as f64).exp2(); 3]).unwrap())
+        .collect();
+    let lights = [
+        Light::default(),
+        Light {
+            exposure: 1.3,
+            contrast: 40.0,
+            highlights: -60.0,
+            shadows: 50.0,
+            whites: 20.0,
+            blacks: -30.0,
+        },
+        Light {
+            exposure: -0.7,
+            contrast: -50.0,
+            highlights: 30.0,
+            shadows: -20.0,
+            whites: -40.0,
+            blacks: 45.0,
+        },
+    ];
+    for l in lights {
+        let n = |v: f32| v / 100.0;
+        let out = develop(&gpu, &m, &cam, |p| {
+            p.light0 = [
+                l.exposure.exp2(),
+                n(l.contrast),
+                n(l.highlights),
+                n(l.shadows),
+            ];
+            p.light1 = [n(l.whites), n(l.blacks), 0.0, 0.0];
+        });
+        for (k, c) in cam.iter().enumerate() {
+            // The grey the shader received (f16 camera values), in stops.
+            let y = rec2020(&m, *c)[1];
+            let ev = ((y / 0.18).log2()) as f32;
+            let want = display_of_ev(tone_ev(ev + l.exposure, &l)) as f64;
+            assert!(
+                (out[k][1] - want).abs() < 2e-3,
+                "{l:?} at {ev}: shader {} vs model {want}",
+                out[k][1]
+            );
+        }
+    }
+}

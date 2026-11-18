@@ -225,10 +225,25 @@ impl CameraColor {
         normalize_min(self.as_shot_wb)
     }
 
+    /// Multipliers for an edit's white balance: as shot unless temperature or tint is set (the
+    /// other then stays as shot).
+    pub fn wb_multipliers(&self, wb: &crate::edit::WhiteBalance) -> Vec3 {
+        if wb.temperature.is_none() && wb.tint.is_none() {
+            return self.as_shot_multipliers();
+        }
+        let (t, tint) = self.as_shot_temperature_tint();
+        self.wb_for(wb.temperature.unwrap_or(t), wb.tint.unwrap_or(tint))
+    }
+
     /// Temperature/tint corresponding to the as-shot white balance.
     pub fn as_shot_temperature_tint(&self) -> (f32, f32) {
         let wb = self.as_shot_wb;
-        let cam_white = [1.0 / wb[0], 1.0 / wb[1], 1.0 / wb[2]];
+        self.temperature_tint_of([1.0 / wb[0], 1.0 / wb[1], 1.0 / wb[2]])
+    }
+
+    /// Temperature/tint of the light whose colour in camera RGB is `cam_white` (what white
+    /// balance makes neutral).
+    pub fn temperature_tint_of(&self, cam_white: Vec3) -> (f32, f32) {
         let Some(cam_to_xyz) = invert(&self.xyz_to_cam) else {
             return (6500.0, 0.0);
         };

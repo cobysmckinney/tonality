@@ -69,16 +69,7 @@ impl DevelopParams {
         let lt = lens_table(lens, &edit.lens, w, h);
         let diag = w.hypot(h);
         let geo = Geometry::new(&edit.crop, src_w as f32, src_h as f32);
-        let (shot_t, shot_tint) = color.as_shot_temperature_tint();
-        let wbs = &edit.white_balance;
-        let wb = if wbs.temperature.is_none() && wbs.tint.is_none() {
-            color.as_shot_multipliers()
-        } else {
-            color.wb_for(
-                wbs.temperature.unwrap_or(shot_t),
-                wbs.tint.unwrap_or(shot_tint),
-            )
-        };
+        let wb = color.wb_multipliers(&edit.white_balance);
         let m = color.cam_to_working();
         let l = &edit.light;
         let n = |v: f32| (v / 100.0).clamp(-1.0, 1.0);

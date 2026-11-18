@@ -2,6 +2,7 @@
   Collapsible panel section. Open/closed is remembered per title.
   - `edited` shows a dot next to the title; with `onreset`, a reset button appears on hover.
   - `storeKey` remembers open/closed under its own name (two panels with a "Light" section).
+  - `actions`: small buttons in the header (Light's Auto).
 -->
 <script lang="ts">
   import type { Snippet } from "svelte";
@@ -12,6 +13,7 @@
     edited?: boolean;
     onreset?: () => void;
     storeKey?: string;
+    actions?: Snippet;
     children: Snippet;
   }
   let {
@@ -20,6 +22,7 @@
     edited = false,
     onreset,
     storeKey,
+    actions,
     children,
   }: Props = $props();
 
@@ -50,6 +53,7 @@
       <span class="title">{title}</span>
       {#if edited}<span class="dot" title="Edited"></span>{/if}
     </button>
+    {#if actions}<div class="actions">{@render actions()}</div>{/if}
     {#if edited && onreset}
       <button class="reset" onclick={onreset} title="Reset {title}">Reset</button>
     {/if}
@@ -125,6 +129,24 @@
   .reset:hover {
     background: var(--bg-3);
     color: var(--text-0);
+  }
+  .actions {
+    display: flex;
+    gap: 2px;
+    margin-right: var(--space-1);
+  }
+  .actions :global(button) {
+    padding: 2px 8px;
+    border-radius: var(--radius-s);
+    font-size: var(--fs-xs);
+    color: var(--text-1);
+  }
+  .actions :global(button:hover:not(:disabled)) {
+    background: var(--bg-3);
+    color: var(--text-0);
+  }
+  .actions :global(button:disabled) {
+    opacity: 0.45;
   }
   .body {
     display: grid;
