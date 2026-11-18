@@ -200,6 +200,17 @@ pub struct LocalAdjust {
     pub color_hue: f32,
     /// … and how strongly it tints, 0..=100 (0: off).
     pub color_amount: f32,
+    /// Texture, Clarity and Dehaze added to the global amounts (-100..=100). Left out of the
+    /// saved JSON at 0, so masks made before they existed keep their hash.
+    #[serde(skip_serializing_if = "crate::edit::is_zero")]
+    #[ts(as = "Option<f32>", optional)]
+    pub texture: f32,
+    #[serde(skip_serializing_if = "crate::edit::is_zero")]
+    #[ts(as = "Option<f32>", optional)]
+    pub clarity: f32,
+    #[serde(skip_serializing_if = "crate::edit::is_zero")]
+    #[ts(as = "Option<f32>", optional)]
+    pub dehaze: f32,
 }
 
 // ---- brush rasterisation ------------------------------------------------------------------------
@@ -388,6 +399,9 @@ fn describe_mask(a: &Mask, b: &Mask) -> String {
         ("Sharpness", |l| l.sharpness, 0),
         ("Noise", |l| l.noise, 0),
         ("Color", |l| l.color_amount, 0),
+        ("Texture", |l| l.texture, 0),
+        ("Clarity", |l| l.clarity, 0),
+        ("Dehaze", |l| l.dehaze, 0),
     ];
     for (label, get, decimals) in FIELDS {
         let v = get(&b.adjust);

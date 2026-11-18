@@ -11,6 +11,7 @@ use rayon::prelude::*;
 use tonality_core::geometry::Geometry;
 use tonality_core::mask::BrushLayers;
 
+use crate::presence::PresenceMaps;
 use crate::{DevelopParams, DEVELOP_WGSL};
 
 /// Output tile size (pixels).
@@ -112,6 +113,7 @@ impl Gpu {
         params: &DevelopParams,
         curve_lut: &[u8],
         brush: &BrushLayers,
+        presence: Option<&PresenceMaps>,
         mut progress: impl FnMut(f32),
     ) -> Result<Rendered, String> {
         let (sw_all, sh_all) = (src.width, src.height);
@@ -145,6 +147,7 @@ impl Gpu {
         );
         let curve_view = curve.create_view(&Default::default());
         let brush_view = self.brush_texture(brush);
+        let presence_view = self.presence_texture(presence);
 
         let mut out = vec![0u16; (w * h * 3) as usize];
         let tiles: Vec<(u32, u32)> =
@@ -207,6 +210,7 @@ impl Gpu {
                     wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::TextureView(&curve_view) },
                     wgpu::BindGroupEntry { binding: 5, resource: wgpu::BindingResource::Sampler(&self.sampler) },
                     wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(&brush_view) },
+                    wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::TextureView(&presence_view) },
                 ],
             });
 
@@ -326,6 +330,22 @@ impl Gpu {
             dimension: Some(wgpu::TextureViewDimension::D2Array),
             ..Default::default()
         })
+    }
+
+    /// The Clarity / Dehaze maps (a 1×1 placeholder without them; `params` says which).
+    fn presence_texture(&self, maps: Option<&PresenceMaps>) -> wgpu::TextureView {
+        let (w, h, bytes) = match maps {
+            Some(m) => (m.width, m.height, m.rgba16f()),
+            None => (1, 1, vec![0u8; 8]),
+        };
+        let tex = self.texture("presence maps", w, h);
+        self.queue.write_texture(
+            tex.as_image_copy(),
+            &bytes,
+            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(w * 8), rows_per_image: Some(h) },
+            tex.size(),
+        );
+        tex.create_view(&Default::default())
     }
 
     fn texture(&self, label: &str, width: u32, height: u32) -> wgpu::Texture {

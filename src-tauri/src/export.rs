@@ -180,6 +180,12 @@ fn run(
         };
         // Downscaled sources, by source long edge (versions with the same crop share one).
         let mut scaled: Vec<(u32, Scaled)> = Vec::new();
+        // Clarity / Dehaze maps: made once per photo, if some version uses them.
+        let presence = job
+            .versions
+            .iter()
+            .any(|(_, e)| tonality_render::presence::uses_maps(e))
+            .then(|| tonality_render::presence::presence_maps(&full.pixels, full.width, full.height, &full.color));
 
         for (suffix, edit) in &job.versions {
             let label = match suffix {
@@ -188,7 +194,10 @@ fn run(
             };
             emit(done as f32, &label);
             let result = (|| -> Result<PathBuf, String> {
-                let params = DevelopParams::new(edit, &full.color, full.lens.as_ref(), full.width, full.height);
+                let mut params = DevelopParams::new(edit, &full.color, full.lens.as_ref(), full.width, full.height);
+                if let Some(m) = &presence {
+                    params = params.with_presence(m);
+                }
                 // The long-edge limit applies to the framed output; scale the source to match.
                 let out_long = params.geo0[3].max(params.geo1[3]);
                 let full_long = full.width.max(full.height);
@@ -236,7 +245,7 @@ fn run(
                     }
                     layers = crate::ai::layers(&app, &job.hash, edit, full.width, full.height, full.lens.as_ref());
                 }
-                let rendered = gpu()?.render(&src, &params, &curve_lut_rgba16f(edit), &layers, |f| emit(done as f32 + f * 0.9, &label))?;
+                let rendered = gpu()?.render(&src, &params, &curve_lut_rgba16f(edit), &layers, presence.as_ref(), |f| emit(done as f32 + f * 0.9, &label))?;
                 let target = unique_path(&folder, &sanitize(&label), settings.format.extension());
                 write(&rendered, &target, &settings)?;
                 Ok(target)

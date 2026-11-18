@@ -44,7 +44,21 @@
     { key: "sharpness", label: "Sharpness", min: -100, max: 100 },
     { key: "noise", label: "Noise Reduction", min: -100, max: 100 },
   ];
+  const effects: Control[] = [
+    { key: "texture", label: "Texture", min: -100, max: 100 },
+    { key: "clarity", label: "Clarity", min: -100, max: 100 },
+    { key: "dehaze", label: "Dehaze", min: -100, max: 100 },
+  ];
   const tintKeys: AdjustKey[] = ["colorHue", "colorAmount"];
+  // Texture, Clarity, Dehaze are left out at 0 (as Rust saves them, so older masks keep their
+  // hashes); the others are always there.
+  const OPTIONAL = new Set<AdjustKey>(["texture", "clarity", "dehaze"]);
+  const get = (k: AdjustKey) => mask?.adjust[k] ?? 0;
+  function set(k: AdjustKey, v: number) {
+    if (!mask) return;
+    if (v === 0 && OPTIONAL.has(k)) delete mask.adjust[k];
+    else mask.adjust[k] = v;
+  }
   // The tint's hue is OkLCh, like the colour mixer: the track shows those hues.
   const hueTrack = `linear-gradient(90deg, ${Array.from({ length: 13 }, (_, i) => `oklch(72% 0.14 ${i * 30})`).join(", ")})`;
   const tintSwatch = (h: number) => `oklch(72% 0.14 ${h})`;
@@ -55,12 +69,13 @@
     color: mask ? color.some((c) => mask.adjust[c.key] !== 0) : false,
     tint: mask ? mask.adjust.colorAmount !== 0 : false,
     detail: mask ? detail.some((c) => mask.adjust[c.key] !== 0) : false,
+    effects: mask ? effects.some((c) => get(c.key) !== 0) : false,
     range: mask ? mask.range.low !== 0 || mask.range.high !== 100 || mask.range.smoothness !== 20 : false,
   });
 
   function zero(keys: AdjustKey[]) {
     if (!mask) return;
-    for (const k of keys) mask.adjust[k] = 0;
+    for (const k of keys) set(k, 0);
     commit(null);
   }
   const keysOf = (cs: Control[]) => cs.map((c) => c.key);
@@ -233,12 +248,12 @@
         {#each light as c (c.key)}
           <Slider
             label={c.label}
-            value={mask.adjust[c.key]}
+            value={get(c.key)}
             min={c.min}
             max={c.max}
             step={c.step ?? 1}
             decimals={c.decimals ?? 0}
-            oninput={(v) => (mask.adjust[c.key] = v)}
+            oninput={(v) => set(c.key, v)}
             oncommit={() => commit(key(c.key))}
           />
         {/each}
@@ -248,11 +263,11 @@
         {#each color as c (c.key)}
           <Slider
             label={c.label}
-            value={mask.adjust[c.key]}
+            value={get(c.key)}
             min={c.min}
             max={c.max}
             track={c.track}
-            oninput={(v) => (mask.adjust[c.key] = v)}
+            oninput={(v) => set(c.key, v)}
             oncommit={() => commit(key(c.key))}
           />
         {/each}
@@ -292,10 +307,23 @@
         {#each detail as c (c.key)}
           <Slider
             label={c.label}
-            value={mask.adjust[c.key]}
+            value={get(c.key)}
             min={c.min}
             max={c.max}
-            oninput={(v) => (mask.adjust[c.key] = v)}
+            oninput={(v) => set(c.key, v)}
+            oncommit={() => commit(key(c.key))}
+          />
+        {/each}
+      </Section>
+
+      <Section title="Effects" storeKey="mask.effects" open={false} edited={edited.effects} onreset={() => zero(keysOf(effects))}>
+        {#each effects as c (c.key)}
+          <Slider
+            label={c.label}
+            value={get(c.key)}
+            min={c.min}
+            max={c.max}
+            oninput={(v) => set(c.key, v)}
             oncommit={() => commit(key(c.key))}
           />
         {/each}

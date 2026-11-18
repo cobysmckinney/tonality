@@ -11,6 +11,7 @@ use serde::Serialize;
 use tonality_core::lens::{LensProfile, LensSource};
 use tonality_core::ImageId;
 use tonality_raw::{FullImage, Preview, RawDecoder, Rawler};
+use tonality_render::presence::{presence_maps, PresenceMaps};
 use ts_rs::TS;
 
 #[derive(Debug, Clone, Serialize, TS)]
@@ -66,6 +67,7 @@ const KEEP: usize = 4;
 const FULL_DELAY: Duration = Duration::from_millis(900);
 
 type Recent = Vec<(ImageId, Arc<Preview>)>;
+type RecentMaps = Vec<(ImageId, Arc<PresenceMaps>)>;
 type FullSlot = Arc<OnceLock<Result<Arc<FullImage>, String>>>;
 type Prefetch = Arc<OnceLock<Mutex<Sender<(ImageId, PathBuf)>>>>;
 
@@ -78,6 +80,8 @@ pub struct Images {
     latest: Arc<AtomicI64>,
     /// Feeds the one thread that decodes full resolution ahead of need.
     prefetch: Prefetch,
+    /// Clarity / Dehaze maps of recently used photos (made from their previews).
+    presence: Arc<Mutex<RecentMaps>>,
 }
 
 impl Images {
@@ -182,6 +186,20 @@ impl Images {
             }
         }
         res
+    }
+
+    /// The Clarity / Dehaze maps of an open photo, made from its preview on first use.
+    pub fn presence(&self, id: ImageId) -> Result<Arc<PresenceMaps>, String> {
+        if let Some(m) = self.presence.lock().unwrap().iter().find(|(i, _)| *i == id) {
+            return Ok(m.1.clone());
+        }
+        let p = self.get(id).ok_or("image not open")?;
+        let maps = Arc::new(presence_maps(&p.pixels, p.width, p.height, &p.color));
+        let mut cache = self.presence.lock().unwrap();
+        cache.retain(|(i, _)| *i != id);
+        cache.insert(0, (id, maps.clone()));
+        cache.truncate(4);
+        Ok(maps)
     }
 
     /// The cached full-resolution image, if `id` is the one currently held.

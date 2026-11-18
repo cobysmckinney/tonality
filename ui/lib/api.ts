@@ -49,6 +49,12 @@ export const api = {
     const [x, y, w, h, width, height] = new Uint32Array(buf, 0, 6);
     return { region: { x, y, w, h }, width, height, pixels: new Uint16Array(buf, 24) };
   },
+  /** Clarity / Dehaze maps for an open photo: RGBA half floats, `width × height`. */
+  presenceMaps: async (id: number) => {
+    const buf = await invoke<ArrayBuffer>("presence_maps", { id });
+    const [width, height] = new Uint32Array(buf, 0, 2);
+    return { width, height, data: new Uint16Array(buf, 8) };
+  },
   exportImages: (ids: number[], settings: ExportSettings) =>
     invoke<ExportSummary>("export_images", { ids, settings }),
   /**

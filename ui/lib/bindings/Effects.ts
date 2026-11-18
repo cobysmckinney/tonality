@@ -2,4 +2,17 @@
 import type { Grain } from "./Grain";
 import type { Vignette } from "./Vignette";
 
-export type Effects = { vignette: Vignette, grain: Grain, };
+export type Effects = { 
+/**
+ * -100..=100: fine detail (a few pixels across) brought out, or smoothed when negative.
+ * Left out of the saved JSON at 0, so edits made before it existed keep their hash.
+ */
+texture?: number, 
+/**
+ * -100..=100: mid-scale local contrast, edge-aware.
+ */
+clarity?: number, 
+/**
+ * -100..=100: haze removed, or added when negative.
+ */
+dehaze?: number, vignette: Vignette, grain: Grain, };

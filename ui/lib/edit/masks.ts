@@ -122,6 +122,12 @@ export function newMask(kind: MaskKind, masks: Mask[], fr: Framing, fullW: numbe
 }
 
 /** A mask's settings with nothing changed. */
+/** Whether `state` uses the Clarity / Dehaze maps (globally or in an enabled mask). */
+export function usesPresenceMaps(state: EditState): boolean {
+  const e = state.effects;
+  return !!(e.clarity || e.dehaze) || masksOf(state).some((m) => m.enabled && !!(m.adjust.clarity || m.adjust.dehaze));
+}
+
 export function zeroAdjust(): LocalAdjust {
   return {
     exposure: 0, contrast: 0, highlights: 0, shadows: 0, whites: 0, blacks: 0,

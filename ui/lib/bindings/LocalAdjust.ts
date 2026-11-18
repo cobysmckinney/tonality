@@ -43,4 +43,9 @@ colorHue: number,
 /**
  * … and how strongly it tints, 0..=100 (0: off).
  */
-colorAmount: number, };
+colorAmount: number, 
+/**
+ * Texture, Clarity and Dehaze added to the global amounts (-100..=100). Left out of the
+ * saved JSON at 0, so masks made before they existed keep their hash.
+ */
+texture?: number, clarity?: number, dehaze?: number, };

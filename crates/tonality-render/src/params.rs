@@ -4,10 +4,12 @@ use tonality_core::lens::{lens_table, LensProfile, LENS_KNOTS};
 use tonality_core::mask::{Mask, MaskShape};
 use tonality_core::EditState;
 
+use crate::presence::{Guide, PresenceMaps};
+
 /// Masks the shader evaluates (more are ignored).
 pub const MAX_MASKS: usize = 16;
 /// vec4s per mask in the uniform block.
-const MASK_VEC4S: usize = 8;
+const MASK_VEC4S: usize = 9;
 
 /// Uniform block matching `struct Params` in `develop.wgsl` (std140-compatible: all vec4).
 #[repr(C)]
@@ -36,10 +38,19 @@ pub struct DevelopParams {
     /// AgX's matrices and curve constants (`tonality_core::agx::Agx::uniform`). Last, so the
     /// offsets the preview reads (framing, lens) don't move.
     pub agx: [[f32; 4]; 15],
+    /// Texture, Clarity, Dehaze (see `presence` in `develop.wgsl`): the as-shot luminance guide,
+    /// the airlight (from [`PresenceMaps`], via [`with_presence`](Self::with_presence)) and the
+    /// global amounts.
+    pub presence: [[f32; 4]; 4],
 }
 
 impl DevelopParams {
-    pub const FLOATS: usize = 80 + MAX_MASKS * MASK_VEC4S * 4 + 4 + LENS_KNOTS * 4 + 15 * 4;
+    pub const FLOATS: usize = 80 + MAX_MASKS * MASK_VEC4S * 4 + 4 + LENS_KNOTS * 4 + 15 * 4 + 4 * 4;
+    /// Float offsets of blocks the preview reads back: framing (geo0, geo1) and `lens_head`.
+    pub const GEO_OFFSET: usize = 68;
+    pub const LENS_OFFSET: usize = 80 + MAX_MASKS * MASK_VEC4S * 4;
+    /// The `presence` block: [`Self::FLOATS`] minus its 4 vec4s.
+    pub const PRESENCE_OFFSET: usize = Self::FLOATS - 16;
 
     /// `src_w × src_h`: the full-resolution source size (framing is computed in its pixels).
     /// `lens`: the photo's lens profile, if known.
@@ -92,8 +103,27 @@ impl DevelopParams {
             lens_head: [if lt.active { 1.0 } else { 0.0 }, lt.margin, w / diag, h / diag],
             lens: lt.knots,
             agx: tonality_core::agx::Agx::get().uniform(),
+            presence: {
+                let g = Guide::new(color);
+                let e = &edit.effects;
+                [
+                    [g.weights[0], g.weights[1], g.weights[2], g.clip],
+                    [g.wb[0], g.wb[1], g.wb[2], 0.0],
+                    [0.0; 4],
+                    [n(e.texture), n(e.clarity), n(e.dehaze), 0.0],
+                ]
+            },
         }
         .with_masks(&edit.masks, src_w, src_h)
+    }
+
+    /// Bind the photo's Clarity and Dehaze maps (without them, only Texture works).
+    pub fn with_presence(mut self, maps: &PresenceMaps) -> Self {
+        let a = maps.airlight;
+        let g = Guide { weights: [self.presence[0][0], self.presence[0][1], self.presence[0][2]], wb: [self.presence[1][0], self.presence[1][1], self.presence[1][2]], clip: self.presence[0][3] };
+        self.presence[1][3] = g.luminance(a);
+        self.presence[2] = [a[0], a[1], a[2], 1.0];
+        self
     }
 
     fn with_masks(mut self, masks: &[Mask], src_w: u32, src_h: u32) -> Self {
@@ -140,8 +170,9 @@ impl DevelopParams {
                     n(a.noise),
                     if a.color_hue.is_finite() { a.color_hue.rem_euclid(360.0).to_radians() } else { 0.0 },
                     n(a.color_amount).max(0.0),
-                    0.0,
+                    n(a.texture),
                 ],
+                [n(a.clarity), n(a.dehaze), 0.0, 0.0],
             ];
             local_detail |= n(a.sharpness) != 0.0 || n(a.noise) != 0.0;
             count += 1;
@@ -181,6 +212,9 @@ impl DevelopParams {
             v.extend_from_slice(k);
         }
         for r in &self.agx {
+            v.extend_from_slice(r);
+        }
+        for r in &self.presence {
             v.extend_from_slice(r);
         }
         v
@@ -246,6 +280,18 @@ mod tests {
 
         let p = DevelopParams::new(&EditState { masks: vec![Mask::default()], ..Default::default() }, &color(), None, 600, 400);
         assert_eq!(p.masks_head[3], 0.0);
+    }
+
+    #[test]
+    fn offsets_point_at_their_blocks() {
+        let mut p = DevelopParams::new(&EditState::default(), &color(), None, 600, 400);
+        p.geo0[0] = 111.0;
+        p.lens_head[0] = 222.0;
+        p.presence[0][0] = 333.0;
+        let v = p.to_vec();
+        assert_eq!(v[DevelopParams::GEO_OFFSET], 111.0);
+        assert_eq!(v[DevelopParams::LENS_OFFSET], 222.0);
+        assert_eq!(v[DevelopParams::PRESENCE_OFFSET], 333.0);
     }
 
     #[test]

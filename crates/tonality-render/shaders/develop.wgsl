@@ -38,6 +38,11 @@ struct Params {
     // w: input floor; 13: display luminance weights, w: input ceiling; 14: sigmoid pivot x, y,
     // toe scale, shoulder scale.
     agx: array<vec4<f32>, 15>,
+    // Texture, Clarity, Dehaze (see `tonality_render::presence`): 0: as-shot luminance weights
+    // for camera RGB, w: clip level; 1: as-shot white balance, w: the airlight's as-shot
+    // luminance; 2: the airlight (camera RGB), w: 1 if the maps are bound; 3: global texture,
+    // clarity, dehaze (-1..1).
+    presence: array<vec4<f32>, 4>,
 };
 
 // One mask; see `tonality_core::mask`. Positions are in "long-edge" units: source uv × masks_head.yz.
@@ -49,7 +54,8 @@ struct MaskParams {
     adj0: vec4<f32>,   // exposure (stops), contrast, highlights, shadows (-1..1)
     adj1: vec4<f32>,   // whites, blacks, temperature, tint
     adj2: vec4<f32>,   // saturation, vibrance, hue shift, sharpness (-1..1)
-    adj3: vec4<f32>,   // x: noise reduction (-1..1), y: tint hue (OkLCh, radians), z: tint amount (0..1)
+    adj3: vec4<f32>,   // x: noise reduction (-1..1), y: tint hue (OkLCh, radians), z: tint amount (0..1), w: texture
+    adj4: vec4<f32>,   // x: clarity, y: dehaze (-1..1)
 };
 
 // Where to draw. Rects are (x, y, w, h). The *frame* is the framed (cropped, rotated) output,
@@ -71,6 +77,9 @@ struct View {
 @group(0) @binding(5) var curve_sampler: sampler;
 // Brush masks: one 8-bit layer per brush mask, covering the whole source.
 @group(0) @binding(6) var brush: texture_2d_array<f32>;
+// Clarity and dehaze maps (`tonality_render::presence`), covering the whole source: rg: clarity's
+// guided-filter coefficients, ba: the haze transmission's.
+@group(0) @binding(7) var presence_map: texture_2d<f32>;
 
 struct VsOut {
     @builtin(position) pos: vec4<f32>,
@@ -549,7 +558,86 @@ fn white_shift(t: f32, g: f32) -> vec3<f32> {
 }
 
 // `cam`: white-balanced camera RGB (see `detail`); `f`: position in the frame; `uv`: in the source.
-fn develop(cam: vec3<f32>, f: vec2<f32>, uv: vec2<f32>, aspect: f32) -> vec3<f32> {
+// ---- Presence: Texture, Clarity, Dehaze ---------------------------------------------------------
+// They compare a pixel with its surroundings in the photo as shot (camera RGB, as-shot white
+// balance, no edits), so what counts as detail or haze doesn't move as other sliders do; the
+// result is applied to the developed colour as a gain (texture, clarity) or a haze model (dehaze).
+
+fn shot_luminance(tc: vec2<f32>) -> f32 {
+    let raw = textureSampleLevel(image, image_sampler, tc, 0.0).rgb;
+    return dot(params.presence[0].xyz, clamp(raw * params.presence[1].xyz, vec3<f32>(0.0), vec3<f32>(params.presence[0].w)));
+}
+
+fn shot_log(tc: vec2<f32>) -> f32 {
+    return log2(max(shot_luminance(tc), 1e-5));
+}
+
+// The haze colour, developed with the current white balance and exposure.
+fn airlight() -> vec3<f32> {
+    let a = clamp(params.presence[2].xyz * params.wb.xyz, vec3<f32>(0.0), vec3<f32>(params.wb.w));
+    return max(vec3<f32>(dot(params.cam0.xyz, a), dot(params.cam1.xyz, a), dot(params.cam2.xyz, a)), vec3<f32>(0.0)) * params.light0.x;
+}
+
+// `amount`: x texture, y clarity, z dehaze (-1..1). `tc`, `px`: the image texture coordinate and
+// texture units per full-resolution pixel; `src`: source uv (where the maps are sampled).
+fn presence(rgb: vec3<f32>, tc: vec2<f32>, px: vec2<f32>, src: vec2<f32>, amount: vec3<f32>) -> vec3<f32> {
+    var c = rgb;
+    let maps = params.presence[2].w > 0.5;
+    let l0 = shot_luminance(tc);
+    if (maps && (amount.y != 0.0 || amount.z != 0.0)) {
+        let m = textureSampleLevel(presence_map, image_sampler, src, 0.0);
+        if (amount.z != 0.0) {
+            // Transmission: how much of the scene (rather than haze) reaches the camera here.
+            let t = clamp(m.z * l0 / max(params.presence[1].w, 1e-6) + m.w, 0.0, 1.0);
+            let a = airlight();
+            if (amount.z > 0.0) {
+                let te = 1.0 - amount.z * (1.0 - t);
+                c = max((c - a) / max(te, 0.1) + a, vec3<f32>(0.0));
+            } else {
+                c = mix(c, a, -amount.z * (0.08 + 0.4 * (1.0 - t)));
+            }
+        }
+        if (amount.y != 0.0) {
+            // Local contrast (stops) against the edge-aware base, limited so strong edges
+            // don't overshoot, weighted toward the mid-tones.
+            let l = log2(max(l0, 1e-5));
+            let d = l - (m.x * l + m.y);
+            let dl = d / (1.0 + 0.5 * abs(d));
+            let e = log2(max(dot(c, REC2020_LUMA), 1e-6) / 0.18);
+            let mid = exp(-e * e / 12.5);
+            let k = select(0.9 * amount.y, 0.8 * amount.y, amount.y > 0.0);
+            c = c * exp2(k * dl * mid);
+        }
+    }
+    if (amount.x != 0.0) {
+        // Band-pass detail: the pixel and a 2 px ring against a 6 px ring (full-resolution
+        // pixels), in stops, limited so edges stay put.
+        let l = log2(max(l0, 1e-5));
+        var inner = l;
+        var outer = 0.0;
+        for (var k = 0; k < 8; k = k + 1) {
+            let a = f32(k) * 0.7853982;
+            let dir = vec2<f32>(cos(a), sin(a));
+            if (k % 2 == 0) {
+                inner = inner + shot_log(tc + dir * 2.0 * px);
+            }
+            outer = outer + shot_log(tc + dir * 6.0 * px);
+        }
+        var band = inner / 5.0 - outer / 8.0;
+        if (amount.x > 0.0) {
+            // Coring: detail smaller than the noise (in stops, larger in the shadows, as shot
+            // noise goes) isn't boosted.
+            let core = 0.03 * sqrt(0.18 / max(l0, 2e-3));
+            band = sign(band) * max(abs(band) - core, 0.0);
+        }
+        let bl = band / (1.0 + 2.0 * abs(band));
+        let k = select(amount.x, 1.6 * amount.x, amount.x > 0.0);
+        c = c * exp2(k * bl);
+    }
+    return c;
+}
+
+fn develop(cam: vec3<f32>, f: vec2<f32>, uv: vec2<f32>, aspect: f32, tc: vec2<f32>, px: vec2<f32>, src: vec2<f32>) -> vec3<f32> {
     var rgb = vec3<f32>(dot(params.cam0.xyz, cam), dot(params.cam1.xyz, cam), dot(params.cam2.xyz, cam));
     rgb = max(rgb, vec3<f32>(0.0)) * params.light0.x;
 
@@ -560,6 +648,7 @@ fn develop(cam: vec3<f32>, f: vec2<f32>, uv: vec2<f32>, aspect: f32) -> vec3<f32
     var saturation = params.color0.x;
     var vibrance = params.color0.y;
     var hue = 0.0;
+    var pres = params.presence[3].xyz;
     let n = u32(params.masks_head.x);
     if (n > 0u) {
         let lum = display_lum(cam);
@@ -579,6 +668,7 @@ fn develop(cam: vec3<f32>, f: vec2<f32>, uv: vec2<f32>, aspect: f32) -> vec3<f32
             saturation = saturation + m * mk.adj2.x;
             vibrance = vibrance + m * mk.adj2.y;
             hue = hue + m * mk.adj2.z;
+            pres = pres + m * vec3<f32>(mk.adj3.w, mk.adj4.xy);
             if (mk.adj3.z > 0.0) {
                 tint = tint * mix(vec3<f32>(1.0), tint_color(mk.adj3.y), m * mk.adj3.z);
             }
@@ -586,6 +676,10 @@ fn develop(cam: vec3<f32>, f: vec2<f32>, uv: vec2<f32>, aspect: f32) -> vec3<f32
         rgb = rgb * exp2(ev) * white_shift(wb.x, wb.y) * tint;
     }
 
+    pres = clamp(pres, vec3<f32>(-1.0), vec3<f32>(1.0));
+    if (any(pres != vec3<f32>(0.0))) {
+        rgb = presence(rgb, tc, px, src, pres);
+    }
     rgb = vignette(rgb, f);
     rgb = tone(rgb, t, blacks);
     rgb = color(rgb, saturation, vibrance, hue);
@@ -658,7 +752,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         // The mask alone (mask thumbnails): white where it applies, black where it doesn't.
         return vec4<f32>(vec3<f32>(overlay_mask(uv, cam, in.overlay.x)), 1.0);
     }
-    var c = develop(cam, in.f, uv, params.geo0.w / params.geo1.w);
+    var c = develop(cam, in.f, uv, params.geo0.w / params.geo1.w, tc, in.px.xy, src);
     if (in.overlay.x > 0.5) {
         c = mix(c, vec3<f32>(0.95, 0.08, 0.08), 0.5 * overlay_mask(uv, cam, in.overlay.x));
     }

@@ -20,10 +20,21 @@ const DETAIL_MARGIN = 0.25;
 export const MIN_ZOOM = 0.05;
 export const MAX_ZOOM = 8;
 
-/** Offset of the framing block (geo0, geo1) in the params uniform (see `DevelopParams`). */
-const GEO_OFFSET = 68;
-/** `lens_head` in the uniform block (after 16 masks × 8 vec4s); `.y` is the lens's tile margin. */
-const LENS_OFFSET = 80 + 16 * 8 * 4;
+/**
+ * Offsets in the params uniform (see `DevelopParams`), from Rust with the shaders: the framing
+ * block (geo0, geo1), `lens_head` (`.y`: the lens's tile margin) and `presence` (`[2].w`: maps
+ * bound).
+ */
+let GEO_OFFSET = 68;
+let LENS_OFFSET = 0;
+let MAPS_FLAG = -1;
+
+/** Clarity / Dehaze maps (`api.presenceMaps`). */
+export interface PresenceMaps {
+  width: number;
+  height: number;
+  data: Uint16Array;
+}
 
 /** The framed output: size in source pixels and the frame → source-uv mapping. */
 export interface Framing {
@@ -138,6 +149,9 @@ export class PreviewRenderer {
     if (!gl) throw new Error("WebGL2 is not available");
     this.gl = gl;
     this.program = link(gl, src.vertex, src.fragment);
+    GEO_OFFSET = src.geoOffset;
+    LENS_OFFSET = src.lensOffset;
+    MAPS_FLAG = src.presenceOffset + 2 * 4 + 3;
     this.vao = gl.createVertexArray()!;
 
     this.paramsUbo = gl.createBuffer()!;
@@ -149,6 +163,14 @@ export class PreviewRenderer {
     gl.uniform1i(gl.getUniformLocation(this.program, src.imageSampler), 0);
     gl.uniform1i(gl.getUniformLocation(this.program, src.curveSampler), 1);
     gl.uniform1i(gl.getUniformLocation(this.program, src.brushSampler), 2);
+    gl.uniform1i(gl.getUniformLocation(this.program, src.presenceSampler), 3);
+    // Unit 3 holds the presence maps for good (nothing else binds it).
+    this.presence = gl.createTexture()!;
+    gl.activeTexture(gl.TEXTURE3);
+    gl.bindTexture(gl.TEXTURE_2D, this.presence);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA16F, 1, 1, 0, gl.RGBA, gl.HALF_FLOAT, new Uint16Array(4));
+    setLinearClamp(gl);
+    gl.activeTexture(gl.TEXTURE0);
     this.brush = { main: emptyBrush(gl), compare: emptyBrush(gl), still: emptyBrush(gl) };
 
     // Identity curves until the first real ones arrive.
@@ -216,11 +238,48 @@ export class PreviewRenderer {
   }
 
   /** Compare with another version side by side (null to stop). Zoom and pan are shared. */
+  // ---- presence maps (Clarity, Dehaze) ----
+  private presence: WebGLTexture;
+  /** Photo whose maps are in `presence`; null until they arrive (then params turn them off). */
+  private presenceFor: number | null = null;
+  private lastParams: Float32Array | null = null;
+  private lastCompare: Float32Array | null = null;
+
+  /** Whether `imageId`'s maps are loaded. */
+  hasPresence(imageId: number) {
+    return this.presenceFor === imageId;
+  }
+
+  /** Load `imageId`'s Clarity / Dehaze maps (after its `setImage`). */
+  setPresence(imageId: number, maps: PresenceMaps) {
+    const gl = this.gl;
+    gl.activeTexture(gl.TEXTURE3);
+    gl.bindTexture(gl.TEXTURE_2D, this.presence);
+    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 2);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA16F, maps.width, maps.height, 0, gl.RGBA, gl.HALF_FLOAT, maps.data);
+    gl.activeTexture(gl.TEXTURE0);
+    this.presenceFor = imageId;
+    // Params sent before the maps arrived had them switched off: send them again.
+    if (this.lastParams) this.setParams(this.lastParams);
+    if (this.lastCompare) this.setCompare(this.lastCompare);
+  }
+
+  /** `params` with the maps switched off if they aren't loaded (the placeholder would read as
+   * "all haze" for a frame). */
+  private gated(params: Float32Array): Float32Array {
+    if (MAPS_FLAG < 0 || this.presenceFor !== null || !(params[MAPS_FLAG] > 0.5)) return params;
+    const p = params.slice();
+    p[MAPS_FLAG] = 0;
+    return p;
+  }
+
   setCompare(params: Float32Array | null, curve?: Uint16Array | null) {
     const gl = this.gl;
     const was = this.comparing;
     this.comparing = params !== null;
+    this.lastCompare = params;
     if (params) {
+      params = this.gated(params);
       this.compareOut = framingOf(params);
       gl.bindBuffer(gl.UNIFORM_BUFFER, this.compareUbo);
       gl.bufferData(gl.UNIFORM_BUFFER, params, gl.DYNAMIC_DRAW);
@@ -258,7 +317,7 @@ export class PreviewRenderer {
     gl.viewport(0, 0, w, h);
 
     gl.bindBuffer(gl.UNIFORM_BUFFER, this.stillUbo);
-    gl.bufferData(gl.UNIFORM_BUFFER, params, gl.DYNAMIC_DRAW);
+    gl.bufferData(gl.UNIFORM_BUFFER, this.gated(params), gl.DYNAMIC_DRAW);
     if (curve) uploadCurve(gl, this.stillCurve, curve);
     const whole = { x: 0, y: 0, w: 1, h: 1 };
     gl.bindBuffer(gl.UNIFORM_BUFFER, this.viewUbo);
@@ -351,6 +410,8 @@ export class PreviewRenderer {
     // Wait for this photo's params: drawing it with the previous photo's look (and histogram)
     // flashes the wrong edit for a frame.
     this.hasParams = false;
+    this.presenceFor = null;
+    this.lastParams = this.lastCompare = null;
     this.fullW = fullW;
     this.fullH = fullH;
     this.out = this.compareOut = { w: fullW, h: fullH, m: [1, 0, 0, 0, 1, 0] };
@@ -372,8 +433,9 @@ export class PreviewRenderer {
 
   setParams(params: Float32Array) {
     const gl = this.gl;
+    this.lastParams = params;
     gl.bindBuffer(gl.UNIFORM_BUFFER, this.paramsUbo);
-    gl.bufferData(gl.UNIFORM_BUFFER, params, gl.DYNAMIC_DRAW);
+    gl.bufferData(gl.UNIFORM_BUFFER, this.gated(params), gl.DYNAMIC_DRAW);
     this.hasParams = true;
     this.lensMargin = params[LENS_OFFSET + 1] ?? 0;
     const prev = this.out;
@@ -719,6 +781,7 @@ export class PreviewRenderer {
     gl.deleteTexture(this.compareCurve);
     gl.deleteTexture(this.stillCurve);
     for (const b of Object.values(this.brush)) gl.deleteTexture(b.texture);
+    gl.deleteTexture(this.presence);
     gl.deleteBuffer(this.compareUbo);
     gl.deleteBuffer(this.stillUbo);
     if (this.histTex) gl.deleteTexture(this.histTex);

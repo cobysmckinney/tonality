@@ -23,4 +23,12 @@ curveSampler: string,
 /**
  * Combined sampler uniform name for `brush` (a 2D array) + `image_sampler`.
  */
-brushSampler: string, };
+brushSampler: string, 
+/**
+ * Combined sampler uniform name for `presence_map` + `image_sampler`.
+ */
+presenceSampler: string, 
+/**
+ * Float offsets in the params block: framing (geo0, geo1), `lens_head`, `presence`.
+ */
+geoOffset: number, lensOffset: number, presenceOffset: number, };

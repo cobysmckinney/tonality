@@ -147,6 +147,19 @@
     session.defaultEdit().then((d) => (defaults = d));
   });
   const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
+
+  // Texture, Clarity, Dehaze: left out of the edit at 0 (as Rust saves them), so returning a
+  // slider to 0 doesn't count as an edit.
+  const presence: { key: "texture" | "clarity" | "dehaze"; label: string }[] = [
+    { key: "texture", label: "Texture" },
+    { key: "clarity", label: "Clarity" },
+    { key: "dehaze", label: "Dehaze" },
+  ];
+  function setPresence(key: "texture" | "clarity" | "dehaze", v: number) {
+    if (!edit) return;
+    if (v === 0) delete (edit.effects as Partial<typeof edit.effects>)[key];
+    else edit.effects[key] = v;
+  }
   const edited = $derived({
     wb: !isAsShot,
     light: !!defaults && !same(edit.light, defaults.light),
@@ -484,6 +497,19 @@
     </Section>
 
     <Section title="Effects" open={false} edited={edited.effects} onreset={() => reset("effects")}>
+      <div class="group">
+        <span class="eyebrow">Presence</span>
+        {#each presence as p (p.key)}
+          <Slider
+            label={p.label}
+            value={edit.effects[p.key] ?? 0}
+            min={-100}
+            max={100}
+            oninput={(v) => setPresence(p.key, v)}
+            oncommit={() => oncommit?.(p.key)}
+          />
+        {/each}
+      </div>
       <div class="group">
         <span class="eyebrow">Vignette</span>
         <Slider

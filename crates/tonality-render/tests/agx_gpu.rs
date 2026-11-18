@@ -51,7 +51,7 @@ fn shader_agx_matches_the_cpu_reference() {
     params.vignette = [0.0; 4];
     let pixels: Vec<u16> = inputs.iter().flat_map(|c| c.map(|v| f16::from_f32(v).to_bits())).collect();
     let src = Source { width: w, height: h, pixels: &pixels, frame: [w, h] };
-    let out = gpu.render(&src, &params, &curve_lut_rgba16f(&edit), &brush_layers(&[], w, h), |_| {}).unwrap();
+    let out = gpu.render(&src, &params, &curve_lut_rgba16f(&edit), &brush_layers(&[], w, h), None, |_| {}).unwrap();
     assert_eq!((out.width, out.height), (w, h));
 
     let agx = Agx::get();

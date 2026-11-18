@@ -181,7 +181,29 @@ async fn develop_curve(edit: EditState) -> Response {
 #[tauri::command]
 async fn develop_params(id: ImageId, edit: EditState, images: State<'_, Images>) -> CmdResult<Vec<f32>> {
     let p = images.get(id).ok_or("image not open")?;
-    Ok(DevelopParams::new(&edit, &p.color, p.lens.as_ref(), p.full_width, p.full_height).to_vec())
+    let mut params = DevelopParams::new(&edit, &p.color, p.lens.as_ref(), p.full_width, p.full_height);
+    if tonality_render::presence::uses_maps(&edit) {
+        let images = images.inner().clone();
+        let maps = blocking(move || images.presence(id)).await?;
+        params = params.with_presence(&maps);
+    }
+    Ok(params.to_vec())
+}
+
+/// Clarity / Dehaze maps for `develop.wgsl`: two little-endian u32s (width, height), then
+/// RGBA16F little-endian.
+#[tauri::command]
+async fn presence_maps(id: ImageId, images: State<'_, Images>) -> CmdResult<Response> {
+    let images = images.inner().clone();
+    blocking(move || {
+        let m = images.presence(id)?;
+        let mut out = Vec::with_capacity(8 + m.data.len() * 8);
+        out.extend_from_slice(&m.width.to_le_bytes());
+        out.extend_from_slice(&m.height.to_le_bytes());
+        out.extend_from_slice(&m.rgba16f());
+        Ok(Response::new(out))
+    })
+    .await
 }
 
 /// Raster mask layers (brush and AI) for `develop.wgsl`. Layout, little-endian u32s: width,
@@ -247,6 +269,7 @@ pub fn run() {
             detail_region,
             export::export_images,
             develop_params,
+            presence_maps,
             develop_curve,
             mask_layers,
             ai::ai_models,

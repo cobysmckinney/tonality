@@ -8,7 +8,7 @@ import { api } from "$lib/api";
 import type { EditState } from "$lib/bindings/EditState";
 import { invalidateThumb } from "$lib/library/thumbs";
 import type { PreviewRenderer } from "./renderer";
-import { brushKey, withoutStrokes } from "./masks";
+import { brushKey, usesPresenceMaps, withoutStrokes } from "./masks";
 
 const BRANCH_EDGE = 200;
 const BRANCH_THUMBS = 64;
@@ -42,6 +42,11 @@ function inputs(imageId: number, state: EditState) {
 async function still(imageId: number, state: EditState, edge: number) {
   const [params, curve, brush] = await inputs(imageId, state);
   if (!renderer || rendererImage !== imageId) return null;
+  if (usesPresenceMaps(state) && !renderer.hasPresence(imageId)) {
+    const maps = await api.presenceMaps(imageId);
+    if (!renderer || rendererImage !== imageId) return null;
+    if (!renderer.hasPresence(imageId)) renderer.setPresence(imageId, maps);
+  }
   return renderer.renderStill(edge, params, curve, brush);
 }
 

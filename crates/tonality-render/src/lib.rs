@@ -7,6 +7,7 @@
 mod glsl;
 mod gpu;
 mod params;
+pub mod presence;
 
 pub use glsl::{preview_glsl, GlslProgram};
 pub use gpu::{Gpu, Rendered, Source};

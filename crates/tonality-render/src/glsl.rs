@@ -3,7 +3,7 @@ use naga::valid::{Capabilities, ValidationFlags, Validator};
 use serde::Serialize;
 use ts_rs::TS;
 
-use crate::DEVELOP_WGSL;
+use crate::{DevelopParams, DEVELOP_WGSL};
 
 /// GLSL ES 3.00 sources plus the names the WebGL side must bind to.
 #[derive(Debug, Clone, Serialize, TS)]
@@ -22,6 +22,12 @@ pub struct GlslProgram {
     pub curve_sampler: String,
     /// Combined sampler uniform name for `brush` (a 2D array) + `image_sampler`.
     pub brush_sampler: String,
+    /// Combined sampler uniform name for `presence_map` + `image_sampler`.
+    pub presence_sampler: String,
+    /// Float offsets in the params block: framing (geo0, geo1), `lens_head`, `presence`.
+    pub geo_offset: u32,
+    pub lens_offset: u32,
+    pub presence_offset: u32,
 }
 
 pub fn preview_glsl() -> Result<GlslProgram, String> {
@@ -73,8 +79,21 @@ pub fn preview_glsl() -> Result<GlslProgram, String> {
     let image_sampler = sampler_for("image")?;
     let curve_sampler = sampler_for("curve")?;
     let brush_sampler = sampler_for("brush")?;
+    let presence_sampler = sampler_for("presence_map")?;
 
-    Ok(GlslProgram { vertex, fragment, params_block, view_block, image_sampler, curve_sampler, brush_sampler })
+    Ok(GlslProgram {
+        vertex,
+        fragment,
+        params_block,
+        view_block,
+        image_sampler,
+        curve_sampler,
+        brush_sampler,
+        presence_sampler,
+        geo_offset: DevelopParams::GEO_OFFSET as u32,
+        lens_offset: DevelopParams::LENS_OFFSET as u32,
+        presence_offset: DevelopParams::PRESENCE_OFFSET as u32,
+    })
 }
 
 #[cfg(test)]

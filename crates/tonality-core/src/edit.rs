@@ -194,8 +194,27 @@ impl Default for Detail {
 #[serde(default, rename_all = "camelCase")]
 #[ts(export)]
 pub struct Effects {
+    /// -100..=100: fine detail (a few pixels across) brought out, or smoothed when negative.
+    /// Left out of the saved JSON at 0, so edits made before it existed keep their hash.
+    #[serde(skip_serializing_if = "is_zero")]
+    #[ts(as = "Option<f32>", optional)]
+    pub texture: f32,
+    /// -100..=100: mid-scale local contrast, edge-aware.
+    #[serde(skip_serializing_if = "is_zero")]
+    #[ts(as = "Option<f32>", optional)]
+    pub clarity: f32,
+    /// -100..=100: haze removed, or added when negative.
+    #[serde(skip_serializing_if = "is_zero")]
+    #[ts(as = "Option<f32>", optional)]
+    pub dehaze: f32,
     pub vignette: Vignette,
     pub grain: Grain,
+}
+
+/// For `skip_serializing_if`: settings added after edits were first saved stay out of the
+/// canonical JSON (and so out of the hash) until they're used.
+pub(crate) fn is_zero(v: &f32) -> bool {
+    *v == 0.0
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
@@ -384,6 +403,9 @@ const FIELDS: &[Field] = &[
     Field { label: "Noise Reduction", get: |s| Some(s.detail.luminance_noise), fmt: Fmt::Plain },
     Field { label: "Color Noise Reduction", get: |s| Some(s.detail.color_noise), fmt: Fmt::Plain },
     Field { label: "Straighten", get: |s| Some(s.crop.angle), fmt: Fmt::Degrees },
+    Field { label: "Texture", get: |s| Some(s.effects.texture), fmt: Fmt::Signed(0) },
+    Field { label: "Clarity", get: |s| Some(s.effects.clarity), fmt: Fmt::Signed(0) },
+    Field { label: "Dehaze", get: |s| Some(s.effects.dehaze), fmt: Fmt::Signed(0) },
     Field { label: "Vignette", get: |s| Some(s.effects.vignette.amount), fmt: Fmt::Signed(0) },
     Field { label: "Vignette Midpoint", get: |s| Some(s.effects.vignette.midpoint), fmt: Fmt::Plain },
     Field { label: "Vignette Feather", get: |s| Some(s.effects.vignette.feather), fmt: Fmt::Plain },
@@ -502,6 +524,21 @@ pub fn describe_change(prev: &EditState, next: &EditState) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn presence_settings_stay_out_of_the_hash_until_used() {
+        let mut s = EditState::default();
+        s.masks.push(crate::mask::Mask::default());
+        let json = s.to_canonical_json();
+        for k in ["texture", "clarity", "dehaze"] {
+            assert!(!json.contains(k), "{k} in {json}");
+        }
+        s.effects.clarity = 20.0;
+        s.masks[0].adjust.dehaze = 10.0;
+        let json = s.to_canonical_json();
+        assert!(json.contains("\"clarity\":20") && json.contains("\"dehaze\":10"), "{json}");
+        assert_eq!(serde_json::from_str::<EditState>(&json).unwrap(), s);
+    }
 
     #[test]
     fn wb_presets_sit_where_their_lights_do() {

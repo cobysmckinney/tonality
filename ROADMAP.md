@@ -16,16 +16,16 @@ Add new ideas to **Later**, and move finished items to **Done** with the date an
 ## Now
 
 ### 1. Texture, Clarity and Dehaze (global and on masks)
-The most used local adjustments in other editors, and missing globally too. Each compares a
-pixel with a blurred copy of its neighbourhood, so they need a multi-scale blur (or a
-precomputed blurred pyramid) rather than a per-pixel formula.
-
-**Plan**
-- [ ] Research how they're usually built (local contrast at fine / medium scale; dehaze via
-  a dark-channel or atmospheric-light estimate) and pick methods that run on the GPU in the
-  preview and match in export, tiled.
-- [ ] Global sliders (Effects or a new Presence section) and the same three on masks.
-- [ ] Watch preview speed: blurs at full resolution while zoomed, and at tile edges in export.
+**Status:** built on branch `presence`, seen in the app; waiting for Coby's review. Methods
+and numbers in `docs/presence.md`.
+- [x] Coby: sliders go in **Effects** (a "Presence" group above Vignette); masks get an Effects
+  section with the same three.
+- [x] Texture: band-pass of as-shot luminance (2 px vs 6 px rings), cored against noise.
+- [x] Clarity: fast guided filter (edge-preserving, no halos), mid-tone weighted.
+- [x] Dehaze: dark channel prior + guided-filter refinement; small patch (no halos round poles).
+- [x] Per-photo maps (512 px) made once, shared by preview and export (tiles agree).
+- [x] Tests: maps (flat photo, edge kept, airlight), params offsets, hash stability.
+- [ ] Coby tries it.
 
 ### 2. Leftovers from the code review
 - [ ] Try in the app: the content security policy (watch the console for blocked loads), the
