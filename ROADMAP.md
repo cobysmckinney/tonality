@@ -15,20 +15,7 @@ Add new ideas to **Later**, and move finished items to **Done** with the date an
 
 ## Now
 
-### 1. Leftovers from the code review
-**Status:** done on branch `leftovers`; waiting for Coby's review.
-- [x] Tried in the app (scripted): no content-security-policy violations or script errors;
-  the library thumbnail is saved after leaving Edit right after an edit; stepping quickly
-  through photos with masks ends on the right photo and edit. "Fluorescent" is CIE F2 (cool
-  white, ≈4230 K), as it should be.
-- [x] Values below black are kept: the decoder no longer clips them (rawler's scaling did), noise
-  reduction averages them (luminance linearly, weighted in √L; chroma as differences), and black
-  is clipped after. A GPU test: a noisy patch around black stays within ~15% of the clean one,
-  against +45% when clipped first. (Sony and Nikon clip at black in camera; Canon doesn't.)
-- [x] Full-resolution prefetch decodes on a low-priority pool of their own, so a zoom waiting
-  for one doesn't also wait behind AI detection or thumbnails.
-- [x] Catalog v4: HEAD must name one of the photo's branches (foreign key, deferred; renames
-  carry HEAD). The migration repairs a dangling HEAD first; tried on a copy of Coby's catalog.
+_Nothing queued. Pick the next item from **Later** or add a new one._
 
 ---
 
@@ -40,6 +27,7 @@ _(new ideas go here)_
 - AgX for Display P3 (and HDR) output: swap the display matrix and guard-rail weights (`docs/agx.md`).
 
 ## Done
+- 2026-11-17 — Leftovers: values below black kept through noise reduction, own pool for prefetch decodes, catalog v4 (HEAD → branch key), in-app checks (`leftovers`, `b096c0e`).
 - 2026-11-17 — Texture, Clarity, Dehaze in Effects and on masks (`presence`, `9b08681`; `docs/presence.md`).
 - 2026-11-17 — AgX done properly: Blender's AgX Base from its parameters, checked against Blender's LUTs (`agx`, `8237c3b`; `docs/agx.md`).
 - 2026-11-17 — Reset history, from Edit or for selected photos in the Library (`history-reset`). Cleaned the real library of 9 duplicate branches left by the old sidecar bug (backup in `~/Pictures/tonality-backup-2026-11-17-before-dedupe`), and fixed the merge so a copy in today's format can't capture the original.
