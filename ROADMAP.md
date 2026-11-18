@@ -15,17 +15,7 @@ Add new ideas to **Later**, and move finished items to **Done** with the date an
 
 ## Now
 
-### 1. Reset a photo's history
-**Status:** built on branch `history-reset`, seen in the app; waiting for Coby's review.
-- [x] `Catalog::reset_history(images)`: deletes every branch, commit and unused edit state, and
-  forgets the photo's shape; ratings, flags and albums stay. Test in `tonality-core`.
-- [x] `history_reset` command: also removes the edited thumbnails and rewrites sidecars before
-  returning (so a crash can't bring the old history back).
-- [x] Edit: "Reset all history…" at the foot of the History panel. Library: "Reset History…"
-  for the selected photos (Coby: both). Both confirm first; an open Edit session reloads.
-- [ ] Coby tries it.
-
-### 2. AgX done properly (the only tone mapping)
+### 1. AgX done properly (the only tone mapping)
 AgX is already the display transform (`agx()` in `develop.wgsl`), but it's an approximation:
 - The sigmoid is a 6th-order polynomial fit (from the "minimal AgX" approximations), not
   AgX's actual curve.
@@ -63,7 +53,7 @@ and the histogram, so a fix lands everywhere at once.
   sample photos. Note in the commit that existing edits will look different.
 - [ ] Remove any wording or code suggesting other tone mappers.
 
-### 3. Texture, Clarity and Dehaze (global and on masks)
+### 2. Texture, Clarity and Dehaze (global and on masks)
 The most used local adjustments in other editors, and missing globally too. Each compares a
 pixel with a blurred copy of its neighbourhood, so they need a multi-scale blur (or a
 precomputed blurred pyramid) rather than a per-pixel formula.
@@ -75,7 +65,7 @@ precomputed blurred pyramid) rather than a per-pixel formula.
 - [ ] Global sliders (Effects or a new Presence section) and the same three on masks.
 - [ ] Watch preview speed: blurs at full resolution while zoomed, and at tile edges in export.
 
-### 4. Leftovers from the code review
+### 3. Leftovers from the code review
 - [ ] Try in the app: the content security policy (watch the console for blocked loads), the
   white balance presets (does "Fluorescent" fit?), the library thumbnail after leaving Edit
   quickly, and switching photos quickly with masks.
@@ -96,6 +86,7 @@ precomputed blurred pyramid) rather than a per-pixel formula.
 _(new ideas go here)_
 
 ## Done
+- 2026-11-17 — Reset history, from Edit or for selected photos in the Library (`history-reset`). Cleaned the real library of 9 duplicate branches left by the old sidecar bug (backup in `~/Pictures/tonality-backup-2026-11-17-before-dedupe`), and fixed the merge so a copy in today's format can't capture the original.
 - 2026-11-17 — Logo: italic Playfair `t` mark and wordmark, app icons, startup animation (`logo`, `e22ba27`).
 - 2026-11-17 — Crop: aspect presets as icon buttons, orientation switch, 3:4; sidecar merge no longer duplicates histories when a new setting is added (`crop-buttons`, `7fbec47`).
 - 2026-11-17 — Library: justified rows, photos edge to edge in their own shape; catalog v3 records each photo's shape (`library-cards`).

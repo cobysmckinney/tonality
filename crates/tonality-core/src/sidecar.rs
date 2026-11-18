@@ -418,15 +418,20 @@ fn same_child(
     hash: &str,
     c: &SidecarCommit,
 ) -> Result<Option<CommitId>> {
-    let exact = tx
-        .query_row(
-            "SELECT id FROM commits WHERE image_id = ?1 AND parent IS ?2 AND state_hash = ?3 ORDER BY id LIMIT 1",
-            params![image, parent, hash],
-            |r| r.get(0),
-        )
-        .optional()?;
-    if exact.is_some() {
-        return Ok(exact);
+    // The state as the sidecar names it (the hash it was stored under, maybe in an older
+    // format) first, then as re-hashed today: two siblings can be the same state in both formats
+    // (a copy an older merge made), and the sidecar's own name says which one this commit is.
+    for h in [c.state.as_str(), hash] {
+        let exact = tx
+            .query_row(
+                "SELECT id FROM commits WHERE image_id = ?1 AND parent IS ?2 AND state_hash = ?3 ORDER BY id LIMIT 1",
+                params![image, parent, h],
+                |r| r.get(0),
+            )
+            .optional()?;
+        if exact.is_some() {
+            return Ok(exact);
+        }
     }
     let mut stmt = tx.prepare(
         "SELECT id, summary, created_at, updated_at FROM commits WHERE image_id = ?1 AND parent IS ?2 ORDER BY id",
@@ -544,6 +549,47 @@ mod tests {
         assert!(!a.merge_sidecar(ia, &sc).unwrap().changed(), "nothing new");
         assert_eq!(graph(&a, ia), before);
         assert_eq!(a.history_view(ia).unwrap().branches.len(), 1, "no main-2");
+    }
+
+    #[test]
+    fn a_copy_in_todays_format_does_not_capture_the_original() {
+        let mut a = Catalog::open_in_memory().unwrap();
+        let ia = a.test_image("x");
+        a.history_open(ia).unwrap();
+        let mut st = exp(1.0);
+        st.masks.push(crate::mask::Mask::default());
+        let first = a.commit(ia, &st, None).unwrap().view.head.commit;
+        st.light.exposure = 2.0;
+        a.commit(ia, &st, None).unwrap();
+
+        // `first` stored the way an older version wrote it (no `vibrance`)...
+        let (hash, json): (String, String) = a
+            .conn
+            .query_row("SELECT s.hash, s.json FROM commits c JOIN edit_states s ON s.hash = c.state_hash WHERE c.id = ?1", [first], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap();
+        let mut v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        for m in v["masks"].as_array_mut().unwrap() {
+            m["adjust"].as_object_mut().unwrap().remove("vibrance");
+        }
+        let old = serde_json::to_string(&v).unwrap();
+        let old_hash = blake3::hash(old.as_bytes()).to_hex().to_string();
+        a.conn.execute("INSERT INTO edit_states (hash, json) VALUES (?1, ?2)", params![old_hash, old]).unwrap();
+        a.conn.execute("UPDATE commits SET state_hash = ?1 WHERE id = ?2", params![old_hash, first]).unwrap();
+        // ...and a sibling copy of it in today's format, on its own branch, made by an older merge.
+        a.conn
+            .execute(
+                "INSERT INTO commits (image_id, parent, state_hash, summary, key, created_at, updated_at)
+                 SELECT image_id, parent, ?2, summary, key, created_at, updated_at FROM commits WHERE id = ?1",
+                params![first, hash],
+            )
+            .unwrap();
+        let copy = a.conn.last_insert_rowid();
+        crate::history::set_branch(&a.conn, ia, "main-2", copy).unwrap();
+
+        let before = graph(&a, ia);
+        let sc = Sidecar::from_json(&a.sidecar(ia).unwrap().to_json()).unwrap();
+        assert!(!a.merge_sidecar(ia, &sc).unwrap().changed(), "nothing new");
+        assert_eq!(graph(&a, ia), before);
     }
 
     #[test]
