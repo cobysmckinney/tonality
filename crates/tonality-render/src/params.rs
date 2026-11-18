@@ -33,10 +33,13 @@ pub struct DevelopParams {
     pub lens_head: [f32; 4],
     /// Per radius knot: red, green, blue source/output radius ratio; vignetting gain.
     pub lens: [[f32; 4]; LENS_KNOTS],
+    /// AgX's matrices and curve constants (`tonality_core::agx::Agx::uniform`). Last, so the
+    /// offsets the preview reads (framing, lens) don't move.
+    pub agx: [[f32; 4]; 15],
 }
 
 impl DevelopParams {
-    pub const FLOATS: usize = 80 + MAX_MASKS * MASK_VEC4S * 4 + 4 + LENS_KNOTS * 4;
+    pub const FLOATS: usize = 80 + MAX_MASKS * MASK_VEC4S * 4 + 4 + LENS_KNOTS * 4 + 15 * 4;
 
     /// `src_w × src_h`: the full-resolution source size (framing is computed in its pixels).
     /// `lens`: the photo's lens profile, if known.
@@ -88,6 +91,7 @@ impl DevelopParams {
             masks: [[[0.0; 4]; MASK_VEC4S]; MAX_MASKS],
             lens_head: [if lt.active { 1.0 } else { 0.0 }, lt.margin, w / diag, h / diag],
             lens: lt.knots,
+            agx: tonality_core::agx::Agx::get().uniform(),
         }
         .with_masks(&edit.masks, src_w, src_h)
     }
@@ -175,6 +179,9 @@ impl DevelopParams {
         v.extend_from_slice(&self.lens_head);
         for k in &self.lens {
             v.extend_from_slice(k);
+        }
+        for r in &self.agx {
+            v.extend_from_slice(r);
         }
         v
     }

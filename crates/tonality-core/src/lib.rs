@@ -1,3 +1,4 @@
+pub mod agx;
 pub mod album;
 pub mod catalog;
 pub mod color;

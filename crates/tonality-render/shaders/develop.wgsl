@@ -33,6 +33,11 @@ struct Params {
     lens_head: vec4<f32>,
     // Per radius knot (0..LENS_RMAX half-diagonals): rgb: source ÷ output radius, w: vignetting gain.
     lens: array<vec4<f32>, 32>,
+    // AgX (see `tonality_core::agx` and docs/agx.md), matrices as rows: 0–2 Rec.2020 → E-Gamut,
+    // 3–5 back, 6–8 inset, 9–11 outset then → display primaries; 12: Rec.2020 luminance weights,
+    // w: input floor; 13: display luminance weights, w: input ceiling; 14: sigmoid pivot x, y,
+    // toe scale, shoulder scale.
+    agx: array<vec4<f32>, 15>,
 };
 
 // One mask; see `tonality_core::mask`. Positions are in "long-edge" units: source uv × masks_head.yz.
@@ -364,40 +369,114 @@ fn apply_curve(c: vec3<f32>) -> vec3<f32> {
     );
 }
 
-// ---- Display transform: AgX (Rec.2020 variant) -----------------------------------------------
-fn agx_contrast(x: vec3<f32>) -> vec3<f32> {
-    let x2 = x * x;
-    let x4 = x2 * x2;
-    return 15.5 * x4 * x2 - 40.14 * x4 * x + 31.96 * x4 - 6.868 * x2 * x + 0.4298 * x2
-        + 0.1191 * x - 0.00232;
+// ---- Display transform: AgX Base (docs/agx.md; `tonality_core::agx::Agx::display`) -----------
+fn agx_mat(i: i32, c: vec3<f32>) -> vec3<f32> {
+    return vec3<f32>(dot(params.agx[i].xyz, c), dot(params.agx[i + 1].xyz, c), dot(params.agx[i + 2].xyz, c));
 }
 
-fn agx(rgb: vec3<f32>) -> vec3<f32> {
-    let inset = mat3x3<f32>(
-        vec3<f32>(0.856627153315983, 0.137318972929847, 0.11189821299995),
-        vec3<f32>(0.0951212405381588, 0.761241990602591, 0.0767994186031903),
-        vec3<f32>(0.0482516061458583, 0.101439036467562, 0.811302368396859),
-    );
-    let outset = mat3x3<f32>(
-        vec3<f32>(1.1271005818144368, -0.1413297634984383, -0.14132976349843826),
-        vec3<f32>(-0.11060664309660323, 1.157823702216272, -0.11060664309660294),
-        vec3<f32>(-0.016493938717834573, -0.016493938717834257, 1.2519364065950405),
-    );
-    let rec2020_to_srgb = mat3x3<f32>(
-        vec3<f32>(1.6605, -0.1246, -0.0182),
-        vec3<f32>(-0.5876, 1.1329, -0.1006),
-        vec3<f32>(-0.0728, -0.0083, 1.1187),
-    );
-    let min_ev = -12.47393;
-    let max_ev = 4.026069;
+fn max3(c: vec3<f32>) -> f32 {
+    return max(c.x, max(c.y, c.z));
+}
 
-    var c = inset * rgb;
-    c = max(c, vec3<f32>(1e-10));
-    c = clamp((log2(c) - min_ev) / (max_ev - min_ev), vec3<f32>(0.0), vec3<f32>(1.0));
-    c = agx_contrast(c);
-    c = outset * c;
-    c = pow(max(c, vec3<f32>(0.0)), vec3<f32>(2.2));
-    c = rec2020_to_srgb * c;
+fn min3(c: vec3<f32>) -> f32 {
+    return min(c.x, min(c.y, c.z));
+}
+
+// `max(x) − Y(max(x) − x) + Y(x)`: luminance that counts what a negative component takes away.
+fn agx_compensated(x: vec3<f32>, w: vec3<f32>) -> f32 {
+    let inv = vec3<f32>(max3(x)) - x;
+    return max3(inv) - dot(inv, w) + dot(x, w);
+}
+
+fn agx_lift(c: vec3<f32>) -> vec3<f32> {
+    return c + vec3<f32>(max(-min3(c), 0.0));
+}
+
+// Lower guard rail in Rec.2020: lift negatives, keep the compensated luminance.
+fn agx_low_side(c: vec3<f32>) -> vec3<f32> {
+    let w = params.agx[12].xyz;
+    let y = agx_compensated(c, w);
+    let lifted = agx_lift(c);
+    let y_new = agx_compensated(lifted, w);
+    return lifted * select(1.0, y / y_new, y_new > y);
+}
+
+// The display gamut's guard rail: compensation blended in by min(Y^0.08, 1). A negative
+// luminance leaves the colour unscaled. Returns -1 for that.
+fn agx_display_y(x: vec3<f32>) -> f32 {
+    let w = params.agx[13].xyz;
+    let y = dot(x, w);
+    if (y < 0.0) {
+        return -1.0;
+    }
+    let t = min(pow(y, 0.08), 1.0);
+    return (1.0 - t) * agx_compensated(x, w) + t * y;
+}
+
+fn agx_low_side_display(c: vec3<f32>) -> vec3<f32> {
+    let y = agx_display_y(c);
+    let lifted = agx_lift(c);
+    let y_new = agx_display_y(lifted);
+    let scale = y >= 0.0 && y_new >= 0.0 && y_new > y;
+    return lifted * select(1.0, y / max(y_new, 1e-30), scale);
+}
+
+// HSV hue (hexcone), 0..1; 0 for greys.
+fn hsv_hue(c: vec3<f32>) -> f32 {
+    let mx = max3(c);
+    let d = mx - min3(c);
+    if (d <= 0.0) {
+        return 0.0;
+    }
+    var h: f32;
+    if (mx == c.x) {
+        h = (c.y - c.z) / d;
+        h = h - 6.0 * floor(h / 6.0);
+    } else if (mx == c.y) {
+        h = (c.z - c.x) / d + 2.0;
+    } else {
+        h = (c.x - c.y) / d + 4.0;
+    }
+    return h / 6.0;
+}
+
+// `c` with its HSV hue set to `h`, saturation and value kept.
+fn with_hsv_hue(c: vec3<f32>, h: f32) -> vec3<f32> {
+    let v = max3(c);
+    if (v <= 0.0) {
+        return c;
+    }
+    let s = (v - min3(c)) / v;
+    let k = clamp(abs(fract(vec3<f32>(h) + vec3<f32>(0.0, 2.0 / 3.0, 1.0 / 3.0)) * 6.0 - 3.0) - 1.0, vec3<f32>(0.0), vec3<f32>(1.0));
+    return v * (1.0 - s + s * k);
+}
+
+// Jed Smith's tunable sigmoid through the pivot (slope 2.4, toe and shoulder power 1.5).
+fn agx_sigmoid(x: vec3<f32>) -> vec3<f32> {
+    let k = params.agx[14];
+    let s = select(vec3<f32>(k.w), vec3<f32>(k.z), x < vec3<f32>(k.x));
+    let u = 2.4 * (x - vec3<f32>(k.x)) / s; // ≥ 0 on both sides (the toe's scale is negative)
+    return s * u / pow(1.0 + pow(u, vec3<f32>(1.5)), vec3<f32>(1.0 / 1.5)) + vec3<f32>(k.y);
+}
+
+// Scene-linear Rec.2020 → linear display Rec.709, clipped to 0..1 (encode with srgb_encode).
+fn agx(rgb: vec3<f32>) -> vec3<f32> {
+    // 1. Input domain: E-Gamut, −10…+15 stops around middle grey.
+    var c = agx_mat(3, clamp(agx_mat(0, rgb), vec3<f32>(params.agx[12].w), vec3<f32>(params.agx[13].w)));
+    // 2. Guard rail, 3. inset, 4. its hue.
+    c = agx_mat(6, agx_low_side(c));
+    let h0 = hsv_hue(c);
+    // 5.–7. Log2 over −10…+6.5 stops, sigmoid, linearise.
+    let x = (log2(max(c, vec3<f32>(1e-30)) / 0.18) + 10.0) / 16.5;
+    c = pow(max(agx_sigmoid(x), vec3<f32>(0.0)), vec3<f32>(2.4));
+    // 8. Keep 40% of the sigmoid's hue shift.
+    var h = hsv_hue(c);
+    let d = h - h0;
+    h = h - select(0.0, 1.0, d > 0.5) + select(0.0, 1.0, d < -0.5);
+    h = fract(h0 + 0.4 * (h - h0) + 1.0);
+    c = with_hsv_hue(c, h);
+    // 9.–11. Outset, to the display's primaries, guard rail. 12. Clip.
+    c = agx_low_side_display(agx_mat(9, c));
     return clamp(c, vec3<f32>(0.0), vec3<f32>(1.0));
 }
 

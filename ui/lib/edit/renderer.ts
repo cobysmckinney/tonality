@@ -22,8 +22,8 @@ export const MAX_ZOOM = 8;
 
 /** Offset of the framing block (geo0, geo1) in the params uniform (see `DevelopParams`). */
 const GEO_OFFSET = 68;
-/** `lens_head` in the uniform block (after 16 masks × 7 vec4s); `.y` is the lens's tile margin. */
-const LENS_OFFSET = 80 + 16 * 7 * 4;
+/** `lens_head` in the uniform block (after 16 masks × 8 vec4s); `.y` is the lens's tile margin. */
+const LENS_OFFSET = 80 + 16 * 8 * 4;
 
 /** The framed output: size in source pixels and the frame → source-uv mapping. */
 export interface Framing {
