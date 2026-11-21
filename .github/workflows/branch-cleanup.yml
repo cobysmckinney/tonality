@@ -1,0 +1,122 @@
+# Deletes branches that are no longer needed:
+#
+#   - a pull request's branch, as soon as the pull request is merged;
+#   - once a week (or on demand from the Actions tab), any branch left behind whose work is
+#     already in the default branch: its pull request was merged, or every commit on it is in
+#     the default branch and the default branch has moved on.
+#
+# Never touched: the default branch, protected branches, branches with an open pull request,
+# branches other open pull requests are based on, and branches with commits made after the merge.
+name: Branch cleanup
+
+on:
+  pull_request:
+    types: [closed]
+  schedule:
+    - cron: "17 4 * * 1"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: List what would be deleted without deleting it
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  pull-requests: read
+
+env:
+  GH_TOKEN: ${{ github.token }}
+  REPO: ${{ github.repository }}
+
+jobs:
+  merged:
+    name: Delete the merged branch
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.merged &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    env:
+      BRANCH: ${{ github.event.pull_request.head.ref }}
+      MERGED_SHA: ${{ github.event.pull_request.head.sha }}
+      DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+    steps:
+      - run: |
+          ref=$(jq -rn --arg b "$BRANCH" '$b | @uri | gsub("%2F"; "/")')
+
+          if [ "$BRANCH" = "$DEFAULT_BRANCH" ]; then
+            echo "$BRANCH is the default branch; keeping it."; exit 0
+          fi
+          # Already gone when "Automatically delete head branches" is on in the repo settings.
+          if ! tip=$(gh api "repos/$REPO/git/ref/heads/$ref" --jq .object.sha 2>/dev/null); then
+            echo "$BRANCH is already deleted."; exit 0
+          fi
+          if [ "$tip" != "$MERGED_SHA" ]; then
+            echo "$BRANCH has commits made after the merge; keeping it."; exit 0
+          fi
+          if [ "$(gh api "repos/$REPO/branches/$ref" --jq .protected)" = "true" ]; then
+            echo "$BRANCH is protected; keeping it."; exit 0
+          fi
+          # Deleting a branch closes the pull requests based on it.
+          if [ "$(gh pr list --repo "$REPO" --state open --base "$BRANCH" --json number --jq length)" != "0" ]; then
+            echo "Open pull requests are based on $BRANCH; keeping it."; exit 0
+          fi
+
+          gh api -X DELETE "repos/$REPO/git/refs/heads/$ref"
+          echo "Deleted $BRANCH."
+
+  sweep:
+    name: Sweep leftover branches
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    env:
+      DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+      DRY_RUN: ${{ inputs.dry_run || false }}
+    steps:
+      - run: |
+          owner=${REPO%%/*}
+          deleted=0
+
+          gh api --paginate "repos/$REPO/branches?per_page=100" \
+            --jq '.[] | select(.protected | not) | [.name, .commit.sha] | @tsv' > branches.tsv
+
+          while IFS=$'\t' read -r branch tip; do
+            [ "$branch" = "$DEFAULT_BRANCH" ] && continue
+            ref=$(jq -rn --arg b "$branch" '$b | @uri | gsub("%2F"; "/")')
+
+            if [ "$(gh pr list --repo "$REPO" --state open --head "$branch" --json number --jq length)" != "0" ]; then
+              echo "keep    $branch (open pull request)"; continue
+            fi
+            if [ "$(gh pr list --repo "$REPO" --state open --base "$branch" --json number --jq length)" != "0" ]; then
+              echo "keep    $branch (open pull requests are based on it)"; continue
+            fi
+
+            # Merged by pull request, with nothing pushed since (this also covers squash merges).
+            why=$(gh api --paginate "repos/$REPO/pulls?state=closed&head=$owner:$ref&per_page=100" \
+              --jq ".[] | select(.merged_at != null and .head.sha == \"$tip\") | \"merged in #\(.number)\"" | head -n 1)
+
+            # Merged without a pull request: nothing on it that the default branch lacks. A branch
+            # level with the default branch is left alone; it may have just been created.
+            if [ -z "$why" ]; then
+              status=$(gh api "repos/$REPO/compare/$DEFAULT_BRANCH...$ref" --jq .status 2>/dev/null || true)
+              [ "$status" = "behind" ] && why="already in $DEFAULT_BRANCH"
+            fi
+
+            if [ -z "$why" ]; then
+              echo "keep    $branch (not merged)"; continue
+            fi
+            if [ "$DRY_RUN" = "true" ]; then
+              echo "would delete $branch ($why)"; continue
+            fi
+            # Only if it still points at the commit that was checked.
+            now=$(gh api "repos/$REPO/git/ref/heads/$ref" --jq .object.sha 2>/dev/null || true)
+            if [ "$now" != "$tip" ]; then
+              echo "keep    $branch (changed during the sweep)"; continue
+            fi
+            gh api -X DELETE "repos/$REPO/git/refs/heads/$ref"
+            echo "deleted $branch ($why)"
+            deleted=$((deleted + 1))
+          done < branches.tsv
+
+          echo "Deleted $deleted branch(es)." >> "$GITHUB_STEP_SUMMARY"
