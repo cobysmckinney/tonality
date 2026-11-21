@@ -116,15 +116,17 @@
     background: var(--text-1);
   }
   .reset {
-    visibility: hidden;
+    /* Hidden but still focusable, so Tab reaches it. */
+    opacity: 0;
     margin-right: var(--space-1);
     padding: 2px 8px;
     border-radius: var(--radius-s);
     font-size: var(--fs-xs);
     color: var(--text-2);
   }
-  .head:hover .reset {
-    visibility: visible;
+  .head:hover .reset,
+  .head:focus-within .reset {
+    opacity: 1;
   }
   .reset:hover {
     background: var(--bg-3);

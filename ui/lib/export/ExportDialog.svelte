@@ -3,6 +3,7 @@
   import { revealItemInDir } from "@tauri-apps/plugin-opener";
   import type { ExportColorSpace } from "$lib/bindings/ExportColorSpace";
   import type { ExportFormat } from "$lib/bindings/ExportFormat";
+  import { enterConfirms } from "$lib/keys";
   import { exporter } from "./export.svelte";
 
   const s = $derived(exporter.settings);
@@ -45,12 +46,7 @@
     if (e.key === "Escape") {
       e.preventDefault();
       exporter.close();
-    } else if (
-      e.key === "Enter" &&
-      !exporter.running &&
-      !exporter.result &&
-      !(e.target instanceof HTMLInputElement)
-    ) {
+    } else if (enterConfirms(e) && !exporter.running && !exporter.result && s.folder) {
       e.preventDefault();
       exporter.run();
     }
