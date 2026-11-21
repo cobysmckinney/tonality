@@ -8,7 +8,7 @@
   import MaskList from "./MaskList.svelte";
   import Filmstrip from "./Filmstrip.svelte";
   import { turn } from "./crop";
-  import { library } from "$lib/library/library.svelte";
+  import { library } from "$lib/library/state.svelte";
   import { session } from "./session.svelte";
   import type { EditState } from "$lib/bindings/EditState";
   import type { Histogram } from "./renderer";

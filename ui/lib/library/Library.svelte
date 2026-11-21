@@ -4,7 +4,7 @@
   import type { ImageMeta } from "$lib/bindings/ImageMeta";
   import type { ImageQuery } from "$lib/bindings/ImageQuery";
   import Grid from "./Grid.svelte";
-  import { library, type View } from "./library.svelte";
+  import { library, type View } from "./state.svelte";
   import { thumbKey, thumbnail } from "./thumbs";
 
   let grid = $state<ReturnType<typeof Grid> | null>(null);

@@ -5,7 +5,7 @@
   import { thumbKey, thumbnail } from "./thumbs";
   import type { ImageRow } from "$lib/bindings/ImageRow";
   import { dayKey, dayLabel } from "./dates";
-  import { library } from "./library.svelte";
+  import { library } from "./state.svelte";
 
   interface Props {
     images: ImageRow[];

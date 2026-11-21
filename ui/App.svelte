@@ -4,7 +4,7 @@
   import Library from "$lib/library/Library.svelte";
   import Edit from "$lib/edit/Edit.svelte";
   import { api } from "$lib/api";
-  import { library } from "$lib/library/library.svelte";
+  import { library } from "$lib/library/state.svelte";
   import ExportDialog from "$lib/export/ExportDialog.svelte";
   import { exportCurrent } from "$lib/export/targets";
   import Splash from "$lib/Splash.svelte";

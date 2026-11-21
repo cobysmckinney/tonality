@@ -4,7 +4,7 @@
   Click a photo, or ← / → for the previous / next one. Horizontally virtualised.
 -->
 <script lang="ts">
-  import { library } from "$lib/library/library.svelte";
+  import { library } from "$lib/library/state.svelte";
   import { thumbKey, thumbnail } from "$lib/library/thumbs";
   import { session } from "./session.svelte";
 

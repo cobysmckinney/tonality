@@ -1,7 +1,7 @@
 // What "Export" applies to: the photo in Edit, or the Library selection (else the focused photo).
 import { app } from "$lib/app.svelte";
 import { session } from "$lib/edit/session.svelte";
-import { library } from "$lib/library/library.svelte";
+import { library } from "$lib/library/state.svelte";
 import { exporter } from "./export.svelte";
 
 function targets(): number[] {
