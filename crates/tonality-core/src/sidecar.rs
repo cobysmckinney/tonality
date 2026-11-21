@@ -18,7 +18,7 @@ use crate::catalog::{Catalog, CatalogError, ImageId, Result};
 use crate::edit::EditState;
 use crate::history::{
     auto_branch_name, branches, head, lineage, parents, set_branch, set_head, store_state,
-    validate_name, BranchInfo, CommitId,
+    BranchInfo, CommitId,
 };
 
 /// Format version written by this build; newer files are refused rather than half-read.
@@ -112,6 +112,12 @@ impl Sidecar {
         Ok(serde_json::from_value(v)?)
     }
 
+    /// Whether [`Catalog::merge_sidecar`] would accept this file's contents (before checking
+    /// which photo it belongs to).
+    pub fn check(&self) -> Result<()> {
+        self.validate().map(|_| ())
+    }
+
     /// Check internal consistency and parse the states. Everything read from disk goes
     /// through this before touching the catalog.
     fn validate(&self) -> Result<HashMap<&str, EditState>> {
@@ -133,7 +139,11 @@ impl Sidecar {
         }
         let mut names = HashSet::new();
         for b in &self.branches {
-            validate_name(&b.name)?;
+            // Not `validate_name`: older builds could write auto-generated names over the
+            // length limit, and refusing the file would strand that photo's history.
+            if b.name.trim().is_empty() {
+                return bad("empty branch name");
+            }
             if b.tip >= self.commits.len() {
                 return bad("branch points nowhere");
             }
@@ -618,6 +628,39 @@ mod tests {
                 )
             })
             .collect()
+    }
+
+    #[test]
+    fn long_branch_names_round_trip() {
+        let ((mut a, ia), (mut b, ib)) = pair();
+        let root = a.history_open(ia).unwrap().view.head.commit;
+        let long = "x".repeat(64);
+        a.create_branch(ia, root, Some(&long)).unwrap();
+        a.commit(ia, &exp(1.0), None).unwrap();
+        a.undo(ia).unwrap();
+        a.commit(ia, &exp(2.0), None).unwrap(); // forks under an auto-generated name
+        let forked = a.history_open(ia).unwrap().view.head.branch;
+        assert_eq!(forked.chars().count(), 64);
+
+        let sc = Sidecar::from_json(&a.sidecar(ia).unwrap().to_json()).unwrap();
+        b.merge_sidecar(ib, &sc).unwrap();
+        assert_eq!(graph(&a, ia), graph(&b, ib));
+    }
+
+    #[test]
+    fn over_long_branch_names_from_older_builds_are_still_read() {
+        let ((mut a, ia), (mut b, ib)) = pair();
+        a.history_open(ia).unwrap();
+        a.commit(ia, &exp(1.0), None).unwrap();
+        let mut sc = a.sidecar(ia).unwrap();
+        let long = format!("{}-2", "x".repeat(64));
+        sc.branches[0].name = long.clone();
+        sc.head.as_mut().unwrap().branch = long.clone();
+        let sc = Sidecar::from_json(&sc.to_json()).unwrap();
+        b.merge_sidecar(ib, &sc).unwrap();
+        let v = b.history_open(ib).unwrap().view;
+        assert_eq!(v.head.branch, long);
+        assert_eq!(v.commits.len(), 2);
     }
 
     #[test]

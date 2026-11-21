@@ -10,6 +10,7 @@ use crate::store::Store;
 use crate::CmdResult;
 
 type ChangeHook = Box<dyn Fn(&[ImageId]) + Send + Sync>;
+type BeforeEditHook = Box<dyn Fn(&mut Catalog, &[ImageId]) + Send + Sync>;
 
 /// The shared catalog. Cheap to clone (a handle), so commands can hand it to a blocking thread.
 #[derive(Clone)]
@@ -17,6 +18,8 @@ pub struct CatalogState {
     catalog: Arc<Mutex<Catalog>>,
     /// Told which images changed after every `edit` (keeps sidecars in step).
     on_change: Arc<OnceLock<ChangeHook>>,
+    /// Run (under the catalog lock) before every `edit`, on the images it is about to change.
+    before_edit: Arc<OnceLock<BeforeEditHook>>,
 }
 
 impl CatalogState {
@@ -24,6 +27,7 @@ impl CatalogState {
         Self {
             catalog: Arc::new(Mutex::new(catalog)),
             on_change: Arc::new(OnceLock::new()),
+            before_edit: Arc::new(OnceLock::new()),
         }
     }
 
@@ -51,6 +55,10 @@ impl CatalogState {
         let _ = self.on_change.set(hook);
     }
 
+    pub fn before_edit(&self, hook: BeforeEditHook) {
+        let _ = self.before_edit.set(hook);
+    }
+
     /// Read (or change something that sidecars don't record).
     pub(crate) fn with<T>(
         &self,
@@ -60,17 +68,23 @@ impl CatalogState {
         f(&mut cat).map_err(|e| e.to_string())
     }
 
-    /// Change the history, rating or flag of `ids`.
+    /// Change the history, rating or flag of `ids`. Both hooks run under the catalog lock, so
+    /// nothing else can slip in between them and the change.
     pub(crate) fn edit<T>(
         &self,
         ids: &[ImageId],
         f: impl FnOnce(&mut Catalog) -> tonality_core::catalog::Result<T>,
     ) -> CmdResult<T> {
-        let out = self.with(f)?;
-        if let Some(hook) = self.on_change.get() {
-            hook(ids);
-        }
-        Ok(out)
+        self.with(|cat| {
+            if let Some(hook) = self.before_edit.get() {
+                hook(cat, ids);
+            }
+            let out = f(cat)?;
+            if let Some(hook) = self.on_change.get() {
+                hook(ids);
+            }
+            Ok(out)
+        })
     }
 }
 
@@ -229,9 +243,5 @@ pub async fn history_reset(
             _ => {}
         }
     }
-    crate::blocking(move || {
-        app.state::<Sidecars>().flush();
-        Ok(())
-    })
-    .await
+    crate::blocking(move || app.state::<Sidecars>().flush()).await
 }
