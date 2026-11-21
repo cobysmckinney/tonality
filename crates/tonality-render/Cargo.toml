@@ -7,7 +7,7 @@ license.workspace = true
 [dependencies]
 half.workspace = true
 naga = { version = "30", features = ["wgsl-in", "glsl-out"] }
-pollster = "0.4"
+pollster = "1.0"
 rayon.workspace = true
 serde.workspace = true
 tonality-core.workspace = true

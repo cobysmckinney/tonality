@@ -15,7 +15,7 @@ serde.workspace = true
 serde_json.workspace = true
 
 [build-dependencies]
-roxmltree = "0.20"
+roxmltree = "0.21"
 
 [dev-dependencies]
 image = { version = "0.25", default-features = false, features = ["png"] }

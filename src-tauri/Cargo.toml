@@ -23,7 +23,7 @@ tonality-raw.workspace = true
 tonality-render.workspace = true
 tonality-ml.workspace = true
 ts-rs.workspace = true
-base64 = "0.22"
+base64 = "0.23"
 blake3.workspace = true
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "tiff"] }
 rayon.workspace = true
