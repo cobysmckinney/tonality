@@ -1,0 +1,97 @@
+# Push a tag like `v0.1.0` to build installers and publish them as a GitHub release.
+#
+# The tag has to match the version in src-tauri/tauri.conf.json. The release stays a draft
+# until all three builds have uploaded, so a half-built release is never public.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+concurrency:
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+env:
+  GH_TOKEN: ${{ github.token }}
+  TAG: ${{ github.ref_name }}
+
+jobs:
+  draft:
+    name: Draft release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Tag matches the app version
+        run: |
+          version=$(jq -r .version src-tauri/tauri.conf.json)
+          if [ "$TAG" != "v$version" ]; then
+            echo "::error::Tag $TAG does not match tauri.conf.json version $version (expected v$version)"
+            exit 1
+          fi
+
+      - name: Create the draft (or reuse it on a re-run)
+        run: |
+          gh release view "$TAG" >/dev/null 2>&1 ||
+            gh release create "$TAG" --draft --verify-tag --title "tonality $TAG" --generate-notes
+
+  build:
+    name: ${{ matrix.name }}
+    needs: draft
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # 22.04 so the AppImage runs on distros with an older glibc.
+          - name: Linux AppImage
+            os: ubuntu-22.04
+            bundle: appimage
+            artifact: target/release/bundle/appimage/*.AppImage
+          - name: macOS (Apple Silicon)
+            os: macos-latest
+            bundle: dmg
+            artifact: target/release/bundle/dmg/*.dmg
+          - name: Windows installer
+            os: windows-latest
+            bundle: nsis
+            artifact: target/release/bundle/nsis/*.exe
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config libssl-dev \
+            libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - run: npm ci
+
+      - name: Build
+        shell: bash
+        run: npm run tauri build -- --bundles ${{ matrix.bundle }}
+
+      - name: Upload to the release
+        shell: bash
+        run: gh release upload "$TAG" ${{ matrix.artifact }} --clobber
+
+  publish:
+    name: Publish release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - run: gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false
