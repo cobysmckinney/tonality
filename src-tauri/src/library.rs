@@ -273,7 +273,12 @@ impl Importer<'_> {
             if n != std::fs::metadata(src)?.len() {
                 return Err(io::Error::other("short copy"));
             }
-            std::fs::File::open(&part)?.sync_all()?;
+            // FlushFileBuffers on Windows needs write access; a read-only handle fails with
+            // ERROR_ACCESS_DENIED.
+            std::fs::OpenOptions::new()
+                .write(true)
+                .open(&part)?
+                .sync_all()?;
             Ok(n)
         };
         let size = match copy() {

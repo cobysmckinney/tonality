@@ -192,7 +192,7 @@ class LibraryState {
       if (s.added) parts.push(`${s.added} imported`);
       if (s.duplicates) parts.push(`${s.duplicates} already in library`);
       if (s.restored) parts.push(`edits restored for ${s.restored}`);
-      if (s.failed) parts.push(`${s.failed} failed`);
+      if (s.failed) parts.push(`${s.failed} failed${s.error ? ` (${s.error})` : ""}`);
       this.message = parts.length ? parts.join(" · ") : (s.error ?? "Nothing to import");
       if (s.failed && s.error) console.warn("[import]", s.error);
       // Show what just arrived.
