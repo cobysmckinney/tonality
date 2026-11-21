@@ -5,8 +5,10 @@
 //! kept in step by a GPU test) followed by AgX Base on grey, which is exact for luminance. It
 //! reads the scene's luminance percentiles (sensor-clipped pixels left out: no setting brings
 //! them back), and searches the six sliders for the settings whose predicted percentiles land on
-//! targets: the median a little under middle grey, the brightest 0.5% just short of white, the
-//! darkest 0.5% just above black, enough spread between the 10th and 90th percentiles. Small
+//! targets, one region of the range per slider: the median a little under middle grey
+//! (exposure), the brightest 0.5% just short of white (whites), the 90th percentile clear of the
+//! top (highlights, recovering only), the 10th clear of the bottom (shadows, lifting only), the
+//! darkest 0.5% just above black (blacks), and the middle half spread enough (contrast). Small
 //! penalties on each slider keep ordinary photos to gentle settings. The search is a plain
 //! coordinate descent from a fixed start, so the same photo always gets the same values.
 //!
@@ -144,17 +146,29 @@ fn percentiles(sorted: &[f32]) -> [f32; 7] {
 /// median should land (exposure aims at mid-grey; the other sliders keep what exposure chose).
 fn loss(q: &[f32; 7], l: &Light, median: f32) -> f32 {
     let d = q.map(|ev| display_of_ev(tone_ev(ev + l.exposure, l)));
-    let [p005, p10, _, p50, _, p90, p995] = d;
+    let [p005, p10, p25, p50, p75, p90, p995] = d;
     let sq = |v: f32| v * v;
+    // Pulls toward `target`: `over` per unit² above it, `under` below.
+    let pull = |v: f32, target: f32, over: f32, under: f32| {
+        if v > target {
+            over * sq(v - target)
+        } else {
+            under * sq(target - v)
+        }
+    };
     let mut e = 3.0 * sq(p50 - median);
-    // Highlights short of white; clipping costs far more than leaving them dim (a scene without
-    // bright things shouldn't be stretched to have some).
-    e += 12.0 * sq((p995 - 0.95).max(0.0)) + 0.5 * sq((0.75 - p995).max(0.0));
-    // Blacks just above black; crushing costs more than lifting (but a night scene's darkest
-    // corner may be black).
-    e += 100.0 * sq((0.004 - p005).max(0.0)) + 2.0 * sq((p005 - 0.06).max(0.0));
-    // Enough mid-tone spread that a flat scene gets some contrast.
-    e += sq((0.4 - (p90 - p10)).max(0.0));
+    // Each region of the range has a target, placed from the median (so a night scene, held
+    // dark, keeps dark surroundings), and each slider mostly moves one of them:
+    // whites: the brightest 0.5% just short of white; clipping costs far more than dim.
+    e += pull(p995, (median + 0.48).min(0.92), 12.0, 0.6);
+    // Highlights: the upper tones (90th percentile) brought in from the top, if crowding it.
+    e += pull(p90, (median + 0.3).min(0.76), 3.0, 0.5);
+    // Shadows: the lower tones (10th percentile) opened up, if sunk.
+    e += pull(p10, (median - 0.26).max(0.03), 0.5, 3.0);
+    // Blacks: the darkest 0.5% just above black; crushing costs far more than lifting.
+    e += 100.0 * sq((0.004 - p005).max(0.0)) + pull(p005, 0.02, 2.0, 2.0);
+    // Contrast: the middle half of the tones spread enough, but not too far.
+    e += pull(p75 - p25, 0.28, 1.0, 1.5);
     // Gentle settings: each slider costs a little, and exposure beyond two stops more (a night
     // scene stays a night scene).
     let n = |v: f32| v / 100.0;
@@ -207,8 +221,10 @@ pub fn tone(cam: &[Vec3], color: &CameraColor, wb: Vec3) -> Light {
                     let mut t = l.clone();
                     let (v, lo, hi) = match k {
                         0 => (&mut t.contrast, -40.0, 40.0),
-                        1 => (&mut t.highlights, -80.0, 40.0),
-                        2 => (&mut t.shadows, -40.0, 50.0),
+                        // Highlights only recover and shadows only lift: the other way they'd
+                        // stand in for contrast.
+                        1 => (&mut t.highlights, -80.0, 0.0),
+                        2 => (&mut t.shadows, 0.0, 60.0),
                         3 => (&mut t.whites, -60.0, 60.0),
                         _ => (&mut t.blacks, -60.0, 60.0),
                     };
@@ -462,6 +478,42 @@ mod tests {
             (with.exposure - without.exposure).abs() < 0.11,
             "{with:?} {without:?}"
         );
+    }
+
+    #[test]
+    fn a_bright_sky_is_recovered_with_highlights() {
+        // A darker foreground under a bright sky: exposure follows the foreground, highlights
+        // bring the sky in, whites keep its top off white.
+        let cam = scene(normal(-2.0, 1.2, 2500).chain(normal(1.5, 0.7, 1500)));
+        let l = tone(&cam, &camera(), [1.0; 3]);
+        assert!(l.exposure > 0.0, "{l:?}");
+        assert!(l.highlights < -20.0, "{l:?}");
+        assert!(shown(&cam, &l)[6] <= 0.92, "{l:?}");
+    }
+
+    #[test]
+    fn deep_shadows_are_lifted_with_shadows() {
+        // A wide-range scene whose darkest tenth sits far below the rest.
+        let cam = scene(normal(-6.0, 0.8, 2000).chain(normal(3.0, 0.6, 2000)));
+        let l = tone(&cam, &camera(), [1.0; 3]);
+        assert!(l.shadows > 20.0, "{l:?}");
+        let zero = Light {
+            exposure: l.exposure,
+            ..Light::default()
+        };
+        assert!(shown(&cam, &l)[1] > shown(&cam, &zero)[1] + 0.03, "{l:?}");
+    }
+
+    #[test]
+    fn highlights_only_recover_and_shadows_only_lift() {
+        for cam in [
+            scene(normal(-0.5, 0.35, 4000)),
+            scene(normal(1.5, 0.8, 4000)),
+            scene(normal(-3.5, 1.2, 4000)),
+        ] {
+            let l = tone(&cam, &camera(), [1.0; 3]);
+            assert!(l.highlights <= 0.0 && l.shadows >= 0.0, "{l:?}");
+        }
     }
 
     #[test]
