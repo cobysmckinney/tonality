@@ -46,9 +46,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # 22.04 so the AppImage runs on distros with an older glibc.
+          # Not older than 24.04: the prebuilt ONNX Runtime that `ort` links needs glibc 2.38
+          # and GCC 13's libstdc++. The AppImage therefore needs glibc 2.39 or newer to run.
           - name: Linux AppImage
-            os: ubuntu-22.04
+            os: ubuntu-24.04
             bundle: appimage
             artifact: target/release/bundle/appimage/*.AppImage
           - name: macOS (Apple Silicon)
