@@ -1,0 +1,83 @@
+# The checklist from ROADMAP.md, run on every pull request and on every push to main.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# A newer push to the same branch replaces the run in progress.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  rust:
+    name: Rust
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config libssl-dev \
+            libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Format
+        run: cargo fmt --all --check
+
+      # The app crate embeds the built frontend, so it has to exist before anything compiles.
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      # The runner has no GPU. Its software renderers are hidden so the GPU tests skip themselves:
+      # Mesa's OpenGL can't render to the float target they need, and its Vulkan rounds
+      # differently enough from real hardware to fail the AgX comparison near black.
+      - name: Test
+        run: cargo test --workspace
+        env:
+          VK_DRIVER_FILES: /dev/null
+          VK_ICD_FILENAMES: /dev/null
+          __EGL_VENDOR_LIBRARY_FILENAMES: /dev/null
+
+      - name: Bindings are up to date
+        run: git diff --exit-code -- ui/lib/bindings
+
+  ui:
+    name: UI
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+
+      - run: npm ci
+
+      - name: Format
+        run: npm run format:check
+
+      - name: Types
+        run: npm run check
+
+      - name: Test
+        run: npm test

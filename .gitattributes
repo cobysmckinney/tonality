@@ -1,0 +1,8 @@
+# Generated files: collapsed in GitHub diffs and left out of the language statistics.
+Cargo.lock linguist-generated
+package-lock.json linguist-generated
+ui/lib/bindings/** linguist-generated
+src-tauri/gen/** linguist-generated
+
+# Bundled lens database (lensfun), not code written here.
+crates/tonality-raw/lensfun/** linguist-vendored
