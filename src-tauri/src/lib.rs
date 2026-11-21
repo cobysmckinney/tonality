@@ -338,6 +338,9 @@ pub(crate) async fn blocking<T: Send + 'static>(
         .map_err(|e| e.to_string())?
 }
 
+/// The library's lock file ([`Store::lock`]), kept open while the app runs.
+struct LibraryLock(#[allow(dead_code)] std::fs::File);
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -351,6 +354,11 @@ pub fn run() {
             let root = Store::resolve(app.path().picture_dir().ok(), app.path().home_dir().ok());
             let store = Store::open(root.clone())
                 .map_err(|e| format!("cannot open library at {root:?}: {e}"))?;
+            // Before anything reads or writes it; held for the app's lifetime.
+            let lock = store
+                .lock()
+                .map_err(|e| format!("cannot open library at {root:?}: {e}"))?;
+            app.manage(LibraryLock(lock));
             let mut catalog = Catalog::open(store.catalog_path())?;
             thumbs::backfill_aspects(&store, &mut catalog);
             eprintln!("[tonality] library: {}", store.root().display());
