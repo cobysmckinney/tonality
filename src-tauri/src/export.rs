@@ -3,7 +3,7 @@
 //! optionally as Ultra HDR JPEG (the SDR image plus a gain map to AgX's 1000-nit HDR).
 
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -129,14 +129,34 @@ struct Progress {
     name: String,
 }
 
-/// One GPU for the app's lifetime (creating a device costs a few hundred ms).
-static GPU: OnceLock<Result<Mutex<Gpu>, String>> = OnceLock::new();
+/// One GPU, kept between exports (creating a device costs a few hundred ms). Rebuilt when the
+/// last attempt to make it failed, the device was lost, or a render panicked holding the lock.
+static GPU: Mutex<Option<Gpu>> = Mutex::new(None);
 
-fn gpu() -> Result<std::sync::MutexGuard<'static, Gpu>, String> {
-    match GPU.get_or_init(|| Gpu::new().map(Mutex::new)) {
-        Ok(m) => m.lock().map_err(|_| "GPU lock poisoned".into()),
-        Err(e) => Err(e.clone()),
+struct GpuGuard(MutexGuard<'static, Option<Gpu>>);
+
+impl std::ops::Deref for GpuGuard {
+    type Target = Gpu;
+    fn deref(&self) -> &Gpu {
+        self.0.as_ref().expect("gpu() fills the slot")
     }
+}
+
+fn gpu() -> Result<GpuGuard, String> {
+    let mut slot = GPU.lock().unwrap_or_else(|poisoned| {
+        // A panic mid-render leaves the device in an unknown state: start again.
+        GPU.clear_poison();
+        let mut slot = poisoned.into_inner();
+        *slot = None;
+        slot
+    });
+    if slot.as_ref().is_some_and(Gpu::is_lost) {
+        *slot = None;
+    }
+    if slot.is_none() {
+        *slot = Some(Gpu::new()?);
+    }
+    Ok(GpuGuard(slot))
 }
 
 /// A version to export: file name suffix (None for `main`) and its edit.

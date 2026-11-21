@@ -4,7 +4,8 @@
 //! tile's texture carries an apron of neighbouring pixels so Detail (sharpening, noise
 //! reduction) sees the same neighbourhood as it would in one big pass: tiles join seamlessly.
 
-use std::sync::mpsc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{mpsc, Arc};
 
 use rayon::prelude::*;
 
@@ -42,6 +43,9 @@ pub struct Gpu {
     queue: wgpu::Queue,
     pipeline: wgpu::RenderPipeline,
     sampler: wgpu::Sampler,
+    /// Set when the device is lost or reports an error outside `render`'s error scopes: the
+    /// device can't be trusted any more, and the owner should make a new `Gpu`.
+    lost: Arc<AtomicBool>,
     /// Adapter name, for diagnostics.
     pub adapter: String,
 }
@@ -67,6 +71,23 @@ impl Gpu {
         }))
         .map_err(|e| format!("cannot open GPU device: {e}"))?;
 
+        // wgpu's default handlers panic; record the failure instead, so callers get an error and
+        // can rebuild the device (a driver reset, suspend/resume, running out of video memory).
+        let lost = Arc::new(AtomicBool::new(false));
+        let flag = lost.clone();
+        device.set_device_lost_callback(move |reason, message| {
+            if reason != wgpu::DeviceLostReason::Destroyed {
+                eprintln!("GPU device lost ({reason:?}): {message}");
+            }
+            flag.store(true, Ordering::SeqCst);
+        });
+        let flag = lost.clone();
+        device.on_uncaptured_error(Arc::new(move |e: wgpu::Error| {
+            eprintln!("uncaptured GPU error: {e}");
+            flag.store(true, Ordering::SeqCst);
+        }));
+
+        let scopes = ErrorScopes::push(&device);
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("develop"),
             source: wgpu::ShaderSource::Wgsl(DEVELOP_WGSL.into()),
@@ -101,19 +122,51 @@ impl Gpu {
             min_filter: wgpu::FilterMode::Linear,
             ..Default::default()
         });
+        scopes
+            .pop()
+            .map_err(|e| format!("cannot build the develop pipeline: {e}"))?;
         Ok(Self {
             device,
             queue,
             pipeline,
             sampler,
+            lost,
             adapter: name,
         })
     }
 
+    /// Whether the device has been lost (or failed outside an error scope): every further call
+    /// will fail, so make a new `Gpu`.
+    pub fn is_lost(&self) -> bool {
+        self.lost.load(Ordering::SeqCst)
+    }
+
     /// Develop `src` with `params`, the tone-curve LUT (`curve_lut_rgba16f`) and the brush
     /// mask rasters (`tonality_core::mask::brush_layers`). `progress` receives the fraction of
-    /// tiles done.
+    /// tiles done. GPU errors (out of memory, validation, a lost device) come back as `Err`.
     pub fn render(
+        &self,
+        src: &Source,
+        params: &DevelopParams,
+        curve_lut: &[u8],
+        brush: &BrushLayers,
+        presence: Option<&PresenceMaps>,
+        progress: impl FnMut(f32),
+    ) -> Result<Rendered, String> {
+        if self.is_lost() {
+            return Err("GPU device lost".into());
+        }
+        let scopes = ErrorScopes::push(&self.device);
+        let result = self.render_tiles(src, params, curve_lut, brush, presence, progress);
+        // A GPU error explains a failure better than what it led to (a failed readback, say).
+        scopes.pop().map_err(|e| format!("GPU error: {e}"))?;
+        if self.is_lost() {
+            return Err("GPU device lost".into());
+        }
+        result
+    }
+
+    fn render_tiles(
         &self,
         src: &Source,
         params: &DevelopParams,
@@ -478,6 +531,30 @@ impl Gpu {
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         })
+    }
+}
+
+/// Error scopes catching out-of-memory, validation and internal errors on this thread.
+struct ErrorScopes([wgpu::ErrorScopeGuard; 3]);
+
+impl ErrorScopes {
+    fn push(d: &wgpu::Device) -> Self {
+        Self([
+            d.push_error_scope(wgpu::ErrorFilter::OutOfMemory),
+            d.push_error_scope(wgpu::ErrorFilter::Validation),
+            d.push_error_scope(wgpu::ErrorFilter::Internal),
+        ])
+    }
+
+    /// Pops the scopes (innermost first) and returns the first error any of them caught.
+    fn pop(self) -> Result<(), wgpu::Error> {
+        let mut first = None;
+        for scope in self.0.into_iter().rev() {
+            if let Some(e) = pollster::block_on(scope.pop()) {
+                first.get_or_insert(e);
+            }
+        }
+        first.map_or(Ok(()), Err)
     }
 }
 

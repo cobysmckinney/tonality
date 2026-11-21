@@ -243,7 +243,7 @@ fn scaling_luma(rgb: vec3<f32>) -> f32 {
 // ---- Tone ------------------------------------------------------------------------------------
 // Operates on log2 luminance relative to middle grey and rescales RGB by the luminance ratio,
 // which preserves hue and saturation.
-// `t`: contrast, highlights, shadows, whites; `blacks` (-1..1, larger where masks add up).
+// `t`: contrast, highlights, shadows, whites; `blacks`; each -1..1 (clamped after the masks add up).
 fn tone(rgb: vec3<f32>, t: vec4<f32>, blacks: f32) -> vec3<f32> {
     let y = scaling_luma(rgb);
     var ev = log2(y / MIDDLE_GREY);
@@ -747,6 +747,10 @@ fn develop(cam: vec3<f32>, f: vec2<f32>, uv: vec2<f32>, aspect: f32, tc: vec2<f3
         rgb = rgb * exp2(ev) * white_shift(wb.x, wb.y) * tint;
     }
 
+    // `tone()` keeps brighter inputs brighter only for amounts within ±1; a global setting plus
+    // masks pushing the same way can sum past that and invert tones, so clamp like presence.
+    t = clamp(t, vec4<f32>(-1.0), vec4<f32>(1.0));
+    blacks = clamp(blacks, -1.0, 1.0);
     pres = clamp(pres, vec3<f32>(-1.0), vec3<f32>(1.0));
     if (any(pres != vec3<f32>(0.0))) {
         rgb = presence(rgb, tc, px, src, pres);
