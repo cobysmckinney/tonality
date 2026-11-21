@@ -2,7 +2,7 @@
   // Point tone curve: master RGB plus per-channel curves.
   // Click the curve to add a point · drag points · double-click (or drag off the graph) to remove.
   import type { ToneCurve } from "$lib/bindings/ToneCurve";
-  import { curve as evaluator, IDENTITY, isIdentity, type Point } from "./curve";
+  import { curve as evaluator, dragPoint, IDENTITY, isIdentity, type Point } from "./curve";
   import type { Histogram } from "./renderer";
 
   type Channel = keyof ToneCurve;
@@ -48,7 +48,8 @@
   });
 
   // ---- editing ----
-  let drag: { index: number; removed: boolean } | null = null;
+  // `start` is the points at pointer-down; every move is computed from it.
+  let drag: { index: number; start: Point[] } | null = null;
 
   function toUnit(e: PointerEvent): Point {
     const r = svg.getBoundingClientRect();
@@ -89,26 +90,13 @@
       index = pts.findIndex((q) => q[0] === x);
       emit(pts);
     }
-    drag = { index, removed: false };
+    drag = { index, start: pts };
     svg.setPointerCapture(e.pointerId);
   }
 
   function onMove(e: PointerEvent) {
     if (!drag) return;
-    const [x, y] = toUnit(e);
-    const pts = (value[channel].length ? (value[channel] as Point[]) : IDENTITY).map(
-      (q) => [...q] as Point,
-    );
-    const i = drag.index;
-    const last = pts.length - 1;
-    const interior = i > 0 && i < last;
-    // Dragging an interior point well outside the graph removes it (until dragged back).
-    const off = interior && (y < -0.12 || y > 1.12 || x < -0.12 || x > 1.12);
-    if (off !== drag.removed) drag.removed = off;
-    const lo = i > 0 ? pts[i - 1][0] + 0.01 : 0;
-    const hi = i < last ? pts[i + 1][0] - 0.01 : 1;
-    pts[i] = [Math.min(hi, Math.max(lo, x)), Math.min(1, Math.max(0, y))];
-    emit(off ? pts.filter((_, j) => j !== i) : pts);
+    emit(dragPoint(drag.start, drag.index, toUnit(e)));
   }
 
   function onUp(e: PointerEvent) {

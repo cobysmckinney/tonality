@@ -37,15 +37,42 @@ export function fits(rect: Rect, angle: number, tw: number, th: number, eps = 1e
   return true;
 }
 
-/** Scale `rect` about its centre (keeping its shape) until it fits; also pulls it inside the frame. */
+/** Smallest crop side (fraction of the turned frame). */
+export const MIN = 0.03;
+
+/**
+ * Scale `rect` about its centre (keeping its shape) until it fits; also pulls it inside the frame.
+ * If even the smallest crop can't fit there (a corner straightened off the image), the crop
+ * slides towards the frame centre instead, just as far as it must. Sides stay at least `MIN`
+ * (unless a long thin crop can't fit at all: then it keeps its shape).
+ */
 export function shrinkToFit(rect: Rect, angle: number, tw: number, th: number): Rect {
-  const [x, y, w, h] = rect;
-  const cx = Math.min(1, Math.max(0, x + w / 2)),
-    cy = Math.min(1, Math.max(0, y + h / 2));
-  const at = (k: number): Rect => [cx - (w * k) / 2, cy - (h * k) / 2, w * k, h * k];
+  const w = Math.min(1, Math.max(MIN, rect[2])),
+    h = Math.min(1, Math.max(MIN, rect[3]));
+  let cx = Math.min(1, Math.max(0, rect[0] + rect[2] / 2)),
+    cy = Math.min(1, Math.max(0, rect[1] + rect[3] / 2));
+  const at = (k: number, x = cx, y = cy): Rect => [x - (w * k) / 2, y - (h * k) / 2, w * k, h * k];
   if (fits(at(1), angle, tw, th)) return at(1);
-  let lo = 0,
-    hi = 1;
+  const kMin = Math.max(MIN / w, MIN / h);
+  if (!fits(at(kMin), angle, tw, th)) {
+    // The centre is off the image: slide it towards the frame centre, just as far as needed
+    // for the crop to fit at its own size if it can there, else at the smallest size.
+    const along = (t: number): [number, number] => [cx + (0.5 - cx) * t, cy + (0.5 - cy) * t];
+    const k = fits(at(1, ...along(1)), angle, tw, th) ? 1 : kMin;
+    let lo = 0,
+      hi = 1;
+    for (let i = 0; i < 30; i++) {
+      const mid = (lo + hi) / 2;
+      if (fits(at(k, ...along(mid)), angle, tw, th)) hi = mid;
+      else lo = mid;
+    }
+    [cx, cy] = along(hi);
+    if (k === 1 && fits(at(1), angle, tw, th)) return at(1);
+  }
+  // A long thin crop may not fit even at its smallest size: then keep the shape, not `MIN`.
+  const floor = fits(at(kMin), angle, tw, th) ? kMin : 0;
+  let lo = floor,
+    hi = floor ? 1 : kMin;
   for (let i = 0; i < 30; i++) {
     const mid = (lo + hi) / 2;
     if (fits(at(mid), angle, tw, th)) lo = mid;
@@ -54,9 +81,11 @@ export function shrinkToFit(rect: Rect, angle: number, tw: number, th: number): 
   return at(lo);
 }
 
-/** The furthest point from `from` (which fits) towards `to` that still fits. */
+/** The furthest point from `from` (which should fit) towards `to` that still fits. */
 export function towards(from: Rect, to: Rect, angle: number, tw: number, th: number): Rect {
   if (fits(to, angle, tw, th)) return to;
+  // A start that doesn't fit (e.g. a degenerate saved crop) would never move: fix it first.
+  if (!fits(from, angle, tw, th)) from = shrinkToFit(from, angle, tw, th);
   const lerp = (t: number) => from.map((v, i) => v + (to[i] - v) * t) as Rect;
   let lo = 0,
     hi = 1;

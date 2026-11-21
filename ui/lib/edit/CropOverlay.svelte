@@ -3,7 +3,7 @@
   // Drag corners/edges to resize · inside to move · outside to rotate · Ctrl+drag (or Level) to
   // draw a line that should be level.
   import type { Crop } from "$lib/bindings/Crop";
-  import { clampInFrame, fits, levelAngle, shrinkToFit, towards, type Rect } from "./crop";
+  import { MIN, clampInFrame, fits, levelAngle, shrinkToFit, towards, type Rect } from "./crop";
 
   interface Props {
     crop: Crop;
@@ -20,7 +20,6 @@
   }
   let { crop, frame, tw, th, aspect, level, onchange, onlevel }: Props = $props();
 
-  const MIN = 0.03;
   const HANDLE = 12;
 
   const r = $derived(crop.rect as Rect);

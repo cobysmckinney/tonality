@@ -39,12 +39,17 @@ function inputs(imageId: number, state: EditState) {
   ]);
 }
 
+/** Whether the attached renderer has `imageId`'s pixels uploaded (and can render it). */
+function shows(imageId: number): boolean {
+  return !!renderer && rendererImage === imageId && renderer.imageId === imageId;
+}
+
 async function still(imageId: number, state: EditState, edge: number) {
   const [params, curve, brush] = await inputs(imageId, state);
-  if (!renderer || rendererImage !== imageId) return null;
+  if (!renderer || !shows(imageId)) return null;
   if (usesPresenceMaps(state) && !renderer.hasPresence(imageId)) {
     const maps = await api.presenceMaps(imageId);
-    if (!renderer || rendererImage !== imageId) return null;
+    if (!renderer || !shows(imageId)) return null;
     if (!renderer.hasPresence(imageId)) renderer.setPresence(imageId, maps);
   }
   return renderer.renderStill(edge, params, curve, brush);
@@ -53,13 +58,19 @@ async function still(imageId: number, state: EditState, edge: number) {
 /** Called by Canvas once its renderer shows `imageId` (null when it goes away). */
 export function attachRenderer(r: PreviewRenderer | null, imageId: number | null) {
   // Leaving this photo (switching, or Edit closing): save its thumbnail while we still can.
-  if (pending && pending.imageId !== imageId) flushSave();
+  if (pending && pending.imageId !== imageId) leave();
   renderer = r;
   rendererImage = imageId;
   if (r) {
     const again = retry.filter((t) => t.imageId === imageId);
     retry = [];
     for (const t of again) requestBranchThumb(t.imageId, t.commit);
+  }
+  // Back on a photo whose save couldn't run when it was left: try it now.
+  const old = imageId === null ? undefined : parked.get(imageId);
+  if (r && old && !pending) {
+    parked.delete(old.imageId);
+    pending = old;
   }
   if (r && pending?.imageId === imageId) {
     clearTimeout(timer);
@@ -106,6 +117,10 @@ export function requestBranchThumb(imageId: number, commit: number) {
 type Inputs = Awaited<ReturnType<typeof inputs>>;
 type SaveJob = { imageId: number; inputs: Inputs | null; failed: boolean };
 let pending: SaveJob | null = null;
+/** Saves for photos left before they could render (inputs not back yet, or no GPU context);
+ *  picked up again when the photo is shown. */
+const parked = new Map<number, SaveJob>();
+const MAX_PARKED = 16;
 let timer: ReturnType<typeof setTimeout> | undefined;
 
 /**
@@ -114,7 +129,8 @@ let timer: ReturnType<typeof setTimeout> | undefined;
  */
 export function scheduleLibraryThumb(imageId: number, state: EditState) {
   // The previous photo's renderer still shows it (the new one isn't uploaded yet): save it now.
-  if (pending && pending.imageId !== imageId) flushSave();
+  if (pending && pending.imageId !== imageId) leave();
+  parked.delete(imageId); // superseded
   const job: SaveJob = { imageId, inputs: null, failed: false };
   pending = job;
   inputs(imageId, state).then(
@@ -144,7 +160,19 @@ export async function dropLibraryThumbs(ids: number[]): Promise<void> {
     timer = undefined;
     pending = null;
   }
+  for (const id of ids) parked.delete(id);
   await serial(async () => {}).catch(() => {});
+}
+
+/** The pending job's photo is going off screen: render it now, or park it for later. */
+function leave() {
+  flushSave();
+  const job = pending;
+  if (!job) return;
+  pending = null;
+  parked.delete(job.imageId);
+  parked.set(job.imageId, job);
+  while (parked.size > MAX_PARKED) parked.delete(parked.keys().next().value!);
 }
 
 /** Render the pending job now, synchronously, if its photo is on screen and inputs are in. */
@@ -155,10 +183,10 @@ function flushSave() {
   if (!job) return;
   if (job.failed) return void (pending = null);
   // Not ready, or not on screen: kept pending (retried when the inputs land or on attach).
-  if (!job.inputs || !renderer || rendererImage !== job.imageId) return;
-  pending = null;
+  if (!job.inputs || !renderer || !shows(job.imageId)) return;
   const c = renderer.renderStill(LIBRARY_EDGE, ...job.inputs);
-  if (!c) return;
+  if (!c) return; // no pixels or GPU context: kept pending
+  pending = null;
   serial(async () => {
     const blob = await new Promise<Blob | null>((res) => c.toBlob(res, "image/jpeg", 0.88));
     if (!blob) return;
