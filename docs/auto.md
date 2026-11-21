@@ -19,13 +19,23 @@ percentiles, leaving out sensor-clipped pixels, which no setting brings back. Th
 stages:
 
 1. **Exposure** (−5…+5, 0.05 steps): the median on screen near 0.42 (just under AgX's middle
-   grey, 0.46), without clipping the brightest 0.5%. Beyond ±2 stops exposure costs extra, so a
-   night scene is brightened but stays a night scene.
+   grey, 0.46), with the targets below as they stand at zero. Beyond ±2 stops exposure costs
+   extra, so a night scene is brightened but stays a night scene.
 2. **The other five sliders**, by coordinate descent (steps 20 → 1), hold the median where
-   exposure put it and shape the range: the brightest 0.5% under 0.95 (clipping costs a lot;
-   being dimmer than 0.75 a little), the darkest 0.5% off black (above 0.004) but not lifted past
-   0.06, and at least 0.4 between the 10th and 90th percentiles. Each slider costs a little, and
-   Auto keeps contrast within ±40, highlights −80…40, shadows −40…50, whites and blacks ±60.
+   exposure put it (call it _m_) and shape the range. Each has a target in the region it moves,
+   placed from _m_, so a night scene held dark keeps dark surroundings:
+   - **Whites:** the brightest 0.5% near _m_ + 0.48 (at most 0.92). Clipping costs a lot,
+     being dimmer a little.
+   - **Highlights:** the 90th percentile near _m_ + 0.3 (at most 0.76), pulled in when it crowds
+     the top.
+   - **Shadows:** the 10th percentile near _m_ − 0.26 (at least 0.03), lifted when it has sunk.
+   - **Blacks:** the darkest 0.5% near 0.02, and never under 0.004 (crushing costs a lot).
+   - **Contrast:** 0.28 between the 25th and 75th percentiles.
+
+   Each slider costs a little, so a photo that's already close gets gentle values. Auto keeps
+   contrast within ±40, whites and blacks within ±60, highlights within −80…0 and shadows within
+   0…60. Highlights only recover and shadows only lift: the other way they would only add
+   contrast, which is the contrast slider's job.
 
 Same photo, same crop and white balance: same result.
 
