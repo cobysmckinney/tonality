@@ -27,7 +27,7 @@ pub struct AlbumInfo {
     pub cover_head: Option<i64>,
 }
 
-fn clean_name(name: &str) -> Result<String> {
+pub(crate) fn clean_name(name: &str) -> Result<String> {
     let name = name.trim();
     if name.is_empty() {
         return Err(CatalogError::Invalid("album name cannot be empty".into()));

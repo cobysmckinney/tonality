@@ -93,6 +93,18 @@ struct CommitRow {
     updated_at: i64,
 }
 
+/// Delete a commit and remember it (by image and creation time, which a sidecar keeps), so
+/// merging a sidecar written before the delete doesn't bring it back.
+fn drop_commit(c: &Connection, id: CommitId) -> Result<()> {
+    c.execute(
+        "INSERT OR IGNORE INTO dropped_commits (image_id, created_at)
+         SELECT image_id, created_at FROM commits WHERE id = ?1",
+        [id],
+    )?;
+    c.execute("DELETE FROM commits WHERE id = ?1", [id])?;
+    Ok(())
+}
+
 fn commit_row(c: &Connection, id: CommitId) -> Result<CommitRow> {
     c.query_row(
         "SELECT id, parent, state_hash, key, updated_at FROM commits WHERE id = ?1",
@@ -425,7 +437,7 @@ impl Catalog {
                 // The gesture ended where it started: drop the commit entirely.
                 set_branch(&tx, image, &h.branch, parent)?;
                 set_head(&tx, image, &h.branch, parent)?;
-                tx.execute("DELETE FROM commits WHERE id = ?1", [cur.id])?;
+                drop_commit(&tx, cur.id)?;
             } else {
                 let prev = load_state(&tx, &parent_row.state_hash)?;
                 store_state(&tx, state)?;
@@ -570,6 +582,13 @@ impl Catalog {
             ));
         };
         let tx = self.conn.transaction()?;
+        // Remembered so a sidecar written before the delete doesn't bring the branch back.
+        tx.execute(
+            "INSERT OR IGNORE INTO deleted_branches (image_id, name, tip_created_at)
+             SELECT r.image_id, r.name, c.created_at FROM refs r JOIN commits c ON c.id = r.commit_id
+             WHERE r.image_id = ?1 AND r.name = ?2",
+            params![image, name],
+        )?;
         tx.execute(
             "DELETE FROM refs WHERE image_id = ?1 AND name = ?2",
             params![image, name],
@@ -587,7 +606,7 @@ impl Catalog {
         let mut gone: Vec<CommitId> = par.keys().filter(|c| !keep.contains(c)).copied().collect();
         gone.sort_unstable_by(|a, b| b.cmp(a));
         for c in &gone {
-            tx.execute("DELETE FROM commits WHERE id = ?1", [c])?;
+            drop_commit(&tx, *c)?;
         }
         if !gone.is_empty() {
             tx.execute(
@@ -610,6 +629,9 @@ impl Catalog {
             tx.execute("DELETE FROM refs WHERE image_id = ?1", [image])?;
             // One statement: the parent links are only checked once it has finished.
             tx.execute("DELETE FROM commits WHERE image_id = ?1", [image])?;
+            // Nothing left for a stale sidecar to resurrect piecemeal.
+            tx.execute("DELETE FROM dropped_commits WHERE image_id = ?1", [image])?;
+            tx.execute("DELETE FROM deleted_branches WHERE image_id = ?1", [image])?;
             tx.execute("UPDATE images SET aspect = NULL WHERE id = ?1", [image])?;
         }
         tx.execute(
