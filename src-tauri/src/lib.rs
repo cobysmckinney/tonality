@@ -54,8 +54,15 @@ fn wb_presets() -> Vec<WbPresetInfo> {
         .collect()
 }
 
-/// The open photo's preview sampled inside `edit`'s crop, in camera RGB (for Auto).
+/// The open photo's preview sampled inside `edit`'s crop, in camera RGB and lens-corrected as
+/// the editor shows it (for Auto).
 fn auto_samples(p: &tonality_raw::Preview, edit: &EditState) -> Vec<[f32; 3]> {
+    let lens = tonality_core::lens::lens_table(
+        p.lens.as_ref(),
+        &edit.lens,
+        p.full_width as f32,
+        p.full_height as f32,
+    );
     let px = |x: u32, y: u32| {
         let i = ((y * p.width + x) * 3) as usize;
         [0, 1, 2].map(|k| half::f16::from_bits(p.pixels[i + k]).to_f32())
@@ -65,6 +72,7 @@ fn auto_samples(p: &tonality_raw::Preview, edit: &EditState) -> Vec<[f32; 3]> {
         p.height,
         px,
         &edit.crop,
+        &lens,
         p.full_width,
         p.full_height,
         192,
