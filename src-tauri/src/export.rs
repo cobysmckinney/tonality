@@ -427,9 +427,12 @@ fn run(
                 } else {
                     None
                 };
-                let target = unique_path(&folder, &sanitize(&label), settings.format.extension());
-                write(&rendered, gain.as_ref(), &target, &settings, &meta)?;
-                Ok(target)
+                let target = folder.join(format!(
+                    "{}.{}",
+                    sanitize(&label),
+                    settings.format.extension()
+                ));
+                write(&rendered, gain.as_ref(), &target, &settings, &meta)
             })();
             match result {
                 Ok(p) => summary.written.push(p.display().to_string()),
@@ -450,14 +453,15 @@ fn eight(pixels: &[u16]) -> Vec<u8> {
 }
 
 /// `r` written to `target` as `s` says, with `meta`'s EXIF (and XMP rating); `gain`: the Ultra
-/// HDR gain map render, for HDR JPEGs.
+/// HDR gain map render, for HDR JPEGs. If `target` is taken, `name (2).ext` etc.: exports never
+/// overwrite. Returns the path written.
 fn write(
     r: &Rendered,
     gain: Option<&Rendered>,
     target: &Path,
     s: &ExportSettings,
     meta: &Meta,
-) -> Result<(), String> {
+) -> Result<PathBuf, String> {
     use image::codecs::{jpeg::JpegEncoder, png::PngEncoder};
     use image::{ExtendedColorType, ImageEncoder};
     use std::io::Write;
@@ -512,19 +516,27 @@ fn write(
             tiff(&mut buf, r, &icc, &ifds, xmp.as_deref()).map(|_| buf.into_inner())
         }
     };
-    let part = target.with_extension(format!("{}.part", s.format.extension()));
+    let part = crate::store::temp_path(target);
     let res = bytes.and_then(|b| {
-        std::fs::File::create(&part)
+        std::fs::File::create_new(&part)
             .and_then(|mut f| f.write_all(&b))
             .map_err(|e| e.to_string())
     });
-    match res {
-        Ok(()) => std::fs::rename(&part, target).map_err(|e| e.to_string()),
-        Err(e) => {
-            let _ = std::fs::remove_file(&part);
-            Err(e)
+    let res = res.and_then(|()| {
+        for n in 1..10_000 {
+            let p = numbered(target, n);
+            match crate::store::rename_noreplace(&part, &p) {
+                Ok(()) => return Ok(p),
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(e) => return Err(e.to_string()),
+            }
         }
+        Err("no free file name".into())
+    });
+    if res.is_err() {
+        let _ = std::fs::remove_file(&part);
     }
+    res
 }
 
 /// A 16-bit RGB TIFF with the ICC profile, the EXIF tags (IFD0 in the image's directory, the
@@ -666,15 +678,17 @@ fn sanitize(s: &str) -> String {
     cleaned.trim().trim_matches('.').to_string()
 }
 
-/// `folder/name.ext`, or `name (2).ext` etc. if taken — exports never overwrite.
-fn unique_path(folder: &Path, name: &str, ext: &str) -> PathBuf {
-    let mut p = folder.join(format!("{name}.{ext}"));
-    let mut n = 2;
-    while p.exists() {
-        p = folder.join(format!("{name} ({n}).{ext}"));
-        n += 1;
+/// `target` itself for `n` = 1, else `name (n).ext` beside it.
+fn numbered(target: &Path, n: u32) -> PathBuf {
+    if n == 1 {
+        return target.to_path_buf();
     }
-    p
+    let stem = target.file_stem().unwrap_or_default().to_string_lossy();
+    let name = match target.extension() {
+        Some(ext) => format!("{stem} ({n}).{}", ext.to_string_lossy()),
+        None => format!("{stem} ({n})"),
+    };
+    target.with_file_name(name)
 }
 
 #[cfg(test)]
@@ -1110,10 +1124,21 @@ mod tests {
         assert_eq!(sanitize("DSC0001 — B&W/v2"), "DSC0001 — B&W-v2");
         let dir = std::env::temp_dir().join(format!("tonality-export-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        let a = unique_path(&dir, "x", "jpg");
-        std::fs::write(&a, b"").unwrap();
-        let b = unique_path(&dir, "x", "jpg");
-        assert_eq!(b.file_name().unwrap(), "x (2).jpg");
+        let target = dir.join("x.jpg");
+        assert_eq!(numbered(&target, 1), target);
+        assert_eq!(numbered(&target, 3), dir.join("x (3).jpg"));
+        let r = Rendered {
+            pixels: vec![0; 2 * 2 * 3],
+            width: 2,
+            height: 2,
+        };
+        let s = settings(&dir, ExportFormat::Png, ExportColorSpace::Srgb, false);
+        std::fs::write(&target, b"earlier export").unwrap();
+        let b = write(&r, None, &target, &s, &meta(0)).unwrap();
+        assert_eq!(b, dir.join("x (2).jpg"));
+        assert_eq!(std::fs::read(&target).unwrap(), b"earlier export");
+        let c = write(&r, None, &target, &s, &meta(0)).unwrap();
+        assert_eq!(c, dir.join("x (3).jpg"));
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }
