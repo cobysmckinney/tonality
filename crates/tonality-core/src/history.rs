@@ -266,7 +266,14 @@ pub(crate) fn auto_branch_name(existing: &[BranchInfo], from: &str) -> String {
     };
     let taken: HashSet<&str> = existing.iter().map(|b| b.name.as_str()).collect();
     (2..)
-        .map(|n| format!("{base}-{n}"))
+        .map(|n| {
+            // Shorten `base` so the whole name stays within the limit (a sidecar holding a
+            // longer one couldn't be read back by older builds).
+            let suffix = format!("-{n}");
+            let keep = MAX_BRANCH_NAME.saturating_sub(suffix.chars().count());
+            let base: String = base.chars().take(keep).collect();
+            format!("{}{suffix}", base.trim_end())
+        })
         .find(|n| !taken.contains(n.as_str()))
         .expect("unbounded")
 }
@@ -866,6 +873,21 @@ mod tests {
         );
         assert_eq!(auto_branch_name(&b(&["B&W"]), "B&W"), "B&W-2");
         assert_eq!(auto_branch_name(&b(&["-5"]), "-5"), "-5-2");
+
+        // Never longer than the limit, counted in characters (not bytes).
+        let long = "é".repeat(MAX_BRANCH_NAME);
+        let n = auto_branch_name(&b(&[&long]), &long);
+        assert_eq!(n, format!("{}-2", "é".repeat(MAX_BRANCH_NAME - 2)));
+        assert!(validate_name(&n).is_ok());
+        let n3 = auto_branch_name(&b(&[&long, &n]), &n);
+        assert_eq!(n3, format!("{}-3", "é".repeat(MAX_BRANCH_NAME - 2)));
+        let taken: Vec<String> = (2..=9)
+            .map(|i| format!("{}-{i}", "é".repeat(MAX_BRANCH_NAME - 2)))
+            .collect();
+        let refs: Vec<&str> = taken.iter().map(String::as_str).collect();
+        let n10 = auto_branch_name(&b(&refs), &long);
+        assert_eq!(n10, format!("{}-10", "é".repeat(MAX_BRANCH_NAME - 3)));
+        assert_eq!(n10.chars().count(), MAX_BRANCH_NAME);
     }
 
     // -----------------------------------------------------------------------------------------

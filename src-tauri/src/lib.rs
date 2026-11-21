@@ -404,7 +404,9 @@ pub fn run() {
         .expect("error while building tonality")
         .run(|app, event| {
             if let tauri::RunEvent::Exit = event {
-                app.state::<sidecar::Sidecars>().flush();
+                if let Err(e) = app.state::<sidecar::Sidecars>().flush() {
+                    eprintln!("[sidecar] {e}");
+                }
             }
         });
 }
