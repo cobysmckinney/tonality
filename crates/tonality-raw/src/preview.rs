@@ -48,7 +48,7 @@ impl Preview {
 /// a full-resolution demosaic is used for export.
 pub fn decode_preview(path: &Path, max_edge: usize) -> Result<Preview> {
     let mut d = Decoded::open(path)?;
-    let (_, _, cw, ch) = crop_rect(&d.raw);
+    let (_, _, cw, ch) = crop_rect(&d.raw)?;
     let (full_width, full_height) = if transposes(d.orientation) {
         (ch as u32, cw as u32)
     } else {
@@ -59,7 +59,7 @@ pub fn decode_preview(path: &Path, max_edge: usize) -> Result<Preview> {
         RawPhotometricInterpretation::Cfa(cfg) if d.raw.cpp == 1 && cfg.cfa.is_rgb() => {
             superpixel(&d.raw, &cfg.cfa)?
         }
-        RawPhotometricInterpretation::LinearRaw if d.raw.cpp == 3 => linear_rgb(&d.raw),
+        RawPhotometricInterpretation::LinearRaw if d.raw.cpp == 3 => linear_rgb(&d.raw)?,
         other => {
             return Err(RawError::Unsupported(format!(
                 "{other:?} with {} cpp",
@@ -297,7 +297,7 @@ pub fn decode_full(path: &Path) -> Result<FullImage> {
     use rawler::pixarray::PixF32;
 
     let mut d = Decoded::open(path)?;
-    let (cx, cy, cw, ch) = crop_rect(&d.raw);
+    let (cx, cy, cw, ch) = crop_rect(&d.raw)?;
     let (w, h, rgb): (usize, usize, Vec<f32>) = match &d.raw.photometric {
         RawPhotometricInterpretation::Cfa(cfg) if d.raw.cpp == 1 && cfg.cfa.is_rgb() => {
             let cfg = cfg.clone();
@@ -321,7 +321,7 @@ pub fn decode_full(path: &Path) -> Result<FullImage> {
             (out.width, out.height, out.data.into_flattened())
         }
         RawPhotometricInterpretation::LinearRaw if d.raw.cpp == 3 => {
-            let img = linear_rgb(&d.raw);
+            let img = linear_rgb(&d.raw)?;
             (img.width() as usize, img.height() as usize, img.into_raw())
         }
         other => {
@@ -366,6 +366,7 @@ impl Decoded {
         let params = RawDecodeParams::default();
         let mut raw = decoder.raw_image(&src, &params, false).map_err(err)?;
         scale(&mut raw);
+        apply_gain_maps(&mut raw, &crate::gainmap::read(path));
         // Not every decoder fills `RawImage::orientation` (e.g. Sony ARW), so prefer EXIF.
         let orientation = exif_orientation(decoder.as_ref(), &src).unwrap_or(raw.orientation);
         let color = camera_color(&raw);
@@ -379,6 +380,24 @@ impl Decoded {
             color,
             metadata,
         })
+    }
+}
+
+/// Apply DNG `GainMap` opcodes (OpcodeList2) to the scaled sensor data. They work on the active
+/// area; rawler keeps the whole sensor, so they are offset by the active area's origin.
+fn apply_gain_maps(raw: &mut RawImage, maps: &[crate::gainmap::GainMap]) {
+    if maps.is_empty() {
+        return;
+    }
+    let active = match raw.active_area {
+        Some(r) => clamp_rect((r.p.x, r.p.y, r.d.w, r.d.h), raw.width, raw.height),
+        None => (0, 0, raw.width, raw.height),
+    };
+    let (width, cpp) = (raw.width, raw.cpp);
+    if let RawImageData::Float(px) = &mut raw.data {
+        for m in maps {
+            m.apply(px, width, cpp, active);
+        }
     }
 }
 
@@ -464,17 +483,29 @@ fn float_data(raw: &RawImage) -> &[f32] {
     }
 }
 
-/// (x, y, w, h) of the recommended crop within the full sensor image.
-fn crop_rect(raw: &RawImage) -> (usize, usize, usize, usize) {
+/// Smallest crop (each side) that is demosaiced: a damaged file can claim a 1-pixel crop, which
+/// gives no CFA superpixels and is below what PPG and Markesteijn handle.
+const MIN_CROP: usize = 16;
+
+/// (x, y, w, h) of the recommended crop within the full sensor image, or an error if the sensor
+/// itself is too small to develop.
+fn crop_rect(raw: &RawImage) -> Result<(usize, usize, usize, usize)> {
     let (x, y, w, h) = match raw.crop_area.or(raw.active_area) {
         Some(r) => (r.p.x, r.p.y, r.d.w, r.d.h),
         None => (0, 0, raw.width, raw.height),
     };
-    clamp_rect((x, y, w, h), raw.width, raw.height)
+    let r = clamp_rect((x, y, w, h), raw.width, raw.height);
+    if r.2 < MIN_CROP || r.3 < MIN_CROP {
+        return Err(RawError::Decode(format!(
+            "image too small: {}×{}",
+            raw.width, raw.height
+        )));
+    }
+    Ok(r)
 }
 
 /// `(x, y, w, h)` limited to a `width × height` image (a damaged file can claim anything), and
-/// the whole image if nothing would be left.
+/// the whole image if less than [`MIN_CROP`] would be left on either side.
 fn clamp_rect(
     (x, y, w, h): (usize, usize, usize, usize),
     width: usize,
@@ -482,7 +513,7 @@ fn clamp_rect(
 ) -> (usize, usize, usize, usize) {
     let (x, y) = (x.min(width), y.min(height));
     let (w, h) = (w.min(width - x), h.min(height - y));
-    if w == 0 || h == 0 {
+    if w < MIN_CROP || h < MIN_CROP {
         (0, 0, width, height)
     } else {
         (x, y, w, h)
@@ -497,7 +528,7 @@ fn superpixel(raw: &RawImage, cfa: &rawler::CFA) -> Result<RgbF32> {
     };
     let data = float_data(raw);
     let stride = raw.width;
-    let (cx, cy, cw, ch) = crop_rect(raw);
+    let (cx, cy, cw, ch) = crop_rect(raw)?;
     let (ow, oh) = (cw / block, ch / block);
     let mut out = vec![0f32; ow * oh * 3];
 
@@ -527,15 +558,15 @@ fn superpixel(raw: &RawImage, cfa: &rawler::CFA) -> Result<RgbF32> {
     Ok(RgbF32::from_raw(ow as u32, oh as u32, out).expect("buffer size matches"))
 }
 
-fn linear_rgb(raw: &RawImage) -> RgbF32 {
+fn linear_rgb(raw: &RawImage) -> Result<RgbF32> {
     let data = float_data(raw);
-    let (cx, cy, cw, ch) = crop_rect(raw);
+    let (cx, cy, cw, ch) = crop_rect(raw)?;
     let mut out = Vec::with_capacity(cw * ch * 3);
     for y in cy..cy + ch {
         let start = (y * raw.width + cx) * 3;
         out.extend_from_slice(&data[start..start + cw * 3]);
     }
-    RgbF32::from_raw(cw as u32, ch as u32, out).expect("buffer size matches")
+    Ok(RgbF32::from_raw(cw as u32, ch as u32, out).expect("buffer size matches"))
 }
 
 pub(crate) fn orient<P: image::Pixel + 'static>(
@@ -619,10 +650,73 @@ mod tests {
         assert_eq!(clamp_rect((10, 20, 100, 50), 200, 100), (10, 20, 100, 50));
         assert_eq!(clamp_rect((150, 80, 100, 50), 200, 100), (150, 80, 50, 20));
         assert_eq!(clamp_rect((500, 0, 10, 10), 200, 100), (0, 0, 200, 100));
+        // Slivers (here 1 pixel wide at the right edge) fall back to the whole sensor.
+        assert_eq!(clamp_rect((199, 0, 10, 100), 200, 100), (0, 0, 200, 100));
+        assert_eq!(clamp_rect((0, 90, 200, 50), 200, 100), (0, 0, 200, 100));
         assert_eq!(
             clamp_rect((0, 0, usize::MAX, usize::MAX), 200, 100),
             (0, 0, 200, 100)
         );
+    }
+
+    /// A flat RGGB sensor `w × h` with the given crop.
+    fn bayer(w: usize, h: usize, crop: (usize, usize, usize, usize)) -> RawImage {
+        use rawler::decoders::Camera;
+        use rawler::imgop::sensor::SensorType;
+        use rawler::imgop::{Dim2, Point, Rect};
+        use rawler::pixarray::PixU16;
+        use rawler::rawimage::CFAConfig;
+        use rawler::CFA;
+
+        let cfa = CFA::new("RGGB");
+        let cam = Camera {
+            cfa: cfa.clone(),
+            ..Default::default()
+        };
+        let mut raw = RawImage::new(
+            cam,
+            PixU16::new_with(vec![0; w * h], w, h),
+            1,
+            [1.0; 4],
+            RawPhotometricInterpretation::Cfa(CFAConfig {
+                colors: rawler::cfa::PlaneColor::new("RGB"),
+                cfa,
+                sensor: SensorType::Bayer,
+            }),
+            None,
+            Some(rawler::rawimage::WhiteLevel::new(vec![1])),
+            false,
+        );
+        raw.data = RawImageData::Float(vec![0.5; w * h]);
+        raw.crop_area = Some(Rect::new(
+            Point::new(crop.0, crop.1),
+            Dim2::new(crop.2, crop.3),
+        ));
+        raw
+    }
+
+    #[test]
+    fn a_one_pixel_crop_develops_the_whole_sensor() {
+        let raw = bayer(32, 24, (31, 0, 1, 24));
+        let RawPhotometricInterpretation::Cfa(cfg) = &raw.photometric else {
+            unreachable!()
+        };
+        let img = superpixel(&raw, &cfg.cfa).unwrap();
+        assert_eq!(img.dimensions(), (16, 12));
+        assert!(img.as_raw().iter().all(|&v| v == 0.5));
+    }
+
+    #[test]
+    fn a_tiny_sensor_is_an_error_not_a_panic() {
+        let raw = bayer(1, 8, (0, 0, 1, 8));
+        let RawPhotometricInterpretation::Cfa(cfg) = &raw.photometric else {
+            unreachable!()
+        };
+        assert!(matches!(
+            superpixel(&raw, &cfg.cfa),
+            Err(RawError::Decode(_))
+        ));
+        assert!(crop_rect(&raw).is_err());
     }
 
     fn image(w: u32, h: u32) -> FullImage {

@@ -67,3 +67,22 @@ export function curve(points: Point[]): (x: number) => number {
     return Math.min(1, Math.max(0, y));
   };
 }
+
+/**
+ * The curve while point `i` of `start` (the points at pointer-down) is dragged to `p`.
+ * The point stays between its neighbours; an interior point dragged well outside the graph is
+ * left out (until dragged back). Always computed from `start`, so removing a point never shifts
+ * which point is being dragged.
+ */
+export function dragPoint(start: Point[], i: number, [x, y]: Point): Point[] {
+  const pts = start.map((q) => [...q] as Point);
+  const last = pts.length - 1;
+  if (i < 0 || i > last) return pts;
+  const interior = i > 0 && i < last;
+  const off = interior && (y < -0.12 || y > 1.12 || x < -0.12 || x > 1.12);
+  if (off) return pts.filter((_, j) => j !== i);
+  const lo = i > 0 ? pts[i - 1][0] + 0.01 : 0;
+  const hi = i < last ? pts[i + 1][0] - 0.01 : 1;
+  pts[i] = [Math.min(hi, Math.max(lo, x)), Math.min(1, Math.max(0, y))];
+  return pts;
+}

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { Crop } from "$lib/bindings/Crop";
 import {
   FULL,
+  MIN,
   fits,
   flip,
   levelAngle,
@@ -35,6 +36,57 @@ describe("crop", () => {
     const k = 1.01;
     const bigger: Rect = [0.5 - (r[2] * k) / 2, 0.5 - (r[3] * k) / 2, r[2] * k, r[3] * k];
     expect(fits(bigger, 10, 6000, 4000)).toBe(false);
+  });
+
+  it("a small corner crop straightened off the image moves inwards instead of vanishing", () => {
+    // Issue #21: these used to collapse to zero size about their own centre.
+    for (const [rect, angle] of [
+      [[0, 0, 0.1, 0.1], -10],
+      [[0, 0, 0.25, 0.25], -20],
+      [[0.9, 0.9, 0.1, 0.1], 15],
+      [[0, 0.95, 0.05, 0.05], 45],
+    ] as [Rect, number][]) {
+      const r = shrinkToFit(rect, angle, 6000, 4000);
+      expect(fits(r, angle, 6000, 4000)).toBe(true);
+      expect(r[2]).toBeGreaterThanOrEqual(MIN - 1e-9);
+      expect(r[3]).toBeGreaterThanOrEqual(MIN - 1e-9);
+      expect(r[2] / r[3]).toBeCloseTo(rect[2] / rect[3]);
+      expect(r[2]).toBeCloseTo(rect[2]); // small enough to keep its size: it just slides in
+      // ...and can still be moved and resized from there.
+      const sx = Math.sign(0.5 - r[0] - r[2] / 2),
+        sy = Math.sign(0.5 - r[1] - r[3] / 2);
+      const moved = towards(r, [r[0] + 0.05 * sx, r[1] + 0.05 * sy, r[2], r[3]], angle, 6000, 4000);
+      expect(moved).not.toEqual(r);
+      // Grow towards the frame centre (the far side may be against the image edge).
+      const grown = towards(
+        r,
+        [sx > 0 ? r[0] : r[0] - 0.02, sy > 0 ? r[1] : r[1] - 0.02, r[2] + 0.02, r[3] + 0.02],
+        angle,
+        6000,
+        4000,
+      );
+      expect(grown[2]).toBeGreaterThan(r[2]);
+    }
+  });
+
+  it("never returns a crop smaller than MIN, even from a degenerate one", () => {
+    const r = shrinkToFit([0.05, 0.05, 0, 0], -10, 6000, 4000);
+    expect(fits(r, -10, 6000, 4000)).toBe(true);
+    expect(Math.min(r[2], r[3])).toBeGreaterThanOrEqual(MIN - 1e-9);
+    // A crop that already fits about its centre keeps that centre.
+    const c = shrinkToFit([0.4, 0.4, 0.2, 0.2], 5, 6000, 4000);
+    expect(c).toEqual([0.4, 0.4, 0.2, 0.2]);
+  });
+
+  it("a long thin crop off the image still ends up fitting", () => {
+    const r = shrinkToFit([0, 0, 0.02, 1], 40, 6000, 4000);
+    expect(fits(r, 40, 6000, 4000)).toBe(true);
+    expect(r[2] / r[3]).toBeCloseTo(0.03); // widened to MIN, then kept that shape
+  });
+
+  it("moves a crop that starts out of bounds", () => {
+    const r = towards([0.05, 0.05, 0, 0], [0.4, 0.4, 0.1, 0.1], -10, 6000, 4000);
+    expect(fits(r, -10, 6000, 4000)).toBe(true);
   });
 
   it("moves only as far as fits", () => {

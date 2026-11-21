@@ -2,6 +2,7 @@
   // "Copy settings from <branch>": pick which panels to take, applied as one commit.
   import type { Panel } from "$lib/bindings/Panel";
   import { session } from "$lib/edit/session.svelte";
+  import { enterConfirms } from "$lib/keys";
 
   const panels: { id: Panel; label: string }[] = [
     { id: "whiteBalance", label: "White Balance" },
@@ -39,7 +40,7 @@
     if (!session.applying) return;
     e.stopPropagation(); // modal
     if (e.key === "Escape") session.applying = null;
-    else if (e.key === "Enter") {
+    else if (enterConfirms(e)) {
       e.preventDefault();
       apply();
     }

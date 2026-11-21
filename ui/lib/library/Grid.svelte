@@ -274,6 +274,7 @@
         title={img.name}
         role="button"
         tabindex="-1"
+        data-shortcuts
         onpointerdown={(e) => onDown(e, img.id)}
         onclick={(e) => onClick(e, img.id)}
         ondblclick={() => onopen(img.id)}

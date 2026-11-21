@@ -283,50 +283,93 @@ fn tokens(s: &str) -> Vec<String> {
         .collect()
 }
 
-/// How well a database lens name matches the camera's lens string: every number in the
-/// database name must appear, and most of its words. `None` if it doesn't match.
+/// The version markers in a tokenised lens name ("II", "Mark III", "Mk2"), as numbers.
+fn versions<S: AsRef<str>>(t: &[S]) -> Vec<u8> {
+    let roman = |s: &str| match s {
+        "ii" => Some(2),
+        "iii" => Some(3),
+        "iv" => Some(4),
+        _ => None,
+    };
+    let mut out = Vec::new();
+    for (i, w) in t.iter().map(AsRef::as_ref).enumerate() {
+        if let Some(v) = roman(w) {
+            out.push(v);
+        } else if matches!(w, "mark" | "mk") {
+            // "Mark 2" / "Mk2": the number belongs to the marker ("Mark II" is caught above).
+            if let Some(v) = t.get(i + 1).and_then(|n| n.as_ref().parse::<u8>().ok()) {
+                out.push(v);
+            }
+        }
+    }
+    out.sort_unstable();
+    out
+}
+
+/// How well a database lens name matches the camera's lens string. Every number in the
+/// database name must appear, both must name the same version ("II", "Mark III"), and either
+/// most of the database name's words appear in the camera's string or all of the camera's
+/// words appear in the database name (short names such as "M.12-40mm F2.8", as lensfun
+/// itself matches). The score is the share of both names' words that the other has. `None`
+/// if it doesn't match.
 fn name_score(db_name: &str, exif: &[String], maker: &str) -> Option<f32> {
     let skip = tokens(maker);
     let want: Vec<String> = tokens(db_name)
         .into_iter()
         .filter(|t| !skip.contains(t))
         .collect();
-    if want.is_empty() {
+    let exif: Vec<&String> = exif.iter().filter(|t| !skip.contains(t)).collect();
+    if want.is_empty() || exif.is_empty() {
         return None;
     }
-    let has = |t: &String| exif.contains(t);
-    if want
-        .iter()
-        .any(|t| t.starts_with(|c: char| c.is_ascii_digit()) && !has(t))
-    {
+    let number = |t: &String| t.starts_with(|c: char| c.is_ascii_digit());
+    if want.iter().any(|t| number(t) && !exif.contains(&t)) {
         return None;
     }
-    let hit = want.iter().filter(|t| has(t)).count() as f32;
-    let score = hit / want.len() as f32;
-    let extra = exif
-        .iter()
-        .filter(|t| !want.contains(t) && !skip.contains(t))
-        .count() as f32;
-    (score >= 0.75).then_some(score - 0.01 * extra)
+    if versions(&want) != versions(&exif) {
+        return None;
+    }
+    let db_hits = want.iter().filter(|t| exif.contains(t)).count();
+    let exif_hits = exif.iter().filter(|t| want.contains(t)).count();
+    let most_of_db = db_hits as f32 / want.len() as f32 >= 0.75;
+    let all_of_exif = exif_hits == exif.len() && exif.iter().any(|t| number(t));
+    (most_of_db || all_of_exif)
+        .then_some((db_hits + exif_hits) as f32 / (want.len() + exif.len()) as f32)
 }
 
 fn same(a: &str, b: &str) -> bool {
     a.trim().eq_ignore_ascii_case(b.trim())
 }
 
+/// The lensfun camera for a decoder's make and model. Those are rawler's cleaned names ("Pentax",
+/// "K-1"), and lensfun often lists only what the camera writes in EXIF ("RICOH IMAGING COMPANY,
+/// LTD.", "PENTAX K-1"), so the EXIF names rawler knows for that camera are tried too.
+fn camera(make: &str, model: &str) -> Option<&'static DbCamera> {
+    let mut names = vec![(make.to_string(), model.to_string())];
+    names.extend(
+        rawler::global_loader()
+            .get_cameras()
+            .values()
+            .filter(|c| same(&c.clean_make, make) && same(&c.clean_model, model))
+            .map(|c| (c.make.clone(), c.model.clone())),
+    );
+    let maker_matches = |m: &str, make: &str| {
+        let (a, b) = (m.trim().to_lowercase(), make.trim().to_lowercase());
+        // An empty make would "contain" in every maker: no match rather than any camera.
+        !a.is_empty() && !b.is_empty() && (a.contains(&b) || b.contains(&a))
+    };
+    names.iter().find_map(|(make, model)| {
+        db().cameras
+            .iter()
+            .find(|c| maker_matches(&c.maker, make) && c.models.iter().any(|m| same(m, model)))
+    })
+}
+
 fn lensfun(meta: &ImageMeta) -> Option<LensProfile> {
     let lens_name = meta.lens.as_deref()?;
     let focal = meta.focal_length?;
     let db = db();
-    let maker_matches = |m: &str| {
-        let (a, b) = (m.trim().to_lowercase(), meta.make.trim().to_lowercase());
-        // An empty make would "contain" in every maker: no match rather than any camera.
-        !a.is_empty() && !b.is_empty() && (a.contains(&b) || b.contains(&a))
-    };
-    let cam = db
-        .cameras
-        .iter()
-        .find(|c| maker_matches(&c.maker) && c.models.iter().any(|m| same(m, &meta.model)))?;
+    let cam = camera(&meta.make, &meta.model)?;
     let mut mounts = vec![cam.mount.as_str()];
     if let Some((_, compat)) = db.mounts.iter().find(|(n, _)| *n == cam.mount) {
         mounts.extend(compat.iter().map(String::as_str));
@@ -559,7 +602,7 @@ mod tests {
         assert!(p.distortion.is_some() && p.vignetting.is_some());
         let p = lensfun(&meta(
             "Canon",
-            "Canon EOS 5D Mark III",
+            "EOS 5D Mark III",
             "EF24-105mm f/4L IS USM",
             24.0,
             4.0,
@@ -582,6 +625,85 @@ mod tests {
             5.6
         ))
         .is_none());
+    }
+
+    #[test]
+    fn finds_cameras_by_the_decoders_names() {
+        // rawler's cleaned make and model, as `read_meta` reports them, and a model name lensfun
+        // has for that camera.
+        for (make, model, lensfun_model) in [
+            ("Pentax", "K-1", "Pentax K-1"),
+            ("Pentax", "K-3 Mark III", "Pentax K-3 Mark III"),
+            ("Nikon", "Z 50 II", "Nikon Z50_2"),
+            ("OM Digital Solutions", "OM-1 Mark II", "OM-1MarkII"),
+            ("Fujifilm", "GFX 100 II", "GFX100 II"),
+            ("Leica", "M9", "M9 Digital Camera"),
+            ("Canon", "PowerShot G7 X", "Canon PowerShot G7 X"),
+            ("Canon", "EOS 5D Mark III", "Canon EOS 5D Mark III"),
+            ("Sony", "ILCE-6600", "ILCE-6600"),
+        ] {
+            let cam = camera(make, model).unwrap_or_else(|| panic!("{make} {model}"));
+            assert!(
+                cam.models.iter().any(|m| m == lensfun_model),
+                "{make} {model}: {:?}",
+                cam.models
+            );
+        }
+        assert!(camera("Pentax", "K-9000").is_none());
+    }
+
+    #[test]
+    fn needs_the_same_lens_version() {
+        let name =
+            |make, model, lens| lensfun(&meta(make, model, lens, 100.0, 4.0)).map(|p| p.name);
+        // Only the Mark I is in the database.
+        assert_eq!(
+            name("Sony", "ILCE-6600", "FE 70-200mm F2.8 GM OSS").as_deref(),
+            Some("Sony FE 70-200mm f/2.8 GM OSS")
+        );
+        assert_eq!(
+            name("Sony", "ILCE-6600", "FE 70-200mm F2.8 GM OSS II"),
+            None
+        );
+        // The IS and IS II are; the IS III isn't.
+        let canon = |lens| name("Canon", "EOS 5D Mark IV", lens);
+        assert_eq!(
+            canon("EF70-200mm f/2.8L IS USM").as_deref(),
+            Some("Canon EF 70-200mm f/2.8L IS USM")
+        );
+        assert_eq!(
+            canon("EF70-200mm f/2.8L IS II USM").as_deref(),
+            Some("Canon EF 70-200mm f/2.8L IS II USM")
+        );
+        assert_eq!(canon("EF70-200mm f/2.8L IS III USM"), None);
+        assert_eq!(versions(&tokens("Mark II")), [2]);
+        assert_eq!(versions(&tokens("OM-1 Mk3")), [3]);
+        assert!(versions(&tokens("E 18-135mm F3.5-5.6 OSS")).is_empty());
+    }
+
+    #[test]
+    fn matches_short_micro_four_thirds_names() {
+        let p = lensfun(&meta(
+            "Olympus",
+            "E-M1",
+            "OLYMPUS M.12-40mm F2.8",
+            25.0,
+            2.8,
+        ))
+        .expect("Olympus 12-40");
+        assert_eq!(p.name, "Olympus M.Zuiko Digital ED 12-40mm f/2.8 Pro");
+        let p = lensfun(&meta(
+            "Panasonic",
+            "DC-GX9",
+            "LUMIX G VARIO 12-32/F3.5-5.6",
+            12.0,
+            3.5,
+        ))
+        .expect("Lumix 12-32");
+        assert_eq!(
+            p.name,
+            "Panasonic Lumix G Vario 12-32mm f/3.5-5.6 Asph. Mega OIS"
+        );
     }
 
     #[test]

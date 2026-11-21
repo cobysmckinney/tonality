@@ -8,6 +8,7 @@
   import ExportDialog from "$lib/export/ExportDialog.svelte";
   import { exportCurrent } from "$lib/export/targets";
   import Splash from "$lib/Splash.svelte";
+  import { targetOwnsKey } from "$lib/keys";
 
   // Dev hooks: TONALITY_OPEN imports and opens a file; TONALITY_IMPORT imports a folder.
   api.startupPath().then((p) => {
@@ -55,7 +56,7 @@
       exportCurrent();
       return;
     }
-    if (e.target instanceof HTMLInputElement || e.ctrlKey || e.metaKey || e.altKey) return;
+    if (targetOwnsKey(e.target, e.key) || e.ctrlKey || e.metaKey || e.altKey) return;
     if (e.key === "g") app.mode = "library";
     else if (e.key === "e") {
       // From the Library, E opens the focused photo.

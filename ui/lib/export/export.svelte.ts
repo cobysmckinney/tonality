@@ -59,7 +59,7 @@ class Exporter {
   }
 
   async run() {
-    if (!this.ids || this.running) return;
+    if (!this.ids || this.running || !this.settings.folder) return;
     try {
       localStorage.setItem(KEY, JSON.stringify(this.settings));
     } catch {
