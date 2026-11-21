@@ -12,6 +12,7 @@
     "format": "prettier --write ui",
     "format:check": "prettier --check ui",
     "bindings": "cargo test -p tonality-core export_bindings",
+    "licences": "cargo fetch --locked && cargo about generate --locked --fail -c licences/about.toml -o licences/THIRD-PARTY-NOTICES.txt licences/about.hbs",
     "tauri": "tauri"
   },
   "devDependencies": {

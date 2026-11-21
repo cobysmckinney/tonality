@@ -48,6 +48,10 @@
     "active": true,
     "targets": "all",
     "macOS": { "signingIdentity": "-" },
+    "resources": {
+      "../LICENSE": "licences/LICENSE",
+      "../licences/THIRD-PARTY-NOTICES.txt": "licences/THIRD-PARTY-NOTICES.txt"
+    },
     "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.icns", "icons/icon.ico"]
   }
 }

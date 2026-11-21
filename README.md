@@ -100,5 +100,13 @@ other terms:
 
 - **Lens data** from [lensfun](https://lensfun.github.io/), CC BY-SA 3.0
   (`crates/tonality-raw/lensfun`).
+- **RAW decoding** by [rawler](https://github.com/dnglab/dnglab), LGPL-2.1, compiled into
+  the app. Because tonality's source is public, you can rebuild it against a modified rawler.
 - **AI mask models**, downloaded on first use. The sky and people model (SegFormer-B0) is
   licensed by NVIDIA for non-commercial use only.
+
+The other Rust crates, ONNX Runtime and the frontend packages are under permissive licences
+(MIT, Apache-2.0, BSD and similar) or MPL-2.0. Each installer includes `LICENSE` and
+[`licences/THIRD-PARTY-NOTICES.txt`](licences/THIRD-PARTY-NOTICES.txt), which has the full
+text of every licence, including the LGPL-2.1. After changing Rust dependencies, regenerate it
+with `npm run licences` (needs `cargo install cargo-about`).

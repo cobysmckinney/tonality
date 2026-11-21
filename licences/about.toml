@@ -1,0 +1,29 @@
+# cargo-about config for THIRD-PARTY-NOTICES.txt, which ships in every installer.
+# Regenerate after changing Rust dependencies: `npm run licences` (needs `cargo install cargo-about`).
+
+# Every licence the shipped Rust crates use. A new one fails generation until it's checked and added.
+accepted = [
+    "0BSD",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "CC0-1.0",
+    "CDLA-Permissive-2.0",
+    "ISC",
+    "LGPL-2.1",
+    "LGPL-2.1-or-later",
+    "MIT",
+    "MIT-0",
+    "MPL-2.0",
+    "Unicode-3.0",
+    "Unlicense",
+    "Zlib",
+]
+
+# The release targets (see .github/workflows/release.yml).
+targets = ["x86_64-unknown-linux-gnu", "aarch64-apple-darwin", "x86_64-pc-windows-msvc"]
+
+# Build scripts and dev-only crates aren't in the installers.
+ignore-build-dependencies = true
+ignore-dev-dependencies = true
