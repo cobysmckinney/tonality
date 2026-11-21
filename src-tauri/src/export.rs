@@ -177,7 +177,7 @@ pub async fn export_images(
     app: AppHandle,
     images: State<'_, Images>,
 ) -> CmdResult<ExportSummary> {
-    let folder = PathBuf::from(&settings.folder);
+    let folder = export_folder(&settings.folder)?;
     let images = images.inner().clone();
     // Off the async runtime: gathering reads the catalog (every version of every photo), and
     // rendering is long.
@@ -189,6 +189,19 @@ pub async fn export_images(
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+/// The folder to export into. It must be absolute: an empty or relative path would resolve
+/// against the app's working directory and scatter files there.
+fn export_folder(folder: &str) -> CmdResult<PathBuf> {
+    if folder.trim().is_empty() {
+        return Err("Choose a folder to export to".into());
+    }
+    let path = PathBuf::from(folder);
+    if !path.is_absolute() {
+        return Err(format!("Export folder must be a full path: {folder}"));
+    }
+    Ok(path)
 }
 
 /// What to render, read from the catalog one photo at a time (so the UI's own catalog calls
@@ -682,6 +695,16 @@ mod tests {
     use super::*;
     use exif::{In, Tag};
     use tonality_core::exif::Gps;
+
+    #[test]
+    fn export_folder_must_be_absolute() {
+        assert!(export_folder("").is_err());
+        assert!(export_folder("   ").is_err());
+        assert!(export_folder("exports").is_err());
+        assert!(export_folder("./exports").is_err());
+        let abs = std::env::temp_dir().join("tonality Exports");
+        assert_eq!(export_folder(abs.to_str().unwrap()).unwrap(), abs);
+    }
 
     fn meta(rating: u8) -> Meta {
         Meta {

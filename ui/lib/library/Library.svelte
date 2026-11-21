@@ -6,6 +6,7 @@
   import Grid from "./Grid.svelte";
   import { library, type View } from "./state.svelte";
   import { thumbKey, thumbnail } from "./thumbs";
+  import { targetOwnsKey } from "$lib/keys";
 
   let grid = $state<ReturnType<typeof Grid> | null>(null);
 
@@ -20,7 +21,8 @@
     v.kind === view.kind && (v.kind === "all" || ("id" in view && view.id === v.id));
 
   function onKey(e: KeyboardEvent) {
-    if (e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement) return;
+    // A focused control keeps the keys it uses (Enter on a button, anything in a field).
+    if (targetOwnsKey(e.target, e.key)) return;
     const mod = e.ctrlKey || e.metaKey;
     if (mod && e.key.toLowerCase() === "a") {
       e.preventDefault();
@@ -521,7 +523,7 @@
             onselectday={(ids, e) => {
               if (!(e.ctrlKey || e.metaKey || e.shiftKey)) library.selected.clear();
               for (const id of ids) library.selected.add(id);
-              library.focus = ids[0];
+              library.focus = library.anchor = ids[0];
             }}
             onopen={(id) => library.open(id)}
             ondragstart={(id, x, y) => library.startDrag(id, x, y)}
@@ -769,17 +771,23 @@
     right: 4px;
     top: 50%;
     transform: translateY(-50%);
-    display: none;
+    /* Hidden but still focusable, so Tab reaches rename and delete. */
+    display: flex;
+    opacity: 0;
+    pointer-events: none;
     gap: 1px;
     padding: 2px;
     border-radius: var(--radius-s);
     background: var(--bg-2);
   }
-  .album:hover .album-actions {
-    display: flex;
+  .album:hover .album-actions,
+  .album:focus-within .album-actions {
+    opacity: 1;
+    pointer-events: auto;
   }
   .dragging .album:hover .album-actions {
-    display: none;
+    opacity: 0;
+    pointer-events: none;
   }
   .album-actions .icon-btn {
     width: 22px;
