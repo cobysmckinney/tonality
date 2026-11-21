@@ -4,6 +4,7 @@
 //! balance**. White balance and the camera→working-space matrix are applied on the GPU so
 //! the temperature/tint sliders are free to move (see `tonality_core::color`).
 
+mod gainmap;
 mod lens;
 mod meta;
 mod preview;

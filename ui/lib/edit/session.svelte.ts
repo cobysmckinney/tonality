@@ -349,9 +349,12 @@ class EditSession {
   /** Queued operations that will replace `edit` with their result (undo, checkout, …). */
   private restoring = 0;
 
-  private run(op: (imageId: number) => Promise<Checkout>, applyState: boolean): Promise<void> {
+  private run(
+    op: (imageId: number) => Promise<Checkout>,
+    applyState: boolean,
     // The photo is the one on screen when asked, even if another opens before this runs.
-    const id = this.history?.imageId;
+    id: number | undefined = this.history?.imageId,
+  ): Promise<void> {
     if (id === undefined) return Promise.resolve();
     if (applyState) this.restoring++;
     const next = this.queue.then(async () => {
@@ -360,7 +363,11 @@ class EditSession {
         if (this.history?.imageId !== id) return; // another image was opened meanwhile
         const moved = this.history.head.commit !== r.view.head.commit;
         this.history = r.view;
-        if (applyState) this.edit = r.state;
+        if (applyState) {
+          this.edit = r.state;
+          // Mid-crop, Cancel goes back to the crop of the state now shown, not the one replaced.
+          if (this.cropEntry) this.cropEntry = $state.snapshot(r.state.crop);
+        }
         if (moved) scheduleLibraryThumb(id, r.state);
         const cmp = this.compare;
         if (
@@ -418,16 +425,16 @@ class EditSession {
    * The open photo's history was reset (here or from the Library): load the fresh one, and
    * drop anything that pointed into the old history.
    */
-  async reloadHistory(): Promise<void> {
-    const id = this.history?.imageId;
-    if (id === undefined) return;
+  async reloadHistory(id: number | undefined = this.history?.imageId): Promise<void> {
+    // Another photo was opened meanwhile: its state isn't ours to clear.
+    if (id === undefined || this.history?.imageId !== id) return;
     this.compare = null;
     this.applying = null;
     this.cropEntry = null;
     this.masking = false;
     this.maskIndex = null;
     this.lassoing = null;
-    await this.run((i) => api.history.open(i), true);
+    await this.run((i) => api.history.open(i), true, id);
     // The fresh HEAD is as-shot: the plain thumbnail is right, so don't render an edited one.
     await dropLibraryThumbs([id]);
     invalidateThumb(id);
@@ -446,7 +453,12 @@ class EditSession {
       this.flashError(String(e));
       return;
     }
-    await this.reloadHistory();
+    if (this.history?.imageId === id) await this.reloadHistory(id);
+    else {
+      // Left meanwhile: nothing to reload, but its library thumbnail is as-shot again.
+      await dropLibraryThumbs([id]);
+      invalidateThumb(id);
+    }
   }
 
   /** Show `branch` next to the current version. */

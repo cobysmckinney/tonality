@@ -13,6 +13,7 @@ import type { ImportInfo } from "$lib/bindings/ImportInfo";
 import { session } from "$lib/edit/session.svelte";
 import { dropLibraryThumbs } from "$lib/edit/versions";
 import { invalidateThumb } from "$lib/library/thumbs";
+import { arrowSelect, clickSelect, type Mods } from "./selection";
 
 const SIZE_KEY = "tonality.library.thumbSize";
 const RAW_FILTER = [
@@ -60,8 +61,10 @@ class LibraryState {
     descending: true,
   });
   selected = new SvelteSet<number>();
-  /** Keyboard focus / range anchor (image id). */
+  /** Keyboard focus (image id). */
   focus = $state<number | null>(null);
+  /** Where a Shift range starts (image id); see `selection.ts`. */
+  anchor: number | null = null;
   thumbSize = $state(storedSize());
   importing = $state<{ done: number; total: number } | null>(null);
   /** The launch-time scan for untracked originals (shown only once it finds some). */
@@ -149,6 +152,7 @@ class LibraryState {
       const ids = new Set(images.map((i) => i.id));
       for (const id of this.selected) if (!ids.has(id)) this.selected.delete(id);
       if (this.focus !== null && !ids.has(this.focus)) this.focus = null;
+      if (this.anchor !== null && !ids.has(this.anchor)) this.anchor = null;
     } catch (e) {
       if (seq === this.refreshSeq) this.message = String(e);
     } finally {
@@ -197,7 +201,7 @@ class LibraryState {
       await this.refresh();
       if (s.images.length) {
         this.selected.clear();
-        this.focus = s.images[0];
+        this.focus = this.anchor = s.images[0];
         this.selected.add(s.images[0]);
         if (opts.open) this.open(s.images[0]);
       }
@@ -234,24 +238,12 @@ class LibraryState {
 
   // ---- selection ----
 
-  select(id: number, e?: { shiftKey?: boolean; ctrlKey?: boolean; metaKey?: boolean }) {
-    if (e?.shiftKey && this.focus !== null) {
-      const a = this.images.findIndex((i) => i.id === this.focus);
-      const b = this.images.findIndex((i) => i.id === id);
-      if (a >= 0 && b >= 0) {
-        if (!(e.ctrlKey || e.metaKey)) this.selected.clear();
-        for (let i = Math.min(a, b); i <= Math.max(a, b); i++) this.selected.add(this.images[i].id);
-        return; // keep the anchor
-      }
-    }
-    if (e?.ctrlKey || e?.metaKey) {
-      if (this.selected.has(id)) this.selected.delete(id);
-      else this.selected.add(id);
-    } else {
-      this.selected.clear();
-      this.selected.add(id);
-    }
-    this.focus = id;
+  private get ids(): number[] {
+    return this.images.map((i) => i.id);
+  }
+
+  select(id: number, e?: Mods) {
+    clickSelect(this, this.ids, id, e);
   }
 
   selectAll() {
@@ -262,13 +254,9 @@ class LibraryState {
     this.selected.clear();
   }
 
-  /** Move keyboard focus to `id` (from arrow keys), extending the selection with Shift. */
+  /** Move keyboard focus to `id` (from arrow keys); with Shift, select from the anchor. */
   moveTo(id: number | null, extend: boolean) {
-    if (id === null) return;
-    if (extend) {
-      this.selected.add(id);
-      this.focus = id;
-    } else this.select(id);
+    if (id !== null) arrowSelect(this, this.ids, id, extend);
   }
 
   /** Photos an action applies to: the selection, else the focused photo. */
@@ -444,7 +432,7 @@ class LibraryState {
   /** Open a photo (default: the focused one) in Edit. */
   open(id = this.focus) {
     if (id === null) return;
-    this.focus = id;
+    if (id !== this.focus) this.focus = this.anchor = id;
     app.mode = "edit";
     if ((session.opening ?? session.image?.id) !== id) session.open(id);
   }

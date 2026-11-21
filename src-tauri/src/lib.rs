@@ -54,8 +54,15 @@ fn wb_presets() -> Vec<WbPresetInfo> {
         .collect()
 }
 
-/// The open photo's preview sampled inside `edit`'s crop, in camera RGB (for Auto).
+/// The open photo's preview sampled inside `edit`'s crop, in camera RGB and lens-corrected as
+/// the editor shows it (for Auto).
 fn auto_samples(p: &tonality_raw::Preview, edit: &EditState) -> Vec<[f32; 3]> {
+    let lens = tonality_core::lens::lens_table(
+        p.lens.as_ref(),
+        &edit.lens,
+        p.full_width as f32,
+        p.full_height as f32,
+    );
     let px = |x: u32, y: u32| {
         let i = ((y * p.width + x) * 3) as usize;
         [0, 1, 2].map(|k| half::f16::from_bits(p.pixels[i + k]).to_f32())
@@ -65,6 +72,7 @@ fn auto_samples(p: &tonality_raw::Preview, edit: &EditState) -> Vec<[f32; 3]> {
         p.height,
         px,
         &edit.crop,
+        &lens,
         p.full_width,
         p.full_height,
         192,
@@ -330,6 +338,9 @@ pub(crate) async fn blocking<T: Send + 'static>(
         .map_err(|e| e.to_string())?
 }
 
+/// The library's lock file ([`Store::lock`]), kept open while the app runs.
+struct LibraryLock(#[allow(dead_code)] std::fs::File);
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -343,6 +354,11 @@ pub fn run() {
             let root = Store::resolve(app.path().picture_dir().ok(), app.path().home_dir().ok());
             let store = Store::open(root.clone())
                 .map_err(|e| format!("cannot open library at {root:?}: {e}"))?;
+            // Before anything reads or writes it; held for the app's lifetime.
+            let lock = store
+                .lock()
+                .map_err(|e| format!("cannot open library at {root:?}: {e}"))?;
+            app.manage(LibraryLock(lock));
             let mut catalog = Catalog::open(store.catalog_path())?;
             thumbs::backfill_aspects(&store, &mut catalog);
             eprintln!("[tonality] library: {}", store.root().display());
@@ -404,7 +420,9 @@ pub fn run() {
         .expect("error while building tonality")
         .run(|app, event| {
             if let tauri::RunEvent::Exit = event {
-                app.state::<sidecar::Sidecars>().flush();
+                if let Err(e) = app.state::<sidecar::Sidecars>().flush() {
+                    eprintln!("[sidecar] {e}");
+                }
             }
         });
 }

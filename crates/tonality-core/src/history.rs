@@ -93,6 +93,18 @@ struct CommitRow {
     updated_at: i64,
 }
 
+/// Delete a commit and remember it (by image and creation time, which a sidecar keeps), so
+/// merging a sidecar written before the delete doesn't bring it back.
+fn drop_commit(c: &Connection, id: CommitId) -> Result<()> {
+    c.execute(
+        "INSERT OR IGNORE INTO dropped_commits (image_id, created_at)
+         SELECT image_id, created_at FROM commits WHERE id = ?1",
+        [id],
+    )?;
+    c.execute("DELETE FROM commits WHERE id = ?1", [id])?;
+    Ok(())
+}
+
 fn commit_row(c: &Connection, id: CommitId) -> Result<CommitRow> {
     c.query_row(
         "SELECT id, parent, state_hash, key, updated_at FROM commits WHERE id = ?1",
@@ -266,7 +278,14 @@ pub(crate) fn auto_branch_name(existing: &[BranchInfo], from: &str) -> String {
     };
     let taken: HashSet<&str> = existing.iter().map(|b| b.name.as_str()).collect();
     (2..)
-        .map(|n| format!("{base}-{n}"))
+        .map(|n| {
+            // Shorten `base` so the whole name stays within the limit (a sidecar holding a
+            // longer one couldn't be read back by older builds).
+            let suffix = format!("-{n}");
+            let keep = MAX_BRANCH_NAME.saturating_sub(suffix.chars().count());
+            let base: String = base.chars().take(keep).collect();
+            format!("{}{suffix}", base.trim_end())
+        })
         .find(|n| !taken.contains(n.as_str()))
         .expect("unbounded")
 }
@@ -425,7 +444,7 @@ impl Catalog {
                 // The gesture ended where it started: drop the commit entirely.
                 set_branch(&tx, image, &h.branch, parent)?;
                 set_head(&tx, image, &h.branch, parent)?;
-                tx.execute("DELETE FROM commits WHERE id = ?1", [cur.id])?;
+                drop_commit(&tx, cur.id)?;
             } else {
                 let prev = load_state(&tx, &parent_row.state_hash)?;
                 store_state(&tx, state)?;
@@ -570,6 +589,13 @@ impl Catalog {
             ));
         };
         let tx = self.conn.transaction()?;
+        // Remembered so a sidecar written before the delete doesn't bring the branch back.
+        tx.execute(
+            "INSERT OR IGNORE INTO deleted_branches (image_id, name, tip_created_at)
+             SELECT r.image_id, r.name, c.created_at FROM refs r JOIN commits c ON c.id = r.commit_id
+             WHERE r.image_id = ?1 AND r.name = ?2",
+            params![image, name],
+        )?;
         tx.execute(
             "DELETE FROM refs WHERE image_id = ?1 AND name = ?2",
             params![image, name],
@@ -587,7 +613,7 @@ impl Catalog {
         let mut gone: Vec<CommitId> = par.keys().filter(|c| !keep.contains(c)).copied().collect();
         gone.sort_unstable_by(|a, b| b.cmp(a));
         for c in &gone {
-            tx.execute("DELETE FROM commits WHERE id = ?1", [c])?;
+            drop_commit(&tx, *c)?;
         }
         if !gone.is_empty() {
             tx.execute(
@@ -610,6 +636,9 @@ impl Catalog {
             tx.execute("DELETE FROM refs WHERE image_id = ?1", [image])?;
             // One statement: the parent links are only checked once it has finished.
             tx.execute("DELETE FROM commits WHERE image_id = ?1", [image])?;
+            // Nothing left for a stale sidecar to resurrect piecemeal.
+            tx.execute("DELETE FROM dropped_commits WHERE image_id = ?1", [image])?;
+            tx.execute("DELETE FROM deleted_branches WHERE image_id = ?1", [image])?;
             tx.execute("UPDATE images SET aspect = NULL WHERE id = ?1", [image])?;
         }
         tx.execute(
@@ -866,6 +895,21 @@ mod tests {
         );
         assert_eq!(auto_branch_name(&b(&["B&W"]), "B&W"), "B&W-2");
         assert_eq!(auto_branch_name(&b(&["-5"]), "-5"), "-5-2");
+
+        // Never longer than the limit, counted in characters (not bytes).
+        let long = "é".repeat(MAX_BRANCH_NAME);
+        let n = auto_branch_name(&b(&[&long]), &long);
+        assert_eq!(n, format!("{}-2", "é".repeat(MAX_BRANCH_NAME - 2)));
+        assert!(validate_name(&n).is_ok());
+        let n3 = auto_branch_name(&b(&[&long, &n]), &n);
+        assert_eq!(n3, format!("{}-3", "é".repeat(MAX_BRANCH_NAME - 2)));
+        let taken: Vec<String> = (2..=9)
+            .map(|i| format!("{}-{i}", "é".repeat(MAX_BRANCH_NAME - 2)))
+            .collect();
+        let refs: Vec<&str> = taken.iter().map(String::as_str).collect();
+        let n10 = auto_branch_name(&b(&refs), &long);
+        assert_eq!(n10, format!("{}-10", "é".repeat(MAX_BRANCH_NAME - 3)));
+        assert_eq!(n10.chars().count(), MAX_BRANCH_NAME);
     }
 
     // -----------------------------------------------------------------------------------------

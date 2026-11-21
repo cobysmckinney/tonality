@@ -141,7 +141,8 @@
 <ApplyDialog />
 
 <div class="edit" class:history-closed={!historyOpen}>
-  <aside class="history surface">
+  <!-- Crop mode: no undo or checkout until Done / Cancel (Cancel restores the crop it entered with). -->
+  <aside class="history surface" inert={session.cropping} class:inert={session.cropping}>
     {#if session.history}
       <HistoryPanel view={session.history} onhide={() => (historyOpen = false)} />
     {:else}
@@ -268,6 +269,9 @@
   }
   .history-closed .history {
     border: none;
+  }
+  .history.inert {
+    opacity: 0.5;
   }
   .panel-head {
     display: flex;

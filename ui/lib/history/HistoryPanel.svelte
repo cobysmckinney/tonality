@@ -428,15 +428,20 @@
     position: absolute;
     right: var(--space-1);
     top: var(--space-1);
-    display: none;
+    /* Hidden but still focusable, so Tab reaches them. */
+    display: flex;
+    opacity: 0;
+    pointer-events: none;
     gap: 1px;
     padding: 2px;
     border-radius: var(--radius-s);
     background: var(--bg-1);
     box-shadow: 0 0 0 1px var(--line);
   }
-  .versions li:hover .actions {
-    display: flex;
+  .versions li:hover .actions,
+  .versions li:focus-within .actions {
+    opacity: 1;
+    pointer-events: auto;
   }
   .actions .icon-btn {
     width: 22px;
@@ -611,15 +616,21 @@
     position: absolute;
     right: var(--space-1);
     top: 3px;
-    display: none;
+    /* Hidden but still focusable, so Tab reaches it. */
+    display: inline-grid;
+    opacity: 0;
+    pointer-events: none;
     width: 24px;
     height: 24px;
     background: var(--bg-3);
   }
-  ol li:hover .fork {
-    display: inline-grid;
+  ol li:hover .fork,
+  ol li:focus-within .fork {
+    opacity: 1;
+    pointer-events: auto;
   }
-  ol li:hover .time {
+  ol li:hover .time,
+  ol li:focus-within .time {
     visibility: hidden;
   }
   .forks {

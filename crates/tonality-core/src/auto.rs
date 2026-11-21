@@ -21,23 +21,29 @@ use crate::agx::{Agx, Display, GREY};
 use crate::color::{CameraColor, Vec3};
 use crate::edit::{Crop, Light};
 use crate::geometry::Geometry;
+use crate::lens::{LensTable, UvToSource};
 
 /// Rec.2020 luminance weights, as the shader's `REC2020_LUMA`.
 const LUMA: Vec3 = [0.2627, 0.6780, 0.0593];
 
 /// Camera RGB of the photo inside the crop on an `n × n` grid over the framed output (nearest
-/// pixel). `pixel(x, y)` reads the `width × height` preview; `full_w × full_h` is the full-size
-/// image the crop is defined on.
+/// pixel), lens-corrected as the shader shows it (`fs_main`: each corrected position reads the
+/// source through the lens table, times its vignetting gain). `pixel(x, y)` reads the
+/// `width × height` preview; `full_w × full_h` is the full-size image the crop and `lens` are
+/// defined on.
+#[allow(clippy::too_many_arguments)]
 pub fn sample(
     width: u32,
     height: u32,
     pixel: impl Fn(u32, u32) -> Vec3,
     crop: &Crop,
+    lens: &LensTable,
     full_w: u32,
     full_h: u32,
     n: u32,
 ) -> Vec<Vec3> {
     let g = Geometry::new(crop, full_w as f32, full_h as f32);
+    let to_src = UvToSource::new(lens, full_w, full_h);
     let mut out = Vec::with_capacity((n * n) as usize);
     for j in 0..n {
         for i in 0..n {
@@ -47,8 +53,9 @@ pub fn sample(
             if !(0.0..1.0).contains(&u) || !(0.0..1.0).contains(&v) {
                 continue;
             }
+            let ([u, v], gain) = to_src.map_with_gain([u, v]);
             let (x, y) = ((u * width as f32) as u32, (v * height as f32) as u32);
-            out.push(pixel(x.min(width - 1), y.min(height - 1)));
+            out.push(pixel(x.min(width - 1), y.min(height - 1)).map(|c| c * gain));
         }
     }
     out
@@ -307,8 +314,13 @@ pub fn white_balance(cam: &[Vec3], color: &CameraColor) -> Option<(f32, f32)> {
     let (t, tint) = if found {
         let (t, tint) = color.temperature_tint_of([1.0 / g[0], 1.0 / g[1], 1.0 / g[2]]);
         // A scene that fools this (a sky, a lawn) mostly shifts the tint; the camera's tint is
-        // seldom far off, so keep within ±15 of it.
-        (t, tint.clamp(shot_tint - 15.0, shot_tint + 15.0))
+        // seldom far off, so keep within ±15 of it. Only when it has one: `clamp` panics on a
+        // NaN bound, and an out-of-gamut As Shot white can name a NaN or infinite tint.
+        if shot_tint.is_finite() {
+            (t, tint.clamp(shot_tint - 15.0, shot_tint + 15.0))
+        } else {
+            (t, tint)
+        }
     } else {
         (shot_t, shot_tint)
     };
@@ -537,14 +549,112 @@ mod tests {
     fn samples_only_inside_the_crop() {
         // Left half dark, right half bright; a crop of the right half sees only bright.
         let px = |x: u32, _: u32| if x < 50 { [0.01; 3] } else { [0.5; 3] };
-        let all = sample(100, 50, px, &Crop::default(), 1000, 500, 20);
+        let all = sample(
+            100,
+            50,
+            px,
+            &Crop::default(),
+            &LensTable::identity(),
+            1000,
+            500,
+            20,
+        );
         assert_eq!(all.len(), 400);
         assert!(all.iter().any(|c| c[0] < 0.1) && all.iter().any(|c| c[0] > 0.1));
         let crop = Crop {
             rect: [0.5, 0.0, 0.5, 1.0],
             ..Crop::default()
         };
-        let right = sample(100, 50, px, &crop, 1000, 500, 20);
+        let right = sample(100, 50, px, &crop, &LensTable::identity(), 1000, 500, 20);
         assert!(!right.is_empty() && right.iter().all(|c| c[0] > 0.1));
+    }
+
+    #[test]
+    fn samples_through_the_lens_as_the_shader_does() {
+        use crate::lens::{lens_table, radial, LensCorrection, LensProfile, LensSource};
+        // A barrel lens with strong falloff, on a 3:2 source; the preview is a quarter size.
+        let profile = LensProfile {
+            source: LensSource::Embedded,
+            name: "test".into(),
+            distortion: Some([radial(|r| 1.0 - 0.08 * r * r); 3]),
+            chromatic: false,
+            vignetting: Some(radial(|r| 1.0 + 0.8 * r * r)),
+        };
+        let s = LensCorrection {
+            profile: true,
+            ..Default::default()
+        };
+        let (fw, fh, w, h, n) = (1200u32, 800u32, 300u32, 200u32, 16u32);
+        let table = lens_table(Some(&profile), &s, fw as f32, fh as f32);
+        assert!(table.active);
+        // Each pixel encodes its own position, so the samples say where they were read from.
+        let px = |x: u32, y: u32| [x as f32, y as f32, 1.0];
+        let got = sample(w, h, px, &Crop::default(), &table, fw, fh, n);
+        assert_eq!(got.len(), (n * n) as usize);
+
+        // `fs_main`, written out: r = |(uv − ½)·2·(w, h)/diag|, src = clamp(½ + k(r)·(uv − ½)),
+        // gain = vignetting at r·k(r); `lens_at` interpolates the knots over [0, LENS_RMAX].
+        let lens_at = |r: f32, c: usize| {
+            let t = (r / crate::lens::LENS_RMAX).clamp(0.0, 1.0) * 31.0;
+            let i = (t as usize).min(30);
+            let (a, b) = (table.knots[i][c], table.knots[i + 1][c]);
+            a + (b - a) * (t - i as f32)
+        };
+        let diag = (fw as f32).hypot(fh as f32);
+        let (ax, ay) = (fw as f32 / diag, fh as f32 / diag);
+        let mut corner_gain: f32 = 1.0;
+        for j in 0..n {
+            for i in 0..n {
+                let uv = [(i as f32 + 0.5) / n as f32, (j as f32 + 0.5) / n as f32];
+                let d = [uv[0] - 0.5, uv[1] - 0.5];
+                let r = (d[0] * 2.0 * ax).hypot(d[1] * 2.0 * ay);
+                let k = lens_at(r, 1);
+                let src = [
+                    (0.5 + k * d[0]).clamp(0.0, 1.0),
+                    (0.5 + k * d[1]).clamp(0.0, 1.0),
+                ];
+                let gain = lens_at(r * k, 3);
+                let x = ((src[0] * w as f32) as u32).min(w - 1) as f32;
+                let y = ((src[1] * h as f32) as u32).min(h - 1) as f32;
+                let c = got[(j * n + i) as usize];
+                let at = format!("uv {uv:?}");
+                assert!((c[2] - gain).abs() < 1e-5, "{at}: gain {} vs {gain}", c[2]);
+                assert!(
+                    (c[0] / c[2] - x).abs() < 1e-3,
+                    "{at}: x {} vs {x}",
+                    c[0] / c[2]
+                );
+                assert!(
+                    (c[1] / c[2] - y).abs() < 1e-3,
+                    "{at}: y {} vs {y}",
+                    c[1] / c[2]
+                );
+                corner_gain = corner_gain.max(gain);
+            }
+        }
+        // The corrected corners are brighter, and they read nearer the centre than uv itself.
+        assert!(corner_gain > 1.4, "{corner_gain}");
+        let first = got[0];
+        assert!(first[0] / first[2] > 0.5 / n as f32 * w as f32);
+    }
+
+    #[test]
+    fn white_balance_survives_an_as_shot_white_with_no_finite_tint() {
+        // As Shot light whose XYZ is exactly (3, 0, −1) (camera RGB = XYZ): x = 1.5, y = 0 puts
+        // the CIE 1960 uv denominator at 0, so it names no finite tint. The ±15 tint clamp
+        // around it must not panic.
+        let c = CameraColor {
+            xyz_to_cam: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+            as_shot_wb: [1.0 / 3.0, f32::INFINITY, -1.0],
+        };
+        let (_, shot_tint) = c.as_shot_temperature_tint();
+        assert!(
+            !shot_tint.is_finite(),
+            "test needs a non-finite tint: {shot_tint}"
+        );
+        let greys = scene(normal(-0.5, 1.5, 2000));
+        if let Some((t, tint)) = white_balance(&greys, &c) {
+            assert!(t.is_finite() && tint.is_finite());
+        }
     }
 }

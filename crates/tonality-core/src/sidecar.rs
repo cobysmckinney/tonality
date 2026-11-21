@@ -13,11 +13,12 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
+use crate::album::clean_name;
 use crate::catalog::{Catalog, CatalogError, ImageId, Result};
 use crate::edit::EditState;
 use crate::history::{
     auto_branch_name, branches, head, lineage, parents, set_branch, set_head, store_state,
-    validate_name, BranchInfo, CommitId,
+    BranchInfo, CommitId,
 };
 
 /// Format version written by this build; newer files are refused rather than half-read.
@@ -111,6 +112,12 @@ impl Sidecar {
         Ok(serde_json::from_value(v)?)
     }
 
+    /// Whether [`Catalog::merge_sidecar`] would accept this file's contents (before checking
+    /// which photo it belongs to).
+    pub fn check(&self) -> Result<()> {
+        self.validate().map(|_| ())
+    }
+
     /// Check internal consistency and parse the states. Everything read from disk goes
     /// through this before touching the catalog.
     fn validate(&self) -> Result<HashMap<&str, EditState>> {
@@ -132,7 +139,11 @@ impl Sidecar {
         }
         let mut names = HashSet::new();
         for b in &self.branches {
-            validate_name(&b.name)?;
+            // Not `validate_name`: older builds could write auto-generated names over the
+            // length limit, and refusing the file would strand that photo's history.
+            if b.name.trim().is_empty() {
+                return bad("empty branch name");
+            }
             if b.tip >= self.commits.len() {
                 return bad("branch points nowhere");
             }
@@ -268,6 +279,8 @@ impl Catalog {
     /// Merge a sidecar's history, rating and flag into `image`. Idempotent; never discards or
     /// moves anything the catalog already has except fast-forwarding a branch whose sidecar
     /// version strictly extends it. HEAD only follows the sidecar for photos with no history yet.
+    /// Commits and branches this catalog deleted (a gesture that ended where it started, a
+    /// deleted branch) stay deleted, so a sidecar left stale by a crash can't bring them back.
     pub fn merge_sidecar(&mut self, image: ImageId, sc: &Sidecar) -> Result<MergeSummary> {
         let states = sc.validate()?;
         let (hash, rating, flag): (String, u8, i8) = self
@@ -289,8 +302,11 @@ impl Catalog {
         let tx = self.conn.transaction()?;
         let fresh = head(&tx, image)?.is_none();
 
-        // Commits: reuse one with the same parent and state, otherwise add it.
+        // Commits: reuse one with the same parent and state, otherwise add it, unless it was
+        // deleted here since the sidecar was written (then it, and anything below it, is
+        // skipped and stands for its nearest kept ancestor).
         let mut map: Vec<CommitId> = Vec::with_capacity(sc.commits.len());
+        let mut skipped: Vec<bool> = Vec::with_capacity(sc.commits.len());
         let existing_root: Option<CommitId> = tx
             .query_row(
                 "SELECT id FROM commits WHERE image_id = ?1 AND parent IS NULL ORDER BY id LIMIT 1",
@@ -309,6 +325,7 @@ impl Catalog {
                     Some(root) => {
                         if same_state(&tx, root, &state_hash)? {
                             map.push(root);
+                            skipped.push(false);
                             continue;
                         }
                         Some(root)
@@ -316,6 +333,11 @@ impl Catalog {
                     None => None,
                 },
             };
+            if c.parent.is_some_and(|p| skipped[p]) {
+                map.push(parent.expect("has a parent"));
+                skipped.push(true);
+                continue;
+            }
             let found = same_child(&tx, image, parent, &state_hash, c)?;
             // Or the same commit, rewritten here since that sidecar was written (a slider gesture
             // coalesces into its commit in place): same parent and creation time, updated later.
@@ -333,6 +355,11 @@ impl Catalog {
             };
             let id = match found {
                 Some(id) => id,
+                None if c.parent.is_some() && was_dropped(&tx, image, c.created)? => {
+                    map.push(parent.expect("has a parent"));
+                    skipped.push(true);
+                    continue;
+                }
                 None => {
                     tx.execute(
                         "INSERT INTO commits (image_id, parent, state_hash, summary, key, created_at, updated_at)
@@ -344,6 +371,7 @@ impl Catalog {
                 }
             };
             map.push(id);
+            skipped.push(false);
         }
 
         // Branches.
@@ -352,6 +380,10 @@ impl Catalog {
         let mut renamed: HashMap<&str, String> = HashMap::new();
         for b in &sc.branches {
             let name = b.name.trim();
+            // Deleted here after the sidecar was written, or its tip was: leave it gone.
+            if skipped[b.tip] || was_deleted(&tx, image, name, sc.commits[b.tip].created)? {
+                continue;
+            }
             let tip = map[b.tip];
             let contains = |t: CommitId| lineage(&par, t).contains(&tip);
             // A local branch at the same tip that the sidecar doesn't know by name is most
@@ -438,14 +470,15 @@ impl Catalog {
         // Albums: join each named album, creating it if this library has none by that name.
         let now = (self.clock)();
         for name in &sc.image.albums {
-            let name = name.trim();
-            if name.is_empty() {
+            // The same rules as naming an album in the app, and the same case-blind match the
+            // album list uses.
+            let Ok(name) = clean_name(name) else {
                 continue;
-            }
+            };
             let album: i64 = match tx
                 .query_row(
-                    "SELECT id FROM albums WHERE name = ?1 ORDER BY id LIMIT 1",
-                    [name],
+                    "SELECT id FROM albums WHERE name = ?1 COLLATE NOCASE ORDER BY id LIMIT 1",
+                    [&name],
                     |r| r.get(0),
                 )
                 .optional()?
@@ -467,6 +500,35 @@ impl Catalog {
         tx.commit()?;
         Ok(out)
     }
+}
+
+/// Whether a commit created at `created` was deleted from `image` here (see `dropped_commits`).
+fn was_dropped(tx: &rusqlite::Connection, image: ImageId, created: i64) -> Result<bool> {
+    Ok(tx
+        .query_row(
+            "SELECT 1 FROM dropped_commits WHERE image_id = ?1 AND created_at = ?2",
+            params![image, created],
+            |_| Ok(()),
+        )
+        .optional()?
+        .is_some())
+}
+
+/// Whether branch `name`, with its tip created at `tip_created`, was deleted from `image` here.
+fn was_deleted(
+    tx: &rusqlite::Connection,
+    image: ImageId,
+    name: &str,
+    tip_created: i64,
+) -> Result<bool> {
+    Ok(tx
+        .query_row(
+            "SELECT 1 FROM deleted_branches WHERE image_id = ?1 AND name = ?2 AND tip_created_at = ?3",
+            params![image, name, tip_created],
+            |_| Ok(()),
+        )
+        .optional()?
+        .is_some())
 }
 
 /// Whether commit `id` holds the state hashed `hash`, comparing in today's format: a state
@@ -566,6 +628,39 @@ mod tests {
                 )
             })
             .collect()
+    }
+
+    #[test]
+    fn long_branch_names_round_trip() {
+        let ((mut a, ia), (mut b, ib)) = pair();
+        let root = a.history_open(ia).unwrap().view.head.commit;
+        let long = "x".repeat(64);
+        a.create_branch(ia, root, Some(&long)).unwrap();
+        a.commit(ia, &exp(1.0), None).unwrap();
+        a.undo(ia).unwrap();
+        a.commit(ia, &exp(2.0), None).unwrap(); // forks under an auto-generated name
+        let forked = a.history_open(ia).unwrap().view.head.branch;
+        assert_eq!(forked.chars().count(), 64);
+
+        let sc = Sidecar::from_json(&a.sidecar(ia).unwrap().to_json()).unwrap();
+        b.merge_sidecar(ib, &sc).unwrap();
+        assert_eq!(graph(&a, ia), graph(&b, ib));
+    }
+
+    #[test]
+    fn over_long_branch_names_from_older_builds_are_still_read() {
+        let ((mut a, ia), (mut b, ib)) = pair();
+        a.history_open(ia).unwrap();
+        a.commit(ia, &exp(1.0), None).unwrap();
+        let mut sc = a.sidecar(ia).unwrap();
+        let long = format!("{}-2", "x".repeat(64));
+        sc.branches[0].name = long.clone();
+        sc.head.as_mut().unwrap().branch = long.clone();
+        let sc = Sidecar::from_json(&sc.to_json()).unwrap();
+        b.merge_sidecar(ib, &sc).unwrap();
+        let v = b.history_open(ib).unwrap().view;
+        assert_eq!(v.head.branch, long);
+        assert_eq!(v.commits.len(), 2);
     }
 
     #[test]
@@ -817,6 +912,91 @@ mod tests {
         assert_eq!(graph(&a, ia), before);
     }
 
+    /// A clock the test moves by hand, so gestures coalesce.
+    fn clocked() -> (
+        Catalog,
+        ImageId,
+        std::sync::Arc<std::sync::atomic::AtomicI64>,
+    ) {
+        use std::sync::atomic::{AtomicI64, Ordering};
+        let t = std::sync::Arc::new(AtomicI64::new(1_000));
+        let tc = t.clone();
+        let cat = Catalog::open_in_memory()
+            .unwrap()
+            .with_clock(Box::new(move || tc.load(Ordering::SeqCst)));
+        let img = cat.test_image("x");
+        (cat, img, t)
+    }
+
+    #[test]
+    fn a_stale_sidecar_does_not_bring_back_an_undone_gesture() {
+        use std::sync::atomic::Ordering;
+        let (mut a, ia, t) = clocked();
+        a.history_open(ia).unwrap();
+        t.store(2_000, Ordering::SeqCst);
+        a.commit(ia, &exp(1.0), Some("exposure")).unwrap();
+        // The sidecar is written mid-drag...
+        let stale = a.sidecar(ia).unwrap();
+        // ...the drag ends back where it started, which drops its commit, and the app dies
+        // before the sidecar is rewritten.
+        t.store(2_100, Ordering::SeqCst);
+        a.commit(ia, &exp(0.0), Some("exposure")).unwrap();
+        assert_eq!(a.history_view(ia).unwrap().commits.len(), 1);
+        let before = graph(&a, ia);
+        let m = a.merge_sidecar(ia, &stale).unwrap();
+        assert!(!m.changed(), "{m:?}");
+        assert_eq!(graph(&a, ia), before);
+        assert_eq!(a.history_open(ia).unwrap().state, exp(0.0));
+
+        // Edits made after the undone gesture still merge normally.
+        t.store(10_000, Ordering::SeqCst);
+        a.commit(ia, &exp(2.0), Some("exposure")).unwrap();
+        let newer = a.sidecar(ia).unwrap();
+        let mut b = Catalog::open_in_memory().unwrap();
+        let ib = b.test_image("x");
+        b.merge_sidecar(ib, &newer).unwrap();
+        assert_eq!(graph(&b, ib), graph(&a, ia));
+        assert!(!a.merge_sidecar(ia, &newer).unwrap().changed());
+    }
+
+    #[test]
+    fn a_stale_sidecar_does_not_bring_back_a_deleted_branch() {
+        use std::sync::atomic::Ordering;
+        let (mut a, ia, t) = clocked();
+        a.history_open(ia).unwrap();
+        t.store(2_000, Ordering::SeqCst);
+        let tip = a.commit(ia, &exp(1.0), None).unwrap().view.head.commit;
+        // "HDR" has commits of its own; "Alt" only shares main's tip.
+        a.create_branch(ia, tip, Some("Alt")).unwrap();
+        a.create_branch(ia, tip, Some("HDR")).unwrap();
+        t.store(3_000, Ordering::SeqCst);
+        a.commit(ia, &exp(2.0), None).unwrap();
+        t.store(4_000, Ordering::SeqCst);
+        a.commit(ia, &exp(3.0), None).unwrap();
+        let stale = a.sidecar(ia).unwrap();
+        a.switch_branch(ia, "main").unwrap();
+        a.delete_branch(ia, "HDR").unwrap();
+        a.delete_branch(ia, "Alt").unwrap();
+        let before = graph(&a, ia);
+        let m = a.merge_sidecar(ia, &stale).unwrap();
+        assert!(!m.changed(), "{m:?}");
+        assert_eq!(graph(&a, ia), before);
+
+        // A new branch by the same name somewhere else is a different branch.
+        a.create_branch(ia, tip, Some("HDR")).unwrap();
+        t.store(5_000, Ordering::SeqCst);
+        a.commit(ia, &exp(-1.0), None).unwrap();
+        let mut b = Catalog::open_in_memory().unwrap();
+        let ib = b.test_image("x");
+        b.merge_sidecar(ib, &a.sidecar(ia).unwrap()).unwrap();
+        assert_eq!(graph(&b, ib), graph(&a, ia));
+        assert!(!a
+            .merge_sidecar(ia, &a.sidecar(ia).unwrap())
+            .unwrap()
+            .changed());
+        assert!(!a.merge_sidecar(ia, &stale).unwrap().changed());
+    }
+
     #[test]
     fn a_renamed_branch_is_not_duplicated() {
         let ((mut a, ia), (mut b, ib)) = pair();
@@ -908,8 +1088,29 @@ mod tests {
         )
         .unwrap();
         assert!(plain.image.albums.is_empty());
+
+        // Names follow the album rules: matched ignoring case, and no longer than the app allows.
+        let mut odd = sc.clone();
+        let long = "x".repeat(200);
+        odd.image.albums = vec!["  trips ".into(), long.clone(), "   ".into()];
+        let m = b.merge_sidecar(ib, &odd).unwrap();
+        assert_eq!(m.albums, 1, "only the long one is new");
+        let albums = b.albums().unwrap();
+        assert_eq!(albums.len(), 3, "no second Trips");
+        assert!(albums.iter().any(|x| x.name == "x".repeat(120)));
+        assert!(!b.merge_sidecar(ib, &odd).unwrap().changed(), "idempotent");
+        let albums: Vec<_> = albums
+            .into_iter()
+            .filter(|x| x.name != "x".repeat(120))
+            .collect();
+
         b.remove_from_album(local, &[ib]).unwrap();
         b.delete_album(albums[0].id).unwrap();
+        for x in b.albums().unwrap() {
+            if x.name.len() == 120 {
+                b.delete_album(x.id).unwrap();
+            }
+        }
         assert!(!b.sidecar(ib).unwrap().to_json().contains("albums"));
     }
 

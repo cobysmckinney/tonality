@@ -212,8 +212,18 @@ struct Importer<'a> {
     store: &'a Store,
     catalog: &'a CatalogState,
     import: i64,
-    /// Library-relative names claimed by in-flight copies.
+    /// Library-relative names claimed by in-flight copies, as [`name_key`]s.
     reserved: Mutex<HashSet<String>>,
+}
+
+/// How the filesystem compares names: case-folded where it is case-insensitive by default
+/// (APFS on macOS, NTFS on Windows), so `IMG_0001.CR2` and `img_0001.cr2` are one name there.
+fn name_key(file: &str) -> String {
+    if cfg!(any(target_os = "macos", windows)) {
+        file.to_lowercase()
+    } else {
+        file.to_string()
+    }
 }
 
 impl Importer<'_> {
@@ -230,11 +240,11 @@ impl Importer<'_> {
             } else {
                 format!("{dir}/{stem} ({n}){ext}")
             };
-            if !reserved.contains(&file)
+            if !reserved.contains(&name_key(&file))
                 && !self.store.abs(&file).exists()
                 && !self.catalog.with(|c| c.file_taken(&file))?
             {
-                reserved.insert(file.clone());
+                reserved.insert(name_key(&file));
                 return Ok(file);
             }
         }
@@ -254,27 +264,21 @@ impl Importer<'_> {
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .ok_or("no file name")?;
-        let file = self.reserve(
-            &Store::originals_dir(meta.as_ref().and_then(|m| m.captured_at.as_deref())),
-            &name,
-        )?;
-        let dest = self.store.abs(&file);
-        let part = crate::store::temp_path(&dest);
+        let dir = Store::originals_dir(meta.as_ref().and_then(|m| m.captured_at.as_deref()));
+        let part = crate::store::temp_path(&self.store.abs(&format!("{dir}/{name}")));
 
         let copy = || -> io::Result<u64> {
-            std::fs::create_dir_all(dest.parent().unwrap())?;
+            std::fs::create_dir_all(part.parent().unwrap())?;
             let n = std::fs::copy(src, &part)?;
             if n != std::fs::metadata(src)?.len() {
                 return Err(io::Error::other("short copy"));
             }
             // FlushFileBuffers on Windows needs write access; a read-only handle fails with
             // ERROR_ACCESS_DENIED.
-            std::fs::OpenOptions::new().write(true).open(&part)?.sync_all()?;
-            // Originals are never modified; make that explicit.
-            let mut perm = std::fs::metadata(&part)?.permissions();
-            perm.set_readonly(true);
-            std::fs::set_permissions(&part, perm)?;
-            std::fs::rename(&part, &dest)?;
+            std::fs::OpenOptions::new()
+                .write(true)
+                .open(&part)?
+                .sync_all()?;
             Ok(n)
         };
         let size = match copy() {
@@ -284,6 +288,44 @@ impl Importer<'_> {
                 return Err(format!("copy failed: {e}"));
             }
         };
+        // Into a free name, never over a file: if something appears at the reserved name
+        // first (another program, or a name differing only in case), take the next one.
+        let mut placed = None;
+        for _ in 0..100 {
+            let file = match self.reserve(&dir, &name) {
+                Ok(f) => f,
+                Err(e) => {
+                    let _ = std::fs::remove_file(&part);
+                    return Err(e);
+                }
+            };
+            let dest = self.store.abs(&file);
+            match crate::store::rename_noreplace(&part, &dest) {
+                Ok(()) => {
+                    placed = Some((file, dest));
+                    break;
+                }
+                Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
+                Err(e) => {
+                    let _ = std::fs::remove_file(&part);
+                    return Err(format!("copy failed: {e}"));
+                }
+            }
+        }
+        let Some((file, dest)) = placed else {
+            let _ = std::fs::remove_file(&part);
+            return Err("copy failed: no free name".into());
+        };
+        // From here `dest` is a file this call created, so it may remove it.
+        // Originals are never modified; make that explicit.
+        if let Err(e) = std::fs::metadata(&dest).and_then(|m| {
+            let mut perm = m.permissions();
+            perm.set_readonly(true);
+            std::fs::set_permissions(&dest, perm)
+        }) {
+            remove_readonly(&dest);
+            return Err(format!("copy failed: {e}"));
+        }
 
         let new = NewImage {
             hash: hash.clone(),
@@ -527,4 +569,37 @@ pub async fn library_recover(app: AppHandle) -> CmdResult<ImportSummary> {
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tonality_core::Catalog;
+
+    #[test]
+    fn reserved_names_compare_like_the_filesystem() {
+        let root =
+            std::env::temp_dir().join(format!("tonality-import-names-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let store = Store::open(root.clone()).unwrap();
+        let catalog = CatalogState::new(Catalog::open_in_memory().unwrap());
+        let importer = Importer {
+            store: &store,
+            catalog: &catalog,
+            import: 0,
+            reserved: Mutex::default(),
+        };
+        let dir = "originals/2026/2026-11-02";
+        assert_eq!(
+            importer.reserve(dir, "IMG_0001.CR2").unwrap(),
+            format!("{dir}/IMG_0001.CR2")
+        );
+        let other = importer.reserve(dir, "img_0001.cr2").unwrap();
+        if cfg!(any(target_os = "macos", windows)) {
+            assert_eq!(other, format!("{dir}/img_0001 (2).cr2"));
+        } else {
+            assert_eq!(other, format!("{dir}/img_0001.cr2"));
+        }
+        std::fs::remove_dir_all(&root).unwrap();
+    }
 }

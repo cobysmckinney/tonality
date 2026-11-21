@@ -174,6 +174,12 @@ pub fn lens_table(profile: Option<&LensProfile>, s: &LensCorrection, w: f32, h: 
             lo = hi;
             hi *= 1.5;
         }
+        // Strong barrel correction can need less than 0.6 (it reads well inside the source):
+        // widen downwards too, rather than return a zoom that crops more than needed.
+        while inside(lo) && lo > 0.1 {
+            hi = lo;
+            lo /= 1.5;
+        }
         if inside(lo) {
             lo
         } else {
@@ -222,6 +228,7 @@ pub fn lens_table(profile: Option<&LensProfile>, s: &LensCorrection, w: f32, h: 
 /// ratio. `src_w × src_h` is the photo's size.
 pub struct UvToSource {
     green: Radial,
+    vignetting: Radial,
     ax: f32,
     ay: f32,
     active: bool,
@@ -234,6 +241,7 @@ impl UvToSource {
             .max(1e-6);
         Self {
             green: std::array::from_fn(|i| table.knots[i][1]),
+            vignetting: std::array::from_fn(|i| table.knots[i][3]),
             ax: src_w as f32 / diag,
             ay: src_h as f32 / diag,
             active: table.active,
@@ -241,16 +249,25 @@ impl UvToSource {
     }
 
     pub fn map(&self, uv: [f32; 2]) -> [f32; 2] {
+        self.map_with_gain(uv).0
+    }
+
+    /// [`map`](Self::map), plus the vignetting gain the shader multiplies that source pixel by
+    /// (the table's gain at the source radius `r·k(r)`; 1 when correction is off).
+    pub fn map_with_gain(&self, uv: [f32; 2]) -> ([f32; 2], f32) {
         if !self.active {
-            return uv;
+            return (uv, 1.0);
         }
         let (dx, dy) = (uv[0] - 0.5, uv[1] - 0.5);
         let r = ((dx * 2.0 * self.ax).powi(2) + (dy * 2.0 * self.ay).powi(2)).sqrt();
         let k = sample(&self.green, r);
-        [
-            (0.5 + k * dx).clamp(0.0, 1.0),
-            (0.5 + k * dy).clamp(0.0, 1.0),
-        ]
+        (
+            [
+                (0.5 + k * dx).clamp(0.0, 1.0),
+                (0.5 + k * dy).clamp(0.0, 1.0),
+            ],
+            sample(&self.vignetting, r * k),
+        )
     }
 }
 
@@ -356,12 +373,9 @@ mod tests {
         );
     }
 
-    #[test]
-    fn zooms_so_corners_stay_filled() {
-        let (w, h) = (6000.0, 4000.0);
-        let t = lens_table(Some(&barrel()), &on(), w, h);
-        assert!(t.active);
-        // Every output edge point reads inside the source, and tightly so somewhere (no waste).
+    /// Asserts every output edge point of `t` reads inside a `w × h` source, and returns how
+    /// close the tightest one comes to the source's edge (1 = exactly on it: no waste).
+    fn edge_fit(t: &LensTable, w: f32, h: f32) -> f32 {
         let d = f32::hypot(w, h);
         let (ax, ay) = (w / d, h / d);
         let read = |x: f32, y: f32, c: usize| {
@@ -386,10 +400,41 @@ mod tests {
                 }
             }
         }
+        tight
+    }
+
+    #[test]
+    fn zooms_so_corners_stay_filled() {
+        let (w, h) = (6000.0, 4000.0);
+        let t = lens_table(Some(&barrel()), &on(), w, h);
+        assert!(t.active);
+        let tight = edge_fit(&t, w, h);
         assert!(tight > 0.99, "zoomed in more than needed: {tight}");
         // Barrel correction pulls the edges in, so it zooms slightly *out* (uses more of the sensor).
         assert!(t.knots[0][1] > 1.0);
         assert!(t.margin > 0.0);
+    }
+
+    #[test]
+    fn strong_barrel_correction_zooms_out_below_the_initial_bracket() {
+        // A profile at 200% plus full manual correction reads well inside the source: the zoom
+        // has to go below 0.6 to use it all.
+        let p = LensProfile {
+            distortion: Some([radial(|r| 1.0 - 0.2 * r * r); 3]),
+            chromatic: false,
+            vignetting: None,
+            ..barrel()
+        };
+        let s = LensCorrection {
+            distortion: 200.0,
+            manual_distortion: 100.0,
+            ..on()
+        };
+        let (w, h) = (6000.0, 4000.0);
+        let t = lens_table(Some(&p), &s, w, h);
+        let tight = edge_fit(&t, w, h);
+        assert!(tight > 0.995, "zoomed in more than needed: {tight}");
+        assert!(t.knots[0][1] > 1.0 / 0.6, "zoom stuck at 0.6");
     }
 
     #[test]

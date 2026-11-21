@@ -362,7 +362,7 @@ export class PreviewRenderer {
     brush: BrushLayers | null = null,
   ): HTMLCanvasElement | null {
     const gl = this.gl;
-    if (!this.texture) return null;
+    if (!this.texture || gl.isContextLost()) return null;
     const fr = framingOf(params);
     const s = Math.min(1, edge / Math.max(fr.w, fr.h));
     const w = Math.max(1, Math.round(fr.w * s));
@@ -468,8 +468,19 @@ export class PreviewRenderer {
     return out;
   }
 
-  setImage(width: number, height: number, rgb16f: Uint16Array, fullW = width, fullH = height) {
+  /** The photo whose pixels are uploaded (as given to `setImage`). */
+  imageId: number | null = null;
+
+  setImage(
+    width: number,
+    height: number,
+    rgb16f: Uint16Array,
+    fullW = width,
+    fullH = height,
+    imageId: number | null = null,
+  ) {
     const gl = this.gl;
+    this.imageId = imageId;
     if (this.texture) gl.deleteTexture(this.texture);
     this.dropDetail();
     // Wait for this photo's params: drawing it with the previous photo's look (and histogram)
@@ -920,6 +931,7 @@ export class PreviewRenderer {
     gl.deleteVertexArray(this.vao);
     gl.deleteProgram(this.program);
     this.texture = null;
+    this.imageId = null;
     if (releaseContext) gl.getExtension("WEBGL_lose_context")?.loseContext();
   }
 }

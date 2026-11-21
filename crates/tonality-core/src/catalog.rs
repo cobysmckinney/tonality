@@ -135,6 +135,22 @@ const MIGRATIONS: &[&str] = &[
     DROP TABLE heads;
     ALTER TABLE heads_v4 RENAME TO heads;
     "#,
+    // v5: tombstones. Commits and branches deleted here (a slider gesture that ended where it
+    // started, a deleted branch), keyed the way a sidecar names them, so merging a sidecar
+    // written before the delete (the app died before rewriting it) doesn't bring them back.
+    r#"
+    CREATE TABLE dropped_commits (
+        image_id    INTEGER NOT NULL REFERENCES images(id) ON DELETE CASCADE,
+        created_at  INTEGER NOT NULL,
+        PRIMARY KEY (image_id, created_at)
+    ) WITHOUT ROWID;
+    CREATE TABLE deleted_branches (
+        image_id        INTEGER NOT NULL REFERENCES images(id) ON DELETE CASCADE,
+        name            TEXT NOT NULL,
+        tip_created_at  INTEGER NOT NULL,   -- the branch's tip when it was deleted
+        PRIMARY KEY (image_id, name, tip_created_at)
+    ) WITHOUT ROWID;
+    "#,
 ];
 
 pub fn system_clock() -> Clock {

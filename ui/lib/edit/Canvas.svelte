@@ -145,7 +145,10 @@
   $effect(() => {
     const r = renderer;
     if (!r) return;
-    r.setImage(image.width, image.height, pixels, image.fullWidth, image.fullHeight);
+    // Leaving the previous photo: let its library thumbnail render while its pixels are still
+    // uploaded (the attach effect below only lets go after this upload).
+    untrack(() => attachRenderer(null, null));
+    r.setImage(image.width, image.height, pixels, image.fullWidth, image.fullHeight, image.id);
     r.setZoom(devZoom);
   });
 
