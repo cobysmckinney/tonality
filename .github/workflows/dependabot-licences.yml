@@ -1,0 +1,63 @@
+# Cargo bumps change licences/THIRD-PARTY-NOTICES.txt, which CI checks. Dependabot can't
+# regenerate it, so this does, pushes the result to the PR branch and re-runs CI on it.
+#
+# pull_request_target gives a write token, so the job runs only for Dependabot's own Cargo
+# branches in this repo, and only `cargo fetch` and `cargo about` touch the PR's files: neither
+# runs build scripts or anything from the PR. A push made with GITHUB_TOKEN doesn't trigger
+# workflows, so CI is dispatched by hand afterwards (and this job can't retrigger itself).
+name: Dependabot licences
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened]
+
+concurrency:
+  group: dependabot-licences-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  regenerate:
+    name: Regenerate licence notices
+    if: >-
+      github.event.pull_request.user.login == 'dependabot[bot]' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      startsWith(github.event.pull_request.head.ref, 'dependabot/cargo/')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      actions: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
+
+      # The same command as `npm run licences`, spelled out so nothing from the PR's
+      # package.json runs with this token.
+      - name: Generate
+        run: |
+          cargo install --locked cargo-about --version 0.9.3 --features cli
+          cargo fetch --locked
+          cargo about generate --locked --fail -c licences/about.toml \
+            -o licences/THIRD-PARTY-NOTICES.txt licences/about.hbs
+
+      - name: Push and re-run CI
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRANCH: ${{ github.event.pull_request.head.ref }}
+        run: |
+          if git diff --quiet -- licences/THIRD-PARTY-NOTICES.txt; then
+            echo "Notices already up to date."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "Update licence notices" -- licences/THIRD-PARTY-NOTICES.txt
+          git push "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "HEAD:refs/heads/${BRANCH}"
+          gh workflow run ci.yml --repo "$GITHUB_REPOSITORY" --ref "$BRANCH"
