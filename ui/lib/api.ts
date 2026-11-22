@@ -69,6 +69,8 @@ export const api = {
   },
   exportImages: (ids: number[], settings: ExportSettings) =>
     invoke<ExportSummary>("export_images", { ids, settings }),
+  /** Stop the running export once the file it's on is written. */
+  exportCancel: () => invoke<void>("export_cancel"),
   /**
    * Raster mask layers: `layers` 8-bit `width × height` images, one per brush or AI mask.
    * `missing`: indices of AI masks whose raster hasn't been generated yet.

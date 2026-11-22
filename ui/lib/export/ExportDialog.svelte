@@ -77,6 +77,7 @@
       {#if exporter.result}
         {@const r = exporter.result}
         <p class="done">
+          {#if r.cancelled}Stopped.{/if}
           {r.written.length} file{r.written.length === 1 ? "" : "s"} written to
           <strong>{folderName(r.folder)}</strong>
         </p>
@@ -221,15 +222,30 @@
         {#if exporter.running}
           <div class="progress">
             <div class="bar"><div style:width="{pct}%"></div></div>
-            <span>{exporter.progress?.name ?? "Starting…"}</span>
+            <span>
+              {#if exporter.stopping}
+                Stopping after {exporter.progress?.name ?? "this photo"}…
+              {:else}
+                {exporter.progress?.name ?? "Starting…"}
+              {/if}
+            </span>
           </div>
         {/if}
         {#if exporter.error}<p class="error">{exporter.error}</p>{/if}
 
         <div class="actions">
-          <button class="ghost" onclick={() => exporter.close()} disabled={exporter.running}>
-            Cancel
-          </button>
+          {#if exporter.running}
+            <button
+              class="ghost"
+              onclick={() => exporter.stop()}
+              disabled={exporter.stopping}
+              title="Stop once the file being written is finished. Files already written stay."
+            >
+              Stop
+            </button>
+          {:else}
+            <button class="ghost" onclick={() => exporter.close()}>Cancel</button>
+          {/if}
           <button
             class="primary"
             onclick={() => exporter.run()}

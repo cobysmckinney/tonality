@@ -388,6 +388,7 @@ pub fn run() {
             preview_pixels,
             detail_region,
             export::export_images,
+            export::export_cancel,
             develop_params,
             presence_maps,
             develop_curve,

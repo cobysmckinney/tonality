@@ -14,6 +14,7 @@ use tonality_raw::FullImage;
 use tonality_render::{curve_lut_rgba16f, DevelopParams, Gpu, Rendered, Source};
 use ts_rs::TS;
 
+use crate::cancel::Cancel;
 use crate::history::CatalogState;
 use crate::images::Images;
 use crate::store::Store;
@@ -120,6 +121,18 @@ pub struct ExportSummary {
     pub written: Vec<String>,
     pub failed: Vec<String>,
     pub folder: String,
+    /// Stopped by the user before every file was written.
+    pub cancelled: bool,
+}
+
+/// Raised by [`export_cancel`].
+static CANCEL: Cancel = Cancel::new();
+
+/// Stop the export that's running, once the file it is on is written. Files already written
+/// stay.
+#[tauri::command]
+pub fn export_cancel() {
+    CANCEL.request();
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -198,6 +211,7 @@ pub async fn export_images(
     images: State<'_, Images>,
 ) -> CmdResult<ExportSummary> {
     let folder = export_folder(&settings.folder)?;
+    CANCEL.clear();
     let images = images.inner().clone();
     // Off the async runtime: gathering reads the catalog (every version of every photo), and
     // rendering is long.
@@ -205,7 +219,7 @@ pub async fn export_images(
         std::fs::create_dir_all(&folder)
             .map_err(|e| format!("cannot create {}: {e}", folder.display()))?;
         let jobs = gather(&app, &ids, &settings)?;
-        run(jobs, settings, folder, images, app)
+        run(jobs, settings, folder, images, app, &CANCEL)
     })
     .await
     .map_err(|e| e.to_string())?
@@ -279,12 +293,14 @@ fn run(
     folder: PathBuf,
     images: Images,
     app: AppHandle,
+    cancel: &Cancel,
 ) -> CmdResult<ExportSummary> {
     let total: usize = jobs.iter().map(|j| j.versions.len()).sum();
     let mut summary = ExportSummary {
         written: vec![],
         failed: vec![],
         folder: folder.display().to_string(),
+        cancelled: false,
     };
     let mut done = 0usize;
     let emit = |done: f32, name: &str| {
@@ -298,7 +314,12 @@ fn run(
         );
     };
 
-    for job in jobs {
+    // Checked between files only, so one being written is always finished.
+    'jobs: for job in jobs {
+        if cancel.requested() {
+            summary.cancelled = true;
+            break;
+        }
         emit(done as f32, &job.stem);
         // Reuse the decode of the photo open in Edit; decode others just for this export.
         let full: Result<Arc<FullImage>, String> = match images.cached_full(job.image) {
@@ -338,6 +359,10 @@ fn run(
             });
 
         for (suffix, edit) in &job.versions {
+            if cancel.requested() {
+                summary.cancelled = true;
+                break 'jobs;
+            }
             let label = match suffix {
                 Some(s) => format!("{} — {s}", job.stem),
                 None => job.stem.clone(),
