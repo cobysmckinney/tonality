@@ -273,6 +273,10 @@ impl Importer<'_> {
             if n != std::fs::metadata(src)?.len() {
                 return Err(io::Error::other("short copy"));
             }
+            // `copy` gives the copy the source's permissions, and a read-only source (a locked
+            // card, a photo coming back from the Trash) would leave one that can't be opened to
+            // be flushed.
+            make_writable(&part)?;
             // FlushFileBuffers on Windows needs write access; a read-only handle fails with
             // ERROR_ACCESS_DENIED.
             std::fs::OpenOptions::new()
@@ -350,6 +354,23 @@ impl Importer<'_> {
             }
         }
     }
+}
+
+/// Let the owner write to `path`, if nobody can.
+fn make_writable(path: &Path) -> io::Result<()> {
+    let mut perm = std::fs::metadata(path)?.permissions();
+    if !perm.readonly() {
+        return Ok(());
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        perm.set_mode(perm.mode() | 0o200);
+    }
+    #[cfg(not(unix))]
+    #[allow(clippy::permissions_set_readonly_false)]
+    perm.set_readonly(false);
+    std::fs::set_permissions(path, perm)
 }
 
 fn remove_readonly(path: &Path) {
@@ -803,6 +824,44 @@ mod tests {
 
         assert_eq!(s.removed, [id]);
         assert!(catalog.with(|c| c.image_file(id)).is_err());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn a_read_only_file_can_be_imported() {
+        // Originals in the library are read-only, so this is every photo that comes back from
+        // the Trash, as well as files on a locked card.
+        let root = std::env::temp_dir().join(format!("tonality-import-ro-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let store = Store::open(root.join("library")).unwrap();
+        let catalog = CatalogState::new(Catalog::open_in_memory().unwrap());
+        let import = catalog.with(|c| c.begin_import("card", "/card")).unwrap();
+        let src = root.join("DSC2.ARW");
+        std::fs::write(&src, b"not really a raw").unwrap();
+        let mut perm = std::fs::metadata(&src).unwrap().permissions();
+        perm.set_readonly(true);
+        std::fs::set_permissions(&src, perm).unwrap();
+        let importer = Importer {
+            store: &store,
+            catalog: &catalog,
+            import,
+            reserved: Mutex::default(),
+        };
+
+        let outcome = importer.one(&src, "feedbeef".into());
+
+        match outcome {
+            Outcome::Added(id) => {
+                let (file, _, _) = catalog.with(|c| c.image_file(id)).unwrap();
+                let copy = store.abs(&file);
+                assert_eq!(std::fs::read(&copy).unwrap(), b"not really a raw");
+                assert!(std::fs::metadata(&copy).unwrap().permissions().readonly());
+                remove_readonly(&copy);
+            }
+            Outcome::Duplicate(_) => panic!("duplicate"),
+            Outcome::Failed(e) => panic!("{e}"),
+        }
+        remove_readonly(&src);
         std::fs::remove_dir_all(&root).unwrap();
     }
 
