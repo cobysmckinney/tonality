@@ -14,6 +14,7 @@ use tonality_core::library::{ImageQuery, ImageRow, ImportInfo, ImportSummary, Ne
 use tonality_core::ImageId;
 use ts_rs::TS;
 
+use crate::cancel::Cancel;
 use crate::history::CatalogState;
 use crate::sidecar;
 use crate::store::Store;
@@ -206,6 +207,8 @@ enum Outcome {
     Added(ImageId),
     Duplicate(String),
     Failed(String),
+    /// Never started: the import was stopped first.
+    Skipped,
 }
 
 struct Importer<'a> {
@@ -362,6 +365,40 @@ fn remove_readonly(path: &Path) {
     let _ = std::fs::remove_file(path);
 }
 
+/// Copy and catalogue `work` (index, file, hash) on `pool`, calling `progress` after each one.
+/// Once `cancel` is requested, photos not yet started are skipped; those under way finish, so
+/// every file in the library is whole and catalogued.
+fn copy_all(
+    pool: &rayon::ThreadPool,
+    importer: &Importer,
+    work: Vec<(usize, &PathBuf, String)>,
+    cancel: &Cancel,
+    progress: &(dyn Fn() + Sync),
+) -> Vec<(usize, Outcome)> {
+    pool.install(|| {
+        work.into_par_iter()
+            .map(|(i, f, h)| {
+                let o = if cancel.requested() {
+                    Outcome::Skipped
+                } else {
+                    importer.one(f, h)
+                };
+                progress();
+                (i, o)
+            })
+            .collect()
+    })
+}
+
+/// Raised by [`library_import_cancel`].
+static IMPORT_CANCEL: Cancel = Cancel::new();
+
+/// Stop the import that's running: photos already copied stay, the rest are left out.
+#[tauri::command]
+pub fn library_import_cancel() {
+    IMPORT_CANCEL.request();
+}
+
 /// Held by import and recovery: recovery must never see an original that an import has copied
 /// but not yet catalogued.
 static LIBRARY_WRITE: Mutex<()> = Mutex::new(());
@@ -369,6 +406,10 @@ static LIBRARY_WRITE: Mutex<()> = Mutex::new(());
 /// Copy photos (files and/or folders) into the library. Emits `import-progress` events.
 #[tauri::command]
 pub async fn library_import(paths: Vec<String>, app: AppHandle) -> CmdResult<ImportSummary> {
+    // Here, not once the work starts: a Stop pressed while this import waits its turn (behind
+    // the launch's recovery, say) must still count.
+    let cancel = &IMPORT_CANCEL;
+    cancel.clear();
     tauri::async_runtime::spawn_blocking(move || {
         let _guard = LIBRARY_WRITE.lock().unwrap_or_else(|e| e.into_inner());
         let store = app.state::<Store>();
@@ -401,10 +442,10 @@ pub async fn library_import(paths: Vec<String>, app: AppHandle) -> CmdResult<Imp
         // Pass 1: hash everything. Duplicates (already in the library, or the same file twice in
         // this import) are settled here, before anything is copied, and deterministically: the
         // first file in folder order wins.
-        let hashes: Vec<Result<String, String>> = pool.install(|| {
+        let hashes: Vec<Option<Result<String, String>>> = pool.install(|| {
             files
                 .par_iter()
-                .map(|f| hash_file(f).map_err(|e| e.to_string()))
+                .map(|f| (!cancel.requested()).then(|| hash_file(f).map_err(|e| e.to_string())))
                 .collect()
         });
         let mut seen = HashSet::new();
@@ -412,14 +453,15 @@ pub async fn library_import(paths: Vec<String>, app: AppHandle) -> CmdResult<Imp
         let mut outcomes: Vec<Option<Outcome>> = Vec::with_capacity(files.len());
         for (i, (f, h)) in files.iter().zip(hashes).enumerate() {
             outcomes.push(match h {
-                Err(e) => Some(Outcome::Failed(format!("{}: {e}", f.display()))),
-                Ok(h)
+                None => Some(Outcome::Skipped),
+                Some(Err(e)) => Some(Outcome::Failed(format!("{}: {e}", f.display()))),
+                Some(Ok(h))
                     if !seen.insert(h.clone())
                         || catalog.with(|c| c.image_by_hash(&h))?.is_some() =>
                 {
                     Some(Outcome::Duplicate(h))
                 }
-                Ok(h) => {
+                Some(Ok(h)) => {
                     work.push((i, f, h));
                     None
                 }
@@ -430,17 +472,11 @@ pub async fn library_import(paths: Vec<String>, app: AppHandle) -> CmdResult<Imp
 
         // Pass 2: copy and catalogue the new ones.
         let done = AtomicU32::new(dupes);
-        let copied: Vec<(usize, Outcome)> = pool.install(|| {
-            work.into_par_iter()
-                .map(|(i, f, h)| {
-                    let o = importer.one(f, h);
-                    let n = done.fetch_add(1, Ordering::Relaxed) + 1;
-                    if n.is_multiple_of(4) || n == total {
-                        let _ = app.emit("import-progress", ImportProgress { done: n, total });
-                    }
-                    (i, o)
-                })
-                .collect()
+        let copied = copy_all(&pool, &importer, work, cancel, &|| {
+            let n = done.fetch_add(1, Ordering::Relaxed) + 1;
+            if n.is_multiple_of(4) || n == total {
+                let _ = app.emit("import-progress", ImportProgress { done: n, total });
+            }
         });
         for (i, o) in copied {
             outcomes[i] = Some(o);
@@ -472,6 +508,7 @@ pub async fn library_import(paths: Vec<String>, app: AppHandle) -> CmdResult<Imp
                     s.failed += 1;
                     s.error.get_or_insert(e);
                 }
+                Outcome::Skipped => s.skipped += 1,
             }
         }
         s.import = catalog.with(|c| c.finish_import(import))?;
@@ -575,6 +612,116 @@ pub async fn library_recover(app: AppHandle) -> CmdResult<ImportSummary> {
 mod tests {
     use super::*;
     use tonality_core::Catalog;
+
+    /// A library and `n` files to import into it: `(root, store, catalog, import, sources)`.
+    fn import_of(tag: &str, n: usize) -> (PathBuf, Store, CatalogState, i64, Vec<PathBuf>) {
+        let root =
+            std::env::temp_dir().join(format!("tonality-import-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let store = Store::open(root.join("library")).unwrap();
+        let catalog = CatalogState::new(Catalog::open_in_memory().unwrap());
+        let import = catalog.with(|c| c.begin_import("card", "/card")).unwrap();
+        std::fs::create_dir_all(root.join("card")).unwrap();
+        let sources = (0..n)
+            .map(|i| {
+                let p = root.join("card").join(format!("IMG_{i:02}.ARW"));
+                std::fs::write(&p, format!("not really raw {i}")).unwrap();
+                p
+            })
+            .collect();
+        (root, store, catalog, import, sources)
+    }
+
+    /// Files under the library's `originals/`, including any left half-copied.
+    fn originals(store: &Store) -> Vec<PathBuf> {
+        fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
+            for e in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+                if e.path().is_dir() {
+                    walk(&e.path(), out);
+                } else {
+                    out.push(e.path());
+                }
+            }
+        }
+        let mut out = Vec::new();
+        walk(&store.abs("originals"), &mut out);
+        out
+    }
+
+    fn pool() -> rayon::ThreadPool {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(4)
+            .build()
+            .unwrap()
+    }
+
+    #[test]
+    fn a_stopped_import_keeps_what_it_copied_and_skips_the_rest() {
+        let (root, store, catalog, import, sources) = import_of("stop", 24);
+        let importer = Importer {
+            store: &store,
+            catalog: &catalog,
+            import,
+            reserved: Mutex::default(),
+        };
+        let work = sources
+            .iter()
+            .enumerate()
+            .map(|(i, f)| (i, f, hash_file(f).unwrap()))
+            .collect();
+        let cancel = Cancel::new();
+
+        // Stop as soon as the first photo is in.
+        let outcomes = copy_all(&pool(), &importer, work, &cancel, &|| cancel.request());
+
+        let added = outcomes
+            .iter()
+            .filter(|(_, o)| matches!(o, Outcome::Added(_)))
+            .count();
+        let skipped = outcomes
+            .iter()
+            .filter(|(_, o)| matches!(o, Outcome::Skipped))
+            .count();
+        assert!(added >= 1, "what was under way finished");
+        assert!(skipped >= 1, "the rest never started");
+        assert_eq!(added + skipped, 24);
+        assert_eq!(catalog.with(|c| c.image_count()).unwrap() as usize, added);
+        let files = originals(&store);
+        assert_eq!(
+            files.len(),
+            added,
+            "one whole file per photo, nothing half-copied: {files:?}"
+        );
+        for f in files {
+            remove_readonly(&f);
+        }
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn an_import_stopped_before_it_copies_anything_copies_nothing() {
+        let (root, store, catalog, import, sources) = import_of("stop-early", 3);
+        let importer = Importer {
+            store: &store,
+            catalog: &catalog,
+            import,
+            reserved: Mutex::default(),
+        };
+        let work = sources
+            .iter()
+            .enumerate()
+            .map(|(i, f)| (i, f, hash_file(f).unwrap()))
+            .collect();
+        let cancel = Cancel::new();
+        cancel.request();
+
+        let outcomes = copy_all(&pool(), &importer, work, &cancel, &|| {});
+
+        assert!(outcomes.iter().all(|(_, o)| matches!(o, Outcome::Skipped)));
+        assert_eq!(outcomes.len(), 3);
+        assert!(originals(&store).is_empty());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
 
     #[test]
     fn reserved_names_compare_like_the_filesystem() {

@@ -1,4 +1,5 @@
 mod ai;
+mod cancel;
 mod export;
 mod history;
 mod images;
@@ -409,6 +410,7 @@ pub fn run() {
             thumbs::library_save_edited,
             library::library_overview,
             library::library_import,
+            library::library_import_cancel,
             library::library_recover,
             library::library_images,
             library::library_set_rating,

@@ -118,6 +118,8 @@ pub struct ImportSummary {
     /// Already in the library (same file contents).
     pub duplicates: u32,
     pub failed: u32,
+    /// Left out because the import was stopped before it reached them.
+    pub skipped: u32,
     /// Photos whose edits, rating or flag came from a `.tonality` sidecar.
     pub restored: u32,
     /// Ids of every photo in this import, new or duplicate, in import order.
