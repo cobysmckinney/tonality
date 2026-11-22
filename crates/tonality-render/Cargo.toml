@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 half.workspace = true
+log.workspace = true
 naga = { version = "30", features = ["wgsl-in", "glsl-out"] }
 pollster = "1.0"
 rayon.workspace = true

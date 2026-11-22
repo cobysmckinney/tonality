@@ -30,6 +30,7 @@ fn pool() -> &'static rayon::ThreadPool {
             .num_threads(n)
             .thread_name(|i| format!("thumb-{i}"))
             .start_handler(|_| crate::priority::lower_this_thread())
+            .panic_handler(crate::priority::job_panicked)
             .build()
             .unwrap()
     })
@@ -211,7 +212,7 @@ pub fn handle<R: Runtime>(
                 respond(responder, StatusCode::OK, bytes)
             }
             Err(e) => {
-                eprintln!("[thumb] {}: {e}", path.display());
+                log::warn!("{}: {e}", path.display());
                 respond(responder, StatusCode::UNPROCESSABLE_ENTITY, e.into_bytes())
             }
         }

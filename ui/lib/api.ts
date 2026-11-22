@@ -131,6 +131,9 @@ export const api = {
     set: (settings: Settings) => invoke<void>("settings_set", { settings }),
   },
 
+  /** The app's log file, or null if it couldn't be opened. */
+  logPath: () => invoke<string | null>("log_path"),
+
   updates: {
     version: () => invoke<string>("app_version"),
     /** Ask the selected channel for an update; null when up to date. */

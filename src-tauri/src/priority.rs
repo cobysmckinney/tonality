@@ -20,6 +20,11 @@ pub fn lower_this_thread() {
     }
 }
 
+/// A job handed to a pool with `spawn` panicked. The panic hook has already written it to the
+/// log ([`crate::logging`]); having a handler at all is what keeps rayon from aborting the app
+/// over one failed thumbnail or decode.
+pub fn job_panicked(_: Box<dyn std::any::Any + Send>) {}
+
 /// A low-priority pool for background work, with as many threads as cores: `install` on it and
 /// parallel loops inside run here too.
 pub fn pool() -> &'static rayon::ThreadPool {
@@ -28,6 +33,7 @@ pub fn pool() -> &'static rayon::ThreadPool {
         rayon::ThreadPoolBuilder::new()
             .thread_name(|i| format!("background-{i}"))
             .start_handler(|_| lower_this_thread())
+            .panic_handler(job_panicked)
             .build()
             .expect("background pool")
     })
@@ -42,6 +48,7 @@ pub fn decode_pool() -> &'static rayon::ThreadPool {
         rayon::ThreadPoolBuilder::new()
             .thread_name(|i| format!("full-decode-{i}"))
             .start_handler(|_| lower_this_thread())
+            .panic_handler(job_panicked)
             .build()
             .expect("decode pool")
     })
@@ -49,6 +56,15 @@ pub fn decode_pool() -> &'static rayon::ThreadPool {
 
 #[cfg(all(test, target_os = "linux"))]
 mod tests {
+    #[test]
+    fn a_panicking_job_does_not_take_the_pool_down() {
+        // Without a panic handler, rayon aborts the whole process here.
+        super::pool().spawn(|| panic!("job failed"));
+        super::decode_pool().spawn(|| panic!("job failed"));
+        assert_eq!(super::pool().install(|| 2 + 2), 4);
+        assert_eq!(super::decode_pool().install(|| 2 + 2), 4);
+    }
+
     #[test]
     fn pool_threads_run_at_lower_priority() {
         let nice = super::pool().install(|| unsafe {

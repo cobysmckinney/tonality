@@ -5,6 +5,7 @@ mod images;
 mod jpeg;
 mod layers;
 mod library;
+mod logging;
 mod priority;
 mod sidecar;
 mod store;
@@ -126,12 +127,6 @@ fn startup_import() -> Option<String> {
     std::env::var("TONALITY_IMPORT")
         .ok()
         .filter(|p| !p.is_empty())
-}
-
-/// Dev: frontend console messages, mirrored to the terminal.
-#[tauri::command]
-fn dev_log(level: String, message: String) {
-    eprintln!("[ui:{level}] {message}");
 }
 
 /// Dev/test hook: where the frontend should write a PNG of the first rendered frame.
@@ -353,6 +348,15 @@ pub fn run() {
         .manage(layers::LayerCache::default())
         .register_asynchronous_uri_scheme_protocol(thumbs::SCHEME, thumbs::handle)
         .setup(|app| {
+            // First, so that anything going wrong below is on record.
+            match app.path().app_log_dir() {
+                Ok(dir) => {
+                    if let Err(e) = logging::init(&dir) {
+                        eprintln!("no log file in {}: {e}", dir.display());
+                    }
+                }
+                Err(e) => eprintln!("no log file: {e}"),
+            }
             let root = Store::resolve(app.path().picture_dir().ok(), app.path().home_dir().ok());
             let store = Store::open(root.clone())
                 .map_err(|e| format!("cannot open library at {root:?}: {e}"))?;
@@ -363,7 +367,7 @@ pub fn run() {
             app.manage(LibraryLock(lock));
             let mut catalog = Catalog::open(store.catalog_path())?;
             thumbs::backfill_aspects(&store, &mut catalog);
-            eprintln!("[tonality] library: {}", store.root().display());
+            log::info!("library: {}", store.root().display());
             app.manage(store);
             app.manage(history::CatalogState::new(catalog));
             app.manage(sidecar::Sidecars::start(app.handle().clone()));
@@ -377,7 +381,8 @@ pub fn run() {
             auto_white_balance,
             startup_path,
             startup_import,
-            dev_log,
+            logging::ui_log,
+            logging::log_path,
             dev_snapshot_path,
             dev_save_snapshot,
             dev_zoom,
@@ -430,7 +435,7 @@ pub fn run() {
         .run(|app, event| {
             if let tauri::RunEvent::Exit = event {
                 if let Err(e) = app.state::<sidecar::Sidecars>().flush() {
-                    eprintln!("[sidecar] {e}");
+                    log::warn!("sidecars not saved on exit: {e}");
                 }
             }
         });
