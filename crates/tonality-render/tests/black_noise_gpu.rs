@@ -1,6 +1,9 @@
 //! Noise around black must average out, not lift the shadows: noise reduction sees the values
 //! below black (sensor noise is symmetric), and black is clipped only afterwards.
-//! Skipped (passes with a note) on machines without a usable adapter.
+//! Skipped (passes with a note) on machines without a usable adapter, unless
+//! `TONALITY_REQUIRE_GPU` is set.
+
+mod common;
 
 use half::f16;
 use tonality_core::color::CameraColor;
@@ -93,13 +96,7 @@ fn mean(r: &Rendered) -> [f64; 3] {
 
 #[test]
 fn noise_around_black_averages_out() {
-    let gpu = match Gpu::new() {
-        Ok(g) => g,
-        Err(e) => {
-            eprintln!("skipped: {e}");
-            return;
-        }
-    };
+    let Some(gpu) = common::gpu() else { return };
     let clean = mean(&render(&gpu, 0.0, false));
     let noisy = mean(&render(&gpu, SIGMA, false));
     let clipped = mean(&render(&gpu, SIGMA, true));

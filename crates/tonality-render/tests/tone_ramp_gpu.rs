@@ -1,6 +1,9 @@
 //! Tone adjustments must keep a brighter input brighter, even when a mask adds its own on top of
 //! the global ones (issue #12: the sum went past what `tone()` handles and inverted tones).
-//! Skipped (passes with a note) on machines without a usable adapter.
+//! Skipped (passes with a note) on machines without a usable adapter, unless
+//! `TONALITY_REQUIRE_GPU` is set.
+
+mod common;
 
 use half::f16;
 use tonality_core::color::CameraColor;
@@ -80,14 +83,7 @@ fn inversions(out: &[f64]) -> Vec<usize> {
 
 #[test]
 fn stacked_tone_adjustments_keep_the_ramp_in_order() {
-    let gpu = match Gpu::new() {
-        Ok(g) => g,
-        Err(e) => {
-            eprintln!("skipped: {e}");
-            return;
-        }
-    };
-    eprintln!("adapter: {}", gpu.adapter);
+    let Some(gpu) = common::gpu() else { return };
 
     type Set = fn(&mut EditState, f32);
     let sliders: [(&str, Set); 5] = [

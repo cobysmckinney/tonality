@@ -70,6 +70,10 @@ npm run check
 npm run format:check
 ```
 
+The shader tests in `crates/tonality-render/tests` need a GPU. They run on yours with
+`cargo test`, skip themselves on CI's Linux runners (which have none), and run in CI's
+**GPU tests** job on a macOS runner.
+
 `cargo fmt --all` and `npm run format` fix the formatting checks. The Rust tests also rewrite
 the TypeScript types in `ui/lib/bindings` from the Rust ones; commit them when they change.
 
