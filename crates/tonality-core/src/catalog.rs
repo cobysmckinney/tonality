@@ -185,16 +185,19 @@ impl Catalog {
 
     fn init(conn: Connection) -> Result<Self> {
         conn.pragma_update(None, "foreign_keys", "ON")?;
-        let version: usize = conn.pragma_query_value(None, "user_version", |r| r.get(0))?;
-        if version > MIGRATIONS.len() {
-            return Err(CatalogError::Invalid(format!(
-                "catalog schema v{version} is newer than this build of tonality supports"
-            )));
-        }
+        let version: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0))?;
+        let version = match usize::try_from(version) {
+            Ok(v) if v <= MIGRATIONS.len() => v,
+            _ => {
+                return Err(CatalogError::Invalid(format!(
+                    "catalog schema v{version} is newer than this build of tonality supports"
+                )));
+            }
+        };
         for (i, sql) in MIGRATIONS.iter().enumerate().skip(version) {
             let tx = conn.unchecked_transaction()?;
             tx.execute_batch(sql)?;
-            tx.pragma_update(None, "user_version", i + 1)?;
+            tx.pragma_update(None, "user_version", i as i64 + 1)?;
             tx.commit()?;
         }
         Ok(Catalog {
@@ -231,7 +234,8 @@ mod tests {
         conn.pragma_update(None, "foreign_keys", "ON").unwrap();
         for (i, sql) in MIGRATIONS[..3].iter().enumerate() {
             conn.execute_batch(sql).unwrap();
-            conn.pragma_update(None, "user_version", i + 1).unwrap();
+            conn.pragma_update(None, "user_version", i as i64 + 1)
+                .unwrap();
         }
         conn.execute_batch(
             "INSERT INTO images (id, hash, file, name, file_size, imported_at) VALUES (1, 'h', 'f', 'n', 1, 0), (2, 'h2', 'f2', 'n2', 1, 0);
