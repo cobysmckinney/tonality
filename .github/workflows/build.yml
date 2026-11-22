@@ -3,7 +3,8 @@
 #
 # The builds run `npm ci`, every crate's build script and third-party actions, so they get a
 # read-only token and hand their files on as workflow artifacts. They do need the updater's
-# signing key, to sign what the app will download.
+# signing key, to sign what the app will download, and the macOS build gets Apple's signing
+# certificate when the repository has one (see "Signing" in the README).
 name: Build
 
 on:
@@ -29,6 +30,20 @@ on:
       TAURI_SIGNING_PRIVATE_KEY:
         required: true
       TAURI_SIGNING_PRIVATE_KEY_PASSWORD:
+        required: false
+      # macOS code signing and notarisation. All optional: without APPLE_CERTIFICATE the app
+      # is ad-hoc signed, as tauri.conf.json says.
+      APPLE_CERTIFICATE:
+        required: false
+      APPLE_CERTIFICATE_PASSWORD:
+        required: false
+      APPLE_SIGNING_IDENTITY:
+        required: false
+      APPLE_ID:
+        required: false
+      APPLE_PASSWORD:
+        required: false
+      APPLE_TEAM_ID:
         required: false
 
 permissions: {}
@@ -90,21 +105,55 @@ jobs:
       - run: npm ci
 
       # Updater bundles are only made here, so local builds don't need the signing key.
+      # With a certificate, the macOS build's signing identity replaces the ad-hoc "-".
       - name: Stamp the version and turn on updater bundles
         shell: bash
         env:
           VERSION: ${{ inputs.version }}
+          MAC_SIGNING_IDENTITY: ${{ runner.os == 'macOS' && secrets.APPLE_CERTIFICATE != '' && secrets.APPLE_SIGNING_IDENTITY || '' }}
         run: |
-          jq -n --arg v "$VERSION" '{version: $v, bundle: {createUpdaterArtifacts: true}}' \
-            > src-tauri/tauri.ci.conf.json
+          conf=$(jq -n --arg v "$VERSION" '{version: $v, bundle: {createUpdaterArtifacts: true}}')
+          if [ -n "$MAC_SIGNING_IDENTITY" ]; then
+            conf=$(jq --arg id "$MAC_SIGNING_IDENTITY" '.bundle.macOS.signingIdentity = $id' <<<"$conf")
+          fi
+          echo "$conf" > src-tauri/tauri.ci.conf.json
           cat src-tauri/tauri.ci.conf.json
 
+      # macOS: with a Developer ID certificate in the repository's secrets, the app is signed
+      # with it and, given the Apple ID too, notarised. Without one it stays ad-hoc signed.
+      # The Apple secrets reach only the macOS build, under names Tauri doesn't read, and are
+      # handed to it only when they're set: an empty variable is still a set one.
       - name: Build
         shell: bash
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        run: npm run tauri build -- --bundles ${{ matrix.bundles }} --config src-tauri/tauri.ci.conf.json
+          MAC_CERTIFICATE: ${{ runner.os == 'macOS' && secrets.APPLE_CERTIFICATE || '' }}
+          MAC_CERTIFICATE_PASSWORD: ${{ runner.os == 'macOS' && secrets.APPLE_CERTIFICATE_PASSWORD || '' }}
+          MAC_SIGNING_IDENTITY: ${{ runner.os == 'macOS' && secrets.APPLE_SIGNING_IDENTITY || '' }}
+          MAC_NOTARY_APPLE_ID: ${{ runner.os == 'macOS' && secrets.APPLE_ID || '' }}
+          MAC_NOTARY_PASSWORD: ${{ runner.os == 'macOS' && secrets.APPLE_PASSWORD || '' }}
+          MAC_NOTARY_TEAM_ID: ${{ runner.os == 'macOS' && secrets.APPLE_TEAM_ID || '' }}
+          BUNDLES: ${{ matrix.bundles }}
+        run: |
+          if [ -n "$MAC_CERTIFICATE" ]; then
+            if [ -z "$MAC_SIGNING_IDENTITY" ]; then
+              echo "::error::APPLE_CERTIFICATE is set but APPLE_SIGNING_IDENTITY is not"
+              exit 1
+            fi
+            export APPLE_CERTIFICATE="$MAC_CERTIFICATE"
+            export APPLE_CERTIFICATE_PASSWORD="$MAC_CERTIFICATE_PASSWORD"
+            export APPLE_SIGNING_IDENTITY="$MAC_SIGNING_IDENTITY"
+            if [ -n "$MAC_NOTARY_APPLE_ID" ] && [ -n "$MAC_NOTARY_PASSWORD" ] && [ -n "$MAC_NOTARY_TEAM_ID" ]; then
+              export APPLE_ID="$MAC_NOTARY_APPLE_ID"
+              export APPLE_PASSWORD="$MAC_NOTARY_PASSWORD"
+              export APPLE_TEAM_ID="$MAC_NOTARY_TEAM_ID"
+              echo "Signing with the Developer ID certificate, and notarising"
+            else
+              echo "::warning::Signed but not notarised: APPLE_ID, APPLE_PASSWORD and APPLE_TEAM_ID aren't all set, so macOS will still warn"
+            fi
+          fi
+          npm run tauri build -- --bundles "$BUNDLES" --config src-tauri/tauri.ci.conf.json
 
       - name: Keep the bundles for the release job
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

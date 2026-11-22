@@ -115,6 +115,32 @@ half is the `TAURI_SIGNING_PRIVATE_KEY` repository secret (a passphrase, if the 
 goes in `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`). If the key is lost, installed apps can't take
 updates signed with a new one. They'd have to be reinstalled by hand, so keep a copy safe.
 
+### Signing
+
+The installers aren't code-signed yet, which is why macOS and Windows warn before the first
+launch. (The updater's own signature, above, is separate: it's what lets an installed app trust
+an update.)
+
+**macOS** is ready to switch on. It needs a paid
+[Apple Developer Program](https://developer.apple.com/programs/) membership and a _Developer ID
+Application_ certificate. Add these repository secrets and the next release or nightly is signed
+with it and notarised:
+
+| Secret                       | What it is                                                                                                                      |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `APPLE_CERTIFICATE`          | The certificate, exported from Keychain Access as a `.p12` and base64-encoded (`openssl base64 -A -in certificate.p12`)         |
+| `APPLE_CERTIFICATE_PASSWORD` | The password chosen when exporting the `.p12`                                                                                   |
+| `APPLE_SIGNING_IDENTITY`     | The certificate's name, as `security find-identity -v -p codesigning` prints it: `Developer ID Application: Your Name (TEAMID)` |
+| `APPLE_ID`                   | The Apple ID to notarise with                                                                                                   |
+| `APPLE_PASSWORD`             | An [app-specific password](https://support.apple.com/102654) for that Apple ID                                                  |
+| `APPLE_TEAM_ID`              | The team ID (the ten characters in brackets in the certificate's name)                                                          |
+
+Without `APPLE_CERTIFICATE` the app stays ad-hoc signed, as now. With the first three but not
+the last three it's signed but not notarised, and macOS still warns; the build says so.
+
+**Windows** isn't wired up, because the route is still to be chosen: Tauri signs through a
+`signCommand`, and what goes in it depends on where the certificate lives.
+
 ## Licences
 
 tonality's code is under the [MIT licence](LICENSE). It also ships or downloads work under
