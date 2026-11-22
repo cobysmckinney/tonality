@@ -177,5 +177,4 @@ export const RAW_EXTENSIONS = [
   "mrw",
   "kdc",
   "dcr",
-  "x3f",
 ];
