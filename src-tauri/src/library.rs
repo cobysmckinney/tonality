@@ -613,6 +613,33 @@ mod tests {
     use super::*;
     use tonality_core::Catalog;
 
+    #[test]
+    fn reserved_names_compare_like_the_filesystem() {
+        let root =
+            std::env::temp_dir().join(format!("tonality-import-names-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let store = Store::open(root.clone()).unwrap();
+        let catalog = CatalogState::new(Catalog::open_in_memory().unwrap());
+        let importer = Importer {
+            store: &store,
+            catalog: &catalog,
+            import: 0,
+            reserved: Mutex::default(),
+        };
+        let dir = "originals/2026/2026-11-02";
+        assert_eq!(
+            importer.reserve(dir, "IMG_0001.CR2").unwrap(),
+            format!("{dir}/IMG_0001.CR2")
+        );
+        let other = importer.reserve(dir, "img_0001.cr2").unwrap();
+        if cfg!(any(target_os = "macos", windows)) {
+            assert_eq!(other, format!("{dir}/img_0001 (2).cr2"));
+        } else {
+            assert_eq!(other, format!("{dir}/img_0001.cr2"));
+        }
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
     /// A library and `n` files to import into it: `(root, store, catalog, import, sources)`.
     fn import_of(tag: &str, n: usize) -> (PathBuf, Store, CatalogState, i64, Vec<PathBuf>) {
         let root =
@@ -720,33 +747,6 @@ mod tests {
         assert!(outcomes.iter().all(|(_, o)| matches!(o, Outcome::Skipped)));
         assert_eq!(outcomes.len(), 3);
         assert!(originals(&store).is_empty());
-        std::fs::remove_dir_all(&root).unwrap();
-    }
-
-    #[test]
-    fn reserved_names_compare_like_the_filesystem() {
-        let root =
-            std::env::temp_dir().join(format!("tonality-import-names-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
-        let store = Store::open(root.clone()).unwrap();
-        let catalog = CatalogState::new(Catalog::open_in_memory().unwrap());
-        let importer = Importer {
-            store: &store,
-            catalog: &catalog,
-            import: 0,
-            reserved: Mutex::default(),
-        };
-        let dir = "originals/2026/2026-11-02";
-        assert_eq!(
-            importer.reserve(dir, "IMG_0001.CR2").unwrap(),
-            format!("{dir}/IMG_0001.CR2")
-        );
-        let other = importer.reserve(dir, "img_0001.cr2").unwrap();
-        if cfg!(any(target_os = "macos", windows)) {
-            assert_eq!(other, format!("{dir}/img_0001 (2).cr2"));
-        } else {
-            assert_eq!(other, format!("{dir}/img_0001.cr2"));
-        }
         std::fs::remove_dir_all(&root).unwrap();
     }
 }
