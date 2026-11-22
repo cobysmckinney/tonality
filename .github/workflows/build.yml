@@ -1,0 +1,169 @@
+# Builds the signed installers and updater bundles for one version of the app. Called by
+# release.yml (stable) and nightly.yml; never run on its own.
+#
+# The builds run `npm ci`, every crate's build script and third-party actions, so they get a
+# read-only token and hand their files on as workflow artifacts. They do need the updater's
+# signing key, to sign what the app will download.
+name: Build
+
+on:
+  workflow_call:
+    inputs:
+      ref:
+        description: Commit or tag to build.
+        type: string
+        required: true
+      version:
+        description: Version stamped into the app (overrides tauri.conf.json).
+        type: string
+        required: true
+      download_url:
+        description: Where the release's files will be downloadable from, for latest.json.
+        type: string
+        required: true
+      notes:
+        description: What the in-app updater shows about this version.
+        type: string
+        default: ""
+    secrets:
+      TAURI_SIGNING_PRIVATE_KEY:
+        required: true
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD:
+        required: false
+
+permissions: {}
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Not older than 24.04: the prebuilt ONNX Runtime that `ort` links needs glibc 2.38
+          # and GCC 13's libstdc++. The AppImage therefore needs glibc 2.39 or newer to run.
+          - name: Linux AppImage
+            os: ubuntu-24.04
+            bundles: appimage
+            files: |
+              target/release/bundle/appimage/*.AppImage
+              target/release/bundle/appimage/*.AppImage.sig
+          # `app` makes the .app.tar.gz the updater installs; the .dmg is for first installs.
+          - name: macOS (Apple Silicon)
+            os: macos-latest
+            bundles: app,dmg
+            files: |
+              target/release/bundle/dmg/*.dmg
+              target/release/bundle/macos/*.app.tar.gz
+              target/release/bundle/macos/*.app.tar.gz.sig
+          - name: Windows installer
+            os: windows-latest
+            bundles: nsis
+            files: |
+              target/release/bundle/nsis/*-setup.exe
+              target/release/bundle/nsis/*-setup.exe.sig
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+
+      - name: Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config libssl-dev \
+            libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: 24
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
+
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+
+      - run: npm ci
+
+      # Updater bundles are only made here, so local builds don't need the signing key.
+      - name: Stamp the version and turn on updater bundles
+        shell: bash
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          jq -n --arg v "$VERSION" '{version: $v, bundle: {createUpdaterArtifacts: true}}' \
+            > src-tauri/tauri.ci.conf.json
+          cat src-tauri/tauri.ci.conf.json
+
+      - name: Build
+        shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: npm run tauri build -- --bundles ${{ matrix.bundles }} --config src-tauri/tauri.ci.conf.json
+
+      - name: Keep the bundles for the release job
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: bundle-${{ runner.os }}
+          path: ${{ matrix.files }}
+          if-no-files-found: error
+          retention-days: 7
+
+  # Gathers every bundle into one flat folder with the `latest.json` the in-app updater reads:
+  # the version, notes, and per platform the download URL and its signature.
+  manifest:
+    name: Updater manifest
+    needs: build
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: bundle-*
+          path: downloaded
+
+      - name: Write latest.json
+        env:
+          VERSION: ${{ inputs.version }}
+          NOTES: ${{ inputs.notes }}
+          DOWNLOAD_URL: ${{ inputs.download_url }}
+        run: |
+          mkdir release
+          find downloaded -type f -exec mv -t release {} +
+          cd release
+          platform() {
+            case "$1" in
+              *.AppImage) echo linux-x86_64 ;;
+              *.app.tar.gz) echo darwin-aarch64 ;;
+              *-setup.exe) echo windows-x86_64 ;;
+            esac
+          }
+          platforms='{}'
+          for sig in *.sig; do
+            file="${sig%.sig}"
+            key=$(platform "$file")
+            [ -n "$key" ] || { echo "::error::No updater platform for $file"; exit 1; }
+            platforms=$(jq --arg k "$key" --arg url "$DOWNLOAD_URL/$file" --rawfile sig "$sig" \
+              '. + {($k): {url: $url, signature: ($sig | rtrimstr("\n"))}}' <<<"$platforms")
+          done
+          for k in linux-x86_64 darwin-aarch64 windows-x86_64; do
+            jq -e --arg k "$k" 'has($k)' <<<"$platforms" >/dev/null ||
+              { echo "::error::No updater bundle for $k"; exit 1; }
+          done
+          jq -n --arg v "$VERSION" --arg notes "$NOTES" \
+            --arg date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --argjson platforms "$platforms" \
+            '{version: $v, notes: $notes, pub_date: $date, platforms: $platforms}' > latest.json
+          cat latest.json
+          ls -l
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release
+          path: release/*
+          if-no-files-found: error
+          retention-days: 7

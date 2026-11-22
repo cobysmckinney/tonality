@@ -9,6 +9,10 @@
   import { exportCurrent } from "$lib/export/targets";
   import Splash from "$lib/Splash.svelte";
   import { targetOwnsKey } from "$lib/keys";
+  import SettingsDialog from "$lib/settings/SettingsDialog.svelte";
+  import { updates } from "$lib/settings/updates.svelte";
+
+  updates.init();
 
   // Dev hooks: TONALITY_OPEN imports and opens a file; TONALITY_IMPORT imports a folder.
   api.startupPath().then((p) => {
@@ -56,6 +60,11 @@
       exportCurrent();
       return;
     }
+    if ((e.ctrlKey || e.metaKey) && e.key === ",") {
+      e.preventDefault();
+      updates.open = true;
+      return;
+    }
     if (targetOwnsKey(e.target, e.key) || e.ctrlKey || e.metaKey || e.altKey) return;
     if (e.key === "g") app.mode = "library";
     else if (e.key === "e") {
@@ -79,6 +88,7 @@
   </main>
 </div>
 <ExportDialog />
+<SettingsDialog />
 {#if app.splash}<Splash />{/if}
 
 <style>

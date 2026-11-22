@@ -17,6 +17,8 @@ import type { ExportSummary } from "$lib/bindings/ExportSummary";
 import type { AiTarget } from "$lib/bindings/AiTarget";
 import type { AiModelInfo } from "$lib/bindings/AiModelInfo";
 import type { LensCorrection } from "$lib/bindings/LensCorrection";
+import type { Settings } from "$lib/bindings/Settings";
+import type { UpdateInfo } from "$lib/bindings/UpdateInfo";
 
 /**
  * Commands run concurrently, so catalog writes that must land in the order they were made
@@ -122,6 +124,21 @@ export const api = {
     /** Detect `target` (downloading the model if needed); resolves to whether anything was found. */
     detect: (imageId: number, target: AiTarget, model: string, lens: LensCorrection | null) =>
       invoke<boolean>("ai_detect", { imageId, target, model, lens }),
+  },
+
+  settings: {
+    get: () => invoke<Settings>("settings_get"),
+    set: (settings: Settings) => invoke<void>("settings_set", { settings }),
+  },
+
+  updates: {
+    version: () => invoke<string>("app_version"),
+    /** Ask the selected channel for an update; null when up to date. */
+    check: () => invoke<UpdateInfo | null>("update_check"),
+    /** Download the update the last check found (progress: `update-progress` events). */
+    download: () => invoke<void>("update_download"),
+    /** Install the downloaded update and restart into it. */
+    install: () => invoke<void>("update_install"),
   },
 
   albums: {

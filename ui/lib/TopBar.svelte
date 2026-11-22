@@ -3,6 +3,7 @@
   import { exportCurrent, exportCount } from "$lib/export/targets";
   import BranchMenu from "$lib/history/BranchMenu.svelte";
   import Logo from "$lib/design/Logo.svelte";
+  import { updates } from "$lib/settings/updates.svelte";
 
   const modes: { id: Mode; label: string; key: string }[] = [
     { id: "library", label: "Library", key: "G" },
@@ -31,6 +32,31 @@
   </nav>
 
   <div class="right">
+    {#if updates.status === "ready" || updates.status === "installing"}
+      <button
+        class="btn"
+        onclick={() => updates.install()}
+        disabled={updates.status === "installing"}
+        title="Install tonality {updates.update?.version} and restart"
+      >
+        Restart to Update
+      </button>
+    {/if}
+    <button
+      class="icon-btn"
+      class:on={updates.open}
+      onclick={() => (updates.open = true)}
+      title="Settings (Ctrl+,)"
+      aria-label="Settings"
+    >
+      <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"
+        ><path d="M2 4.5h7M12 4.5h2M2 11.5h2M7 11.5h7" /><circle
+          cx="10.5"
+          cy="4.5"
+          r="1.5"
+        /><circle cx="5.5" cy="11.5" r="1.5" /></svg
+      >
+    </button>
     <button
       class="btn"
       onclick={exportCurrent}
@@ -72,5 +98,8 @@
   }
   .right {
     justify-self: end;
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
   }
 </style>
