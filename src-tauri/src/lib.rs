@@ -9,6 +9,7 @@ mod priority;
 mod sidecar;
 mod store;
 mod thumbs;
+mod updates;
 
 use images::{ImageInfo, Images};
 use store::Store;
@@ -346,6 +347,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(Images::default())
         .manage(ai::Detector::default())
         .manage(layers::LayerCache::default())
@@ -365,6 +367,7 @@ pub fn run() {
             app.manage(store);
             app.manage(history::CatalogState::new(catalog));
             app.manage(sidecar::Sidecars::start(app.handle().clone()));
+            app.manage(updates::Updates::load(app.handle()));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -415,6 +418,12 @@ pub fn run() {
             library::album_delete,
             library::album_add,
             library::album_remove,
+            updates::settings_get,
+            updates::settings_set,
+            updates::app_version,
+            updates::update_check,
+            updates::update_download,
+            updates::update_install,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tonality")

@@ -30,7 +30,10 @@ change is a step you can go back to, and a photo can have several versions side 
 Installers for Linux (AppImage), macOS (Apple Silicon) and Windows are attached to each
 [release](https://github.com/cobysmckinney/tonality/releases).
 
-The builds are not signed, so macOS and Windows will warn before the first launch.
+The builds are not signed, so macOS and Windows will warn before the first launch. After that,
+tonality updates itself. Pick the Stable or Nightly channel in Settings (Ctrl+,). Updates
+download in the background and install when you click **Restart to Update**. On Linux this
+works for the AppImage.
 
 ## Build from source
 
@@ -89,9 +92,24 @@ from `main` and comes back through a pull request; the branch is deleted once it
 
 ### Releases
 
-Set the new version in `src-tauri/tauri.conf.json`, then push a matching tag (`v0.2.0` for
-version `0.2.0`). The [release workflow](.github/workflows/release.yml) builds the three
-installers and publishes the release when all of them have uploaded.
+To cut a stable release, run `npm run release` (next patch), `npm run release -- minor`,
+`npm run release -- major` or `npm run release -- 1.4.2`, or use **Actions → Release → Run
+workflow** on GitHub. The [release workflow](.github/workflows/release.yml) bumps the version
+on `main` (with [`scripts/version.mjs`](scripts/version.mjs)), commits and tags it, builds the
+three installers, and publishes the release once all of them have uploaded. Pushing a `vX.Y.Z`
+tag that matches `src-tauri/tauri.conf.json` still works too.
+
+A [nightly](.github/workflows/nightly.yml) is built from `main` at 07:00 UTC whenever it has
+changed, replacing the rolling [`nightly`](https://github.com/cobysmckinney/tonality/releases/tag/nightly)
+prerelease. It's versioned as the next patch's prerelease (`0.1.1-nightly.20261121.42` after
+`0.1.0`). Run `npm run release -- nightly` to build one now.
+
+The app updates itself from these releases (Settings, Ctrl+,): the **Stable** channel follows
+the latest release and **Nightly** the nightly. Each release carries a `latest.json` and
+installers signed with the updater key. The public half is in `tauri.conf.json`; the private
+half is the `TAURI_SIGNING_PRIVATE_KEY` repository secret (a passphrase, if the key has one,
+goes in `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`). If the key is lost, installed apps can't take
+updates signed with a new one. They'd have to be reinstalled by hand, so keep a copy safe.
 
 ## Licences
 
