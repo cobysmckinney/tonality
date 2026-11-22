@@ -1,47 +1,89 @@
+# Automatic pull request review by Claude: a summary comment that's kept up to date, plus
+# inline comments on the lines that have problems. Reply to any of them with `@claude …` to
+# discuss it or ask for a fix (that's claude.yml).
+#
+# The action only runs the copy of this file on main, so a change here takes effect once it's
+# merged; on the PR that changes it, the review is skipped.
 name: Claude Code Review
 
 on:
   pull_request:
     types: [opened, synchronize, ready_for_review, reopened]
-    # Optional: Only run on specific file changes
-    # paths:
-    #   - "src/**/*.ts"
-    #   - "src/**/*.tsx"
-    #   - "src/**/*.js"
-    #   - "src/**/*.jsx"
+
+# A new push replaces a review still in progress.
+concurrency:
+  group: claude-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
 
 permissions: {}
 
 jobs:
   claude-review:
-    # Pull requests from forks and from Dependabot can't read the token, so they'd only fail.
+    # Drafts wait until they're ready. Pull requests from forks and from Dependabot can't read
+    # the token, so they'd only fail.
     if: >-
+      !github.event.pull_request.draft &&
       github.event.pull_request.head.repo.full_name == github.repository &&
       github.event.pull_request.user.login != 'dependabot[bot]'
-
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       contents: read
-      pull-requests: read
-      issues: read
+      pull-requests: write
+      issues: write
       id-token: write
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
-          fetch-depth: 1
+          fetch-depth: 0
           persist-credentials: false
 
       - name: Run Claude Code Review
-        id: claude-review
         uses: anthropics/claude-code-action@acfe7992852970efb4fee683d63d628e3e52df67 # v1.0.286
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          plugin_marketplaces: 'https://github.com/anthropics/claude-code.git'
-          plugins: 'code-review@claude-code-plugins'
-          prompt: '/code-review:code-review --comment ${{ github.repository }}/pull/${{ github.event.pull_request.number }}'
-          claude_args: '--allowedTools "mcp__github_inline_comment__create_inline_comment"'
-          # See https://github.com/anthropics/claude-code-action/blob/main/docs/usage.md
-          # or https://code.claude.com/docs/en/cli-reference for available options
+          prompt: |
+            REPO: ${{ github.repository }}
+            PR NUMBER: ${{ github.event.pull_request.number }}
+            BASE: ${{ github.event.pull_request.base.sha }}
+            HEAD: ${{ github.event.pull_request.head.sha }}
+            EVENT: ${{ github.event.action }}
 
+            You are reviewing this pull request the way a careful senior engineer on the project
+            would. The repository is checked out at the PR's merge commit. tonality is a desktop
+            raw photo editor: Rust crates in crates/, the Tauri app in src-tauri/, a Svelte 5 +
+            TypeScript UI in ui/, and GitHub Actions workflows that build and sign releases.
+            README.md, ROADMAP.md and CONTRIBUTING.md describe how the project works.
+
+            1. Read the change: `gh pr view ${{ github.event.pull_request.number }}` for the
+               description, `gh pr diff ${{ github.event.pull_request.number }}` for the diff.
+               Then open the changed files and whatever they call or are called by, so you judge
+               the code in context, not only the diff lines.
+            2. If EVENT is `synchronize`, earlier reviews exist. Read them with
+               `gh api repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/comments`
+               and the PR's conversation, and focus on what changed since the last reviewed commit.
+               Don't repeat a comment that's already there, open or resolved.
+            3. Look for things that matter: bugs and wrong behaviour, edge cases (empty input,
+               huge images, odd camera files, concurrency, cancellation, errors swallowed or
+               unwrapped), data loss in the library or sidecars, security (path handling, the
+               updater, workflow permissions and injection), performance on the hot pixel paths,
+               and Rust/TypeScript types drifting apart. Skip formatting and lint nits; CI
+               already runs rustfmt, clippy, prettier and svelte-check.
+            4. For each real problem, post an inline comment on the exact line with
+               mcp__github_inline_comment__create_inline_comment. Start it with a severity
+               (**Bug**, **Risk** or **Nit**), say what goes wrong and when, and give the fix,
+               as a ```suggestion block when it's a small, complete replacement. Only comment
+               when you're confident; a few precise comments beat many speculative ones.
+            5. Finally, post or update one summary comment with
+               `gh pr comment ${{ github.event.pull_request.number }} --edit-last --create-if-none --body-file <file>`.
+               Write the body to a file first. It has:
+               - **Summary**: what the PR does, in two or three sentences.
+               - **Walkthrough**: a short table of the changed files or areas and what changed in each.
+               - **Review**: the issues you raised inline, one line each, most severe first, or
+                 "No issues found" if there are none. Add anything worth knowing that doesn't
+                 belong on one line (design concerns, missing tests).
+               - The commit you reviewed (HEAD, short form).
+          claude_args: >-
+            --max-turns 60
+            --allowedTools "Read,Grep,Glob,Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr comment:*),Bash(gh api:*),Bash(git log:*),Bash(git diff:*),Bash(git show:*),Bash(git blame:*),Write(/tmp/**),mcp__github_inline_comment__create_inline_comment"
