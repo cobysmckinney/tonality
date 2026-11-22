@@ -1,7 +1,9 @@
 # tonality roadmap
 
 The working list of features and fixes. Work through **Now** from the top, one item at a time.
-Add new ideas to **Later**, and move finished items to **Done** with the date and commit.
+When **Now** is empty, take the next item from the earliest unfinished milestone under
+**To 1.0**. Add new ideas to **Later**, and move finished items to **Done** with the date and
+commit.
 
 **How to work an item**
 1. Branch from `main` (`git checkout -b <item-slug>`).
@@ -17,7 +19,150 @@ Add new ideas to **Later**, and move finished items to **Done** with the date an
 
 ## Now
 
-_Nothing queued. Pick the next item from **Later** or add a new one._
+In review. Move each to **Done** when its pull request merges.
+
+- [ ] A bad raw file can't take the app down; log file with panics in it; `.x3f` dropped (#58).
+- [ ] Remove photos from the library, to the system's Trash; read-only files import (#59).
+- [ ] Stop a running import or export (#60).
+- [ ] GPU tests run in CI, on a macOS runner (#61).
+- [ ] macOS build signed and notarised once the Apple secrets exist (#62).
+
+---
+
+## To 1.0
+
+tonality is free and open source. **1.0 means:** a photographer can import a shoot, cull, edit
+and export it without opening another app; nothing they do can lose work; and the sidecar and
+catalog formats are frozen, with a promise that later versions read them.
+
+Each milestone is a release. The order inside one is a suggestion.
+
+### 0.2 Trust
+
+What's left after the five fixes in **Now**.
+
+- [ ] Say so when the library is already open in another window. Today the app exits with
+      nothing on screen (the reason is in the log).
+- [ ] Show errors where they happen (toasts), not only in the line at the bottom of the
+      Library sidebar.
+- [ ] Notice photos whose original has gone missing: mark them in the grid and offer to remove
+      them, instead of failing with a decode error when opened.
+- [ ] Never reuse a photo's id. `images.id` isn't `AUTOINCREMENT`, so removing the newest
+      photos frees their ids for the next import; #59 clears the caches kept by id, and a
+      catalog migration would end the hazard. Changes the catalog: do it before the format
+      freezes.
+- [ ] Answer a thumbnail request whose job panicked, so the grid cell doesn't wait for ever.
+- [ ] Sign the Windows installer. Open question: the route (SignPath Foundation, Azure
+      Artifact Signing, or stay unsigned); see "Signing" in the README.
+- [ ] Decide whether **GPU tests** becomes a required check on `main`.
+- [ ] Export where there's no usable GPU. wgpu falls back to a software Vulkan driver when
+      there is one (untested here), but Linux with only Mesa's OpenGL renderer has no float
+      render target and the export fails. Open question: require software Vulkan and say so,
+      or add a path that works without it.
+- [ ] Stop an export in the middle of a file, not only between files (`Gpu::render` would
+      check between tiles).
+- [ ] Delete rejected photos in one go.
+- [ ] `.x3f` (Sigma) back once rawler's decoder is finished.
+
+### 0.3 A whole shoot
+
+Today nothing works across photos: settings copy only between versions of one photo.
+
+- [ ] Copy and paste settings between photos, and sync them to a selection, choosing which
+      panels. Open question: build it as "apply this step, or this version, to other photos"
+      (a cherry-pick), which would make presets the same feature.
+- [ ] Presets: save, apply, and apply on import.
+- [ ] Auto (Light and white balance) for a selection.
+- [ ] White balance eyedropper.
+- [ ] Type a value into a slider.
+- [ ] Clipping shown on the photo, not only as the histogram's corner marks.
+- [ ] A true before and after: "before" currently also undoes the crop. Add a split view.
+- [ ] Full screen, and hide the right-hand panel.
+- [ ] Tidy the versions that undo-then-edit creates (`main-2`, `main-3`…). They pile up and
+      can only be deleted by hand. Open question: prune them, fold them away, or ask.
+- [ ] Lens profile corrections on by default. Open question: this changes how photos already
+      imported and never edited look, and what their unedited state hashes to.
+- [ ] G and E work with Caps Lock on; the sort tooltip is right when sorting by name.
+
+### 0.4 Raw basics
+
+What a raw editor is expected to have.
+
+- [ ] Highlight reconstruction. Blown highlights currently clip to neutral after white balance.
+- [ ] Spot healing and clone.
+- [ ] Perspective: keystone sliders, then guided or automatic upright.
+- [ ] Colour grading: shadows, midtones and highlights.
+- [ ] Black and white with a mixer.
+- [ ] Hot and dead pixel removal.
+- [ ] Lens corrections the camera wrote into the file for Fujifilm, OM/Olympus and Panasonic
+      (only Sony and DNG are read today); the DNG optical centre; defringe.
+- [ ] Masks: add, subtract and intersect shapes within one mask; colour range; duplicate and
+      reorder; copy between photos.
+- [ ] Brush and AI masks sharper than 1024 px on the long edge.
+- [ ] Tone curve: a luminance mode (the master curve is per channel today).
+- [ ] Crop: custom ratios, vertical flip, auto-level, guides that stay visible.
+- [ ] Named snapshots of a step, and a list of what changed between any two steps.
+- [ ] Better demosaicing as an option (PPG and one-pass Markesteijn today); monochrome
+      sensors.
+
+### 0.5 Library
+
+- [ ] Keywords, colour labels, captions.
+- [ ] Search, and filters for camera, lens, ISO and date range (the metadata is stored, but
+      nothing queries it).
+- [ ] Saved searches as smart albums.
+- [ ] Open and switch libraries from the app (`TONALITY_LIBRARY` only, today).
+- [ ] Import JPEG, TIFF and HEIC. Open question: how far the raw pipeline's assumptions go for
+      photos that are already rendered.
+- [ ] Culling: full screen, embedded previews, pick and reject at speed, compare several
+      photos.
+- [ ] Group raw + JPEG pairs and bursts.
+- [ ] A full metadata panel.
+- [ ] Hold up with 50,000 photos: page `library_images`, don't lay out every row on every
+      change, and don't walk every original and reconcile every sidecar on each launch.
+- [ ] Limits and eviction for the thumbnail and mask caches.
+- [ ] Back up the catalog on a schedule; verify originals against their hashes.
+- [ ] Import: detect cards, rename on import.
+- [ ] Background work at lower priority on macOS and Windows too (Linux only today).
+
+### 0.6 Export
+
+- [ ] Any long edge, megapixels or percentage; never only four fixed sizes.
+- [ ] File name templates and numbering.
+- [ ] Saved export recipes.
+- [ ] Output sharpening.
+- [ ] 16-bit PNG; AVIF and JPEG XL.
+- [ ] Metadata choices: all, copyright only, none; add copyright and caption.
+- [ ] Watermark.
+- [ ] Choose which versions to export, not only "current" or "all"; stop tying the plain file
+      name to a branch called exactly `main`.
+- [ ] Ask before downloading AI models during an export.
+- [ ] `tonality export` from the command line (the export renderer is already headless).
+- [ ] Open in another editor.
+
+### 0.9 Beta
+
+Ship quality. No new features after this.
+
+- [ ] Freeze the sidecar and catalog formats, with migration tests from every released
+      version.
+- [ ] Golden-image tests on a corpus of raw files from many cameras, in CI.
+- [ ] Tests on macOS and Windows in CI (only Linux runs them today); component tests for the
+      interface.
+- [ ] `cargo-deny` or `cargo-audit` in CI.
+- [ ] macOS Intel, `.deb` and Flatpak builds; an AppImage that runs on older glibc if that
+      can be had.
+- [ ] A user manual, a keyboard shortcut reference in the app, and a changelog.
+- [ ] Memory: a guard and a plan for 60–100 megapixel files (the full decode is held as
+      32-bit float before it's halved).
+- [ ] Say in the app that sharpening, noise reduction and Texture only show fully at 1:1.
+- [ ] Accessibility: focus order, focus traps in dialogs, the grid reachable by keyboard.
+- [ ] Decide whether SegFormer-B0's non-commercial licence (below) is acceptable in a free
+      app that working photographers will use for paid jobs; swap it if not.
+
+### 1.0
+
+- [ ] A release with no new features: only fixes found in the beta.
 
 ---
 
@@ -27,6 +172,15 @@ _Nothing queued. Pick the next item from **Later** or add a new one._
 ## Later
 _(new ideas go here)_
 - P3 / HDR preview, once the webview can show one and there's a wide-gamut HDR display to check on (`docs/agx.md`, Later).
+- Sync a library between machines: sidecars already merge like git, so a library in a synced
+  folder could merge edits made on a laptop and a desktop.
+- On-device AI denoise.
+- Read Lightroom and darktable XMP, for people moving over.
+- Panorama and HDR merge.
+- Import in place, without copying into the library.
+- Camera profiles (DCP), dual-illuminant matrices, `.cube` LUTs.
+- Localisation; a light theme.
+- Tethered shooting; printing.
 
 ## Done
 - 2026-11-17 — Auto: Light (exposure, then range sliders, from a model of tone + AgX checked against the shader) and white balance (grey pixels from As Shot), in Edit, one undo step each (`auto-settings`; `docs/auto.md`).
