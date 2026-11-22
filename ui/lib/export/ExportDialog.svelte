@@ -87,9 +87,9 @@
         {/if}
         <div class="actions">
           {#if r.written.length}
-            <button class="ghost" onclick={() => revealItemInDir(r.written[0])}
-              >Show in Folder</button
-            >
+            <button class="ghost" onclick={() => revealItemInDir(r.written[0])}>
+              Show in Folder
+            </button>
           {/if}
           <button class="primary" onclick={() => exporter.close()}>Done</button>
         </div>
@@ -99,12 +99,16 @@
           <div class="seg">
             <button
               class:active={s.versions === "current"}
-              onclick={() => (exporter.settings.versions = "current")}>Current</button
+              onclick={() => (exporter.settings.versions = "current")}
             >
+              Current
+            </button>
             <button
               class:active={s.versions === "all"}
-              onclick={() => (exporter.settings.versions = "all")}>All branches</button
+              onclick={() => (exporter.settings.versions = "all")}
             >
+              All branches
+            </button>
           </div>
         </div>
         <p class="hint">
@@ -120,8 +124,10 @@
               <button
                 class:active={s.format === f.id}
                 onclick={() => (exporter.settings.format = f.id)}
-                title={f.hint}>{f.label}</button
+                title={f.hint}
               >
+                {f.label}
+              </button>
             {/each}
           </div>
         </div>
@@ -133,8 +139,10 @@
               <button
                 class:active={s.colorSpace === c.id}
                 onclick={() => (exporter.settings.colorSpace = c.id)}
-                title={c.hint}>{c.label}</button
+                title={c.hint}
               >
+                {c.label}
+              </button>
             {/each}
           </div>
         </div>
@@ -143,12 +151,12 @@
           <div class="row">
             <span class="label">HDR</span>
             <div class="seg">
-              <button class:active={!s.hdr} onclick={() => (exporter.settings.hdr = false)}
-                >Off</button
-              >
-              <button class:active={s.hdr} onclick={() => (exporter.settings.hdr = true)}
-                >Ultra HDR</button
-              >
+              <button class:active={!s.hdr} onclick={() => (exporter.settings.hdr = false)}>
+                Off
+              </button>
+              <button class:active={s.hdr} onclick={() => (exporter.settings.hdr = true)}>
+                Ultra HDR
+              </button>
             </div>
           </div>
           {#if s.hdr}
@@ -175,13 +183,17 @@
           <div class="seg">
             <button
               class:active={!s.includeLocation}
-              onclick={() => (exporter.settings.includeLocation = false)}>Leave out</button
+              onclick={() => (exporter.settings.includeLocation = false)}
             >
+              Leave out
+            </button>
             <button
               class:active={s.includeLocation}
               onclick={() => (exporter.settings.includeLocation = true)}
-              title="The GPS position the camera recorded, if any">Include</button
+              title="The GPS position the camera recorded, if any"
             >
+              Include
+            </button>
           </div>
         </div>
 
@@ -191,17 +203,19 @@
             {#each sizes as z (z.label)}
               <button
                 class:active={s.longEdge === z.value}
-                onclick={() => (exporter.settings.longEdge = z.value)}>{z.label}</button
+                onclick={() => (exporter.settings.longEdge = z.value)}
               >
+                {z.label}
+              </button>
             {/each}
           </div>
         </div>
 
         <div class="row">
           <span class="label">Folder</span>
-          <button class="folder" onclick={pickFolder} title={s.folder}
-            >{s.folder ? folderName(s.folder) : "Choose…"}</button
-          >
+          <button class="folder" onclick={pickFolder} title={s.folder}>
+            {s.folder ? folderName(s.folder) : "Choose…"}
+          </button>
         </div>
 
         {#if exporter.running}
@@ -213,9 +227,9 @@
         {#if exporter.error}<p class="error">{exporter.error}</p>{/if}
 
         <div class="actions">
-          <button class="ghost" onclick={() => exporter.close()} disabled={exporter.running}
-            >Cancel</button
-          >
+          <button class="ghost" onclick={() => exporter.close()} disabled={exporter.running}>
+            Cancel
+          </button>
           <button
             class="primary"
             onclick={() => exporter.run()}

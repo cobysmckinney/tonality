@@ -103,15 +103,15 @@
           onclick={() => branchFrom(view.head.commit)}
           title="New version from the current state"
         >
-          <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"
-            ><path d="M8 3v10M3 8h10" /></svg
-          >
+          <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+            <path d="M8 3v10M3 8h10" />
+          </svg>
         </button>
         {#if onhide}
           <button class="icon-btn" onclick={onhide} title="Hide panel">
-            <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"
-              ><path d="M10 3 5 8l5 5" /></svg
-            >
+            <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+              <path d="M10 3 5 8l5 5" />
+            </svg>
           </button>
         {/if}
       </div>
@@ -130,9 +130,9 @@
               ? "You're editing this version · double-click to rename"
               : `Switch to ${v.name}`}
           >
-            <span class="thumb"
-              >{#if src}<img {src} alt="" />{/if}</span
-            >
+            <span class="thumb">
+              {#if src}<img {src} alt="" />{/if}
+            </span>
             <span class="meta">
               {#if renaming === v.name}
                 <input
@@ -165,32 +165,32 @@
                     : session.startCompare(v.name)}
                 title="Compare side by side with {current}"
               >
-                <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"
-                  ><rect x="2" y="3" width="12" height="10" rx="1.5" /><path d="M8 3v10" /></svg
-                >
+                <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
+                  <rect x="2" y="3" width="12" height="10" rx="1.5" /><path d="M8 3v10" />
+                </svg>
               </button>
               <button
                 class="icon-btn"
                 onclick={() => (session.applying = v.name)}
                 title="Copy settings from {v.name} onto {current}…"
               >
-                <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"
-                  ><rect x="5" y="5" width="8" height="8" rx="1.5" /><path
+                <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
+                  <rect x="5" y="5" width="8" height="8" rx="1.5" /><path
                     d="M11 5V3.5A1.5 1.5 0 0 0 9.5 2h-6A1.5 1.5 0 0 0 2 3.5v6A1.5 1.5 0 0 0 3.5 11H5"
-                  /></svg
-                >
+                  />
+                </svg>
               </button>
             {/if}
             <button class="icon-btn" onclick={() => startRename(v.name)} title="Rename">
-              <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"
-                ><path d="M10.5 2.5l3 3L6 13H3v-3z" /></svg
-              >
+              <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
+                <path d="M10.5 2.5l3 3L6 13H3v-3z" />
+              </svg>
             </button>
             {#if all.length > 1}
               <button class="icon-btn danger" onclick={() => remove(v.name)} title="Delete version">
-                <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"
-                  ><path d="M3 4.5h10M6.5 4.5V3h3v1.5M4.5 4.5l.6 8.5h5.8l.6-8.5" /></svg
-                >
+                <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
+                  <path d="M3 4.5h10M6.5 4.5V3h3v1.5M4.5 4.5l.6 8.5h5.8l.6-8.5" />
+                </svg>
               </button>
             {/if}
           </div>
@@ -210,9 +210,9 @@
           disabled={!view.canUndo}
           title="Undo (Ctrl+Z)"
         >
-          <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"
-            ><path d="M6 4 3 7l3 3" /><path d="M3 7h6.5a3.5 3.5 0 0 1 0 7H8" /></svg
-          >
+          <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+            <path d="M6 4 3 7l3 3" /><path d="M3 7h6.5a3.5 3.5 0 0 1 0 7H8" />
+          </svg>
         </button>
         <button
           class="icon-btn"
@@ -220,9 +220,9 @@
           disabled={!view.canRedo}
           title="Redo (Ctrl+Shift+Z)"
         >
-          <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"
-            ><path d="m10 4 3 3-3 3" /><path d="M13 7H6.5a3.5 3.5 0 0 0 0 7H8" /></svg
-          >
+          <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+            <path d="m10 4 3 3-3 3" /><path d="M13 7H6.5a3.5 3.5 0 0 0 0 7H8" />
+          </svg>
         </button>
       </div>
     </header>
@@ -257,13 +257,13 @@
                 onclick={() => branchFrom(s.commit.id)}
                 title="New version from this step"
               >
-                <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"
-                  ><circle cx="4.5" cy="3.5" r="1.5" /><circle cx="4.5" cy="12.5" r="1.5" /><circle
+                <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
+                  <circle cx="4.5" cy="3.5" r="1.5" /><circle cx="4.5" cy="12.5" r="1.5" /><circle
                     cx="11.5"
                     cy="5.5"
                     r="1.5"
-                  /><path d="M4.5 5v6M11.5 7c0 3-7 2-7 4" /></svg
-                >
+                  /><path d="M4.5 5v6M11.5 7c0 3-7 2-7 4" />
+                </svg>
               </button>
               {#if s.forks.length}
                 <div class="forks">
@@ -272,8 +272,10 @@
                       class="chip"
                       style:--c="var(--branch-{colorOf.get(f) ?? 0})"
                       onclick={() => session.switchBranch(f)}
-                      title="{f} was made from this step · switch to it">⑂ {f}</button
+                      title="{f} was made from this step · switch to it"
                     >
+                      ⑂ {f}
+                    </button>
                   {/each}
                 </div>
               {/if}
@@ -291,9 +293,9 @@
       disabled={!resettable}
       title="Delete every version and step, back to as-shot"
     >
-      <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"
-        ><path d="M3 3v4h4" /><path d="M3.5 7A5 5 0 1 1 5 11.5" /></svg
-      >
+      <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
+        <path d="M3 3v4h4" /><path d="M3.5 7A5 5 0 1 1 5 11.5" />
+      </svg>
       Reset all history…
     </button>
   </footer>

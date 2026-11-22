@@ -49,13 +49,13 @@
       title="Settings (Ctrl+,)"
       aria-label="Settings"
     >
-      <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"
-        ><path d="M2 4.5h7M12 4.5h2M2 11.5h2M7 11.5h7" /><circle
-          cx="10.5"
-          cy="4.5"
+      <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true">
+        <path d="M2 4.5h7M12 4.5h2M2 11.5h2M7 11.5h7" /><circle cx="10.5" cy="4.5" r="1.5" /><circle
+          cx="5.5"
+          cy="11.5"
           r="1.5"
-        /><circle cx="5.5" cy="11.5" r="1.5" /></svg
-      >
+        />
+      </svg>
     </button>
     <button
       class="btn"
@@ -63,9 +63,9 @@
       disabled={!exportCount()}
       title="Export (Ctrl+Shift+E)"
     >
-      <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"
-        ><path d="M8 10V2M5 5l3-3 3 3M3 9v4h10V9" /></svg
-      >
+      <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+        <path d="M8 10V2M5 5l3-3 3 3M3 9v4h10V9" />
+      </svg>
       Export
     </button>
   </div>

@@ -142,9 +142,9 @@
           disabled={square(preset)}
           title="Landscape"
         >
-          <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"
-            ><rect x="2" y="4.5" width="12" height="7" rx="1.2" /></svg
-          >
+          <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
+            <rect x="2" y="4.5" width="12" height="7" rx="1.2" />
+          </svg>
         </button>
         <button
           role="radio"
@@ -154,9 +154,9 @@
           disabled={square(preset)}
           title="Portrait"
         >
-          <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"
-            ><rect x="4.5" y="2" width="7" height="12" rx="1.2" /></svg
-          >
+          <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
+            <rect x="4.5" y="2" width="7" height="12" rx="1.2" />
+          </svg>
         </button>
       </div>
     </div>
@@ -226,21 +226,21 @@
 
   <div class="group row">
     <button class="tool icon" onclick={() => rotate(-1)} title="Rotate left ([)">
-      <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"
-        ><path d="M3.5 6.5A5 5 0 1 1 4 11M3.5 2.5v4h4" /></svg
-      >
+      <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true">
+        <path d="M3.5 6.5A5 5 0 1 1 4 11M3.5 2.5v4h4" />
+      </svg>
       Left
     </button>
     <button class="tool icon" onclick={() => rotate(1)} title="Rotate right (])">
-      <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"
-        ><path d="M12.5 6.5A5 5 0 1 0 12 11M12.5 2.5v4h-4" /></svg
-      >
+      <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true">
+        <path d="M12.5 6.5A5 5 0 1 0 12 11M12.5 2.5v4h-4" />
+      </svg>
       Right
     </button>
     <button class="tool icon" onclick={() => set(flip(crop))} title="Flip horizontally">
-      <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"
-        ><path d="M8 1.5v13M6 4 2 12h4ZM10 4l4 8h-4Z" /></svg
-      >
+      <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true">
+        <path d="M8 1.5v13M6 4 2 12h4ZM10 4l4 8h-4Z" />
+      </svg>
       Flip
     </button>
   </div>

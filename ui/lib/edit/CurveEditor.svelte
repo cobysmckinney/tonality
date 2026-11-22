@@ -135,8 +135,10 @@
       class="reset"
       onclick={resetChannel}
       disabled={!edited(channel)}
-      title="Reset this curve">Reset</button
+      title="Reset this curve"
     >
+      Reset
+    </button>
   </div>
 
   <div class="graph" bind:clientWidth={size} style:height="{size}px">

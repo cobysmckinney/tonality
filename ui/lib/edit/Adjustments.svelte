@@ -232,9 +232,9 @@
         onclick={() => session.startCrop()}
         title="Crop, rotate and straighten (R)"
       >
-        <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"
-          ><path d="M4 1v11h11M1 4h11v11" /></svg
-        >
+        <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true">
+          <path d="M4 1v11h11M1 4h11v11" />
+        </svg>
         <span>Crop</span>
         <kbd>R</kbd>
       </button>
@@ -243,12 +243,13 @@
         onclick={() => session.startMasks()}
         title="Local adjustments: gradients and brush (M)"
       >
-        <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"
-          ><circle cx="8" cy="8" r="6" /><path d="M8 2a6 6 0 0 0 0 12Z" /></svg
-        >
+        <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true">
+          <circle cx="8" cy="8" r="6" /><path d="M8 2a6 6 0 0 0 0 12Z" />
+        </svg>
         <span>Masks</span>
-        {#if edit.masks?.length}<span class="count">{edit.masks.length}</span>{:else}<kbd>M</kbd
-          >{/if}
+        {#if edit.masks?.length}<span class="count">{edit.masks.length}</span>{:else}<kbd>
+            M
+          </kbd>{/if}
       </button>
     </div>
   </div>
