@@ -482,6 +482,118 @@ pub async fn library_import(paths: Vec<String>, app: AppHandle) -> CmdResult<Imp
 }
 
 // ---------------------------------------------------------------------------------------------
+// Removing photos
+// ---------------------------------------------------------------------------------------------
+
+/// What [`library_remove`] did.
+#[derive(Debug, Default, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct RemoveSummary {
+    /// Photos taken out of the library; their files are in the system's bin.
+    #[ts(type = "number[]")]
+    pub removed: Vec<ImageId>,
+    /// Photos left where they were, because their files couldn't be moved to the bin.
+    pub failed: u32,
+    /// The first of those failures.
+    pub error: Option<String>,
+}
+
+/// Move files to the system's Trash / Recycle Bin.
+fn to_bin(paths: &[PathBuf]) -> Result<(), String> {
+    #[allow(unused_mut)]
+    let mut bin = trash::TrashContext::default();
+    // The default on macOS drives Finder by AppleScript, which asks the user for permission to
+    // control Finder first. This way asks nothing (Finder then has no "Put Back" for the files;
+    // they can still be dragged out of the Trash).
+    #[cfg(target_os = "macos")]
+    {
+        use trash::macos::{DeleteMethod, TrashContextExtMacos};
+        bin.set_delete_method(DeleteMethod::NsFileManager);
+    }
+    bin.delete_all(paths).map_err(|e| e.to_string())
+}
+
+/// Take `ids` out of the library: each photo's original and sidecar go to `discard` (the
+/// system's bin), then its catalog rows and cached pictures are deleted. A photo whose files
+/// can't be discarded is left alone; one whose files are already missing is just forgotten.
+///
+/// Files first, catalog second: stopping in between leaves photos listed without a file (which
+/// can be removed again), not files that the next launch's recovery would bring back.
+fn remove(
+    store: &Store,
+    catalog: &CatalogState,
+    ids: &[ImageId],
+    discard: &dyn Fn(&[PathBuf]) -> Result<(), String>,
+) -> CmdResult<RemoveSummary> {
+    let mut s = RemoveSummary::default();
+    for &id in ids {
+        let Ok((rel, _, name)) = catalog.with(|c| c.image_file(id)) else {
+            continue; // not in the library (any more)
+        };
+        let original = store.abs(&rel);
+        let files: Vec<PathBuf> = [sidecar::path_for(&original), original]
+            .into_iter()
+            .filter(|p| p.exists())
+            .collect();
+        if !files.is_empty() {
+            if let Err(e) = discard(&files) {
+                s.failed += 1;
+                s.error.get_or_insert(format!("{name}: {e}"));
+                continue;
+            }
+        }
+        s.removed.push(id);
+    }
+    // Not `edit`: there's no sidecar left to keep in step.
+    for (_, hash, _) in catalog.with(|c| c.remove_images(&s.removed))? {
+        forget_cached(store, &hash);
+    }
+    Ok(s)
+}
+
+/// Delete everything cached for the photo with contents `hash`: its thumbnails and AI masks.
+/// All of it can be made again, so failures are ignored.
+fn forget_cached(store: &Store, hash: &str) {
+    let _ = std::fs::remove_file(store.thumb_path(hash, crate::thumbs::EDGE));
+    let _ = std::fs::remove_file(store.edited_thumb_path(hash));
+    // `cache/masks/ab/cdef…-<model>-<target>.png`
+    let any_mask = crate::ai::raster_path(store, hash, "", "");
+    let prefix = format!("{}-", &hash[2..]);
+    let Some(entries) = any_mask.parent().and_then(|d| std::fs::read_dir(d).ok()) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        if entry.file_name().to_string_lossy().starts_with(&prefix) {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
+}
+
+/// Remove photos from the library, moving their originals and sidecars to the system's Trash
+/// (Recycle Bin on Windows). Their history, ratings and album places are deleted.
+#[tauri::command]
+pub async fn library_remove(ids: Vec<ImageId>, app: AppHandle) -> CmdResult<RemoveSummary> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let _guard = LIBRARY_WRITE.lock().unwrap_or_else(|e| e.into_inner());
+        // So the sidecars that go to the bin hold everything: importing a photo back from
+        // there, with its sidecar, brings its edits back.
+        app.state::<sidecar::Sidecars>().flush()?;
+        let s = remove(
+            &app.state::<Store>(),
+            &app.state::<CatalogState>(),
+            &ids,
+            &to_bin,
+        )?;
+        // Ids can be given out again, and these are kept by id.
+        app.state::<crate::images::Images>().forget(&s.removed);
+        Ok(s)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+// ---------------------------------------------------------------------------------------------
 // Recovery
 // ---------------------------------------------------------------------------------------------
 
@@ -575,6 +687,124 @@ pub async fn library_recover(app: AppHandle) -> CmdResult<ImportSummary> {
 mod tests {
     use super::*;
     use tonality_core::Catalog;
+
+    /// A library with one catalogued photo (file, sidecar and cached pictures all on disk).
+    fn library_with_a_photo(tag: &str) -> (PathBuf, Store, CatalogState, ImageId) {
+        let root =
+            std::env::temp_dir().join(format!("tonality-remove-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let store = Store::open(root.clone()).unwrap();
+        let catalog = CatalogState::new(Catalog::open_in_memory().unwrap());
+        let file = "originals/2026/2026-11-02/DSC1.ARW";
+        let hash = "abcdef0123";
+        let write = |p: PathBuf| {
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, b"x").unwrap();
+        };
+        write(store.abs(file));
+        write(sidecar::path_for(&store.abs(file)));
+        write(store.thumb_path(hash, crate::thumbs::EDGE));
+        write(store.edited_thumb_path(hash));
+        write(crate::ai::raster_path(&store, hash, "subject@1", "subject"));
+        // Another photo's mask in the same cache folder.
+        write(crate::ai::raster_path(
+            &store,
+            "abffff",
+            "subject@1",
+            "subject",
+        ));
+        let id = catalog
+            .with(|c| {
+                let import = c.begin_import("card", "/card")?;
+                c.add_image(
+                    import,
+                    &NewImage {
+                        hash: hash.into(),
+                        file: file.into(),
+                        name: "DSC1.ARW".into(),
+                        file_size: 1,
+                        source_path: "/card/DSC1.ARW".into(),
+                        meta: None,
+                        aspect: None,
+                    },
+                )
+            })
+            .unwrap()
+            .unwrap();
+        (root, store, catalog, id)
+    }
+
+    #[test]
+    fn removing_a_photo_discards_its_files_and_forgets_it() {
+        let (root, store, catalog, id) = library_with_a_photo("ok");
+        let original = store.abs("originals/2026/2026-11-02/DSC1.ARW");
+        let bin = root.join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let discard = |paths: &[PathBuf]| -> Result<(), String> {
+            for p in paths {
+                std::fs::rename(p, bin.join(p.file_name().unwrap())).map_err(|e| e.to_string())?;
+            }
+            Ok(())
+        };
+
+        let s = remove(&store, &catalog, &[id], &discard).unwrap();
+
+        assert_eq!(
+            (s.removed.as_slice(), s.failed, &s.error),
+            ([id].as_slice(), 0, &None)
+        );
+        assert!(
+            bin.join("DSC1.ARW").exists(),
+            "the original went to the bin"
+        );
+        assert!(
+            bin.join("DSC1.ARW.tonality").exists(),
+            "and its sidecar with it"
+        );
+        assert!(!original.exists() && !sidecar::path_for(&original).exists());
+        assert!(catalog.with(|c| c.image_file(id)).is_err());
+        assert!(!store.thumb_path("abcdef0123", crate::thumbs::EDGE).exists());
+        assert!(!store.edited_thumb_path("abcdef0123").exists());
+        assert!(!crate::ai::raster_path(&store, "abcdef0123", "subject@1", "subject").exists());
+        assert!(
+            crate::ai::raster_path(&store, "abffff", "subject@1", "subject").exists(),
+            "another photo's cached mask is left alone"
+        );
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn a_photo_that_cannot_be_discarded_stays_in_the_library() {
+        let (root, store, catalog, id) = library_with_a_photo("fail");
+        let discard = |_: &[PathBuf]| -> Result<(), String> { Err("no bin on this drive".into()) };
+
+        let s = remove(&store, &catalog, &[id], &discard).unwrap();
+
+        assert!(s.removed.is_empty());
+        assert_eq!(s.failed, 1);
+        assert!(s.error.unwrap().contains("no bin on this drive"));
+        assert!(store.abs("originals/2026/2026-11-02/DSC1.ARW").exists());
+        assert!(catalog.with(|c| c.image_file(id)).is_ok());
+        assert!(store.thumb_path("abcdef0123", crate::thumbs::EDGE).exists());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn a_photo_whose_file_is_already_gone_can_still_be_removed() {
+        let (root, store, catalog, id) = library_with_a_photo("gone");
+        let original = store.abs("originals/2026/2026-11-02/DSC1.ARW");
+        std::fs::remove_file(&original).unwrap();
+        std::fs::remove_file(sidecar::path_for(&original)).unwrap();
+        let discard = |paths: &[PathBuf]| -> Result<(), String> {
+            panic!("nothing to discard, but asked to discard {paths:?}")
+        };
+
+        let s = remove(&store, &catalog, &[id], &discard).unwrap();
+
+        assert_eq!(s.removed, [id]);
+        assert!(catalog.with(|c| c.image_file(id)).is_err());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
 
     #[test]
     fn reserved_names_compare_like_the_filesystem() {

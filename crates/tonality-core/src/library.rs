@@ -337,6 +337,39 @@ impl Catalog {
         self.update_images("flag", ids, flag.clamp(-1, 1) as i64)
     }
 
+    /// Take photos out of the library: their rows, history, album places and tombstones, any
+    /// edit state nothing else uses, and any import left with no photos. Returns each one's
+    /// `(id, content hash, library-relative file)`, for the caller to deal with the files; ids
+    /// that aren't in the library are skipped.
+    pub fn remove_images(&mut self, ids: &[ImageId]) -> Result<Vec<(ImageId, String, String)>> {
+        let tx = self.conn.transaction()?;
+        let mut removed = Vec::new();
+        for &id in ids {
+            let found = tx
+                .query_row("SELECT hash, file FROM images WHERE id = ?1", [id], |r| {
+                    Ok((r.get(0)?, r.get(1)?))
+                })
+                .optional()?;
+            let Some((hash, file)) = found else { continue };
+            // Its commits, branches, HEAD, album places and tombstones go with it (cascade).
+            tx.execute("DELETE FROM images WHERE id = ?1", [id])?;
+            removed.push((id, hash, file));
+        }
+        if !removed.is_empty() {
+            tx.execute(
+                "DELETE FROM edit_states WHERE hash NOT IN (SELECT state_hash FROM commits)",
+                [],
+            )?;
+            tx.execute(
+                "DELETE FROM imports WHERE id NOT IN
+                    (SELECT import_id FROM images WHERE import_id IS NOT NULL)",
+                [],
+            )?;
+        }
+        tx.commit()?;
+        Ok(removed)
+    }
+
     fn update_images(&mut self, column: &str, ids: &[ImageId], value: i64) -> Result<()> {
         let tx = self.conn.transaction()?;
         {
@@ -387,6 +420,65 @@ mod tests {
         assert_eq!(aspect(&cat), Some(1.0));
         cat.set_aspect(id, f32::NAN, false).unwrap();
         assert_eq!(aspect(&cat), Some(1.0));
+    }
+
+    #[test]
+    fn removing_photos_takes_their_history_and_album_places_with_them() {
+        let mut cat = Catalog::open_in_memory().unwrap();
+        let first = cat.begin_import("card", "/card").unwrap();
+        let a = cat
+            .add_image(first, &img("a.ARW", "h1", None))
+            .unwrap()
+            .unwrap();
+        let second = cat.begin_import("more", "/more").unwrap();
+        let b = cat
+            .add_image(second, &img("b.ARW", "h2", None))
+            .unwrap()
+            .unwrap();
+        // Each has a history; `a` is edited, and both are in an album.
+        cat.history_open(a).unwrap();
+        cat.history_open(b).unwrap();
+        let mut edited = crate::EditState::default();
+        edited.light.exposure = 1.0;
+        cat.commit(a, &edited, None).unwrap();
+        let album = cat.create_album("Keepers").unwrap();
+        cat.add_to_album(album, &[a, b]).unwrap();
+        let count = |cat: &Catalog, table: &str| -> i64 {
+            cat.conn
+                .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0))
+                .unwrap()
+        };
+        assert_eq!(count(&cat, "edit_states"), 2);
+
+        // An id that isn't in the library is skipped.
+        let removed = cat.remove_images(&[a, 999]).unwrap();
+        assert_eq!(
+            removed,
+            [(a, "h1".to_string(), "originals/a.ARW".to_string())]
+        );
+
+        assert!(cat.image_file(a).is_err());
+        assert_eq!(cat.image_ids().unwrap(), [b]);
+        assert_eq!(count(&cat, "commits"), 1, "only b's Original is left");
+        assert_eq!(
+            count(&cat, "edit_states"),
+            1,
+            "a's edit is no longer stored"
+        );
+        assert_eq!(cat.album_members(album).unwrap(), [b]);
+        let imports = cat.imports().unwrap();
+        assert_eq!(
+            imports.len(),
+            1,
+            "the import a came from is now empty, so it goes too"
+        );
+        assert_eq!(imports[0].name, "more");
+        // The same file can be imported again.
+        let third = cat.begin_import("again", "/card").unwrap();
+        assert!(cat
+            .add_image(third, &img("a.ARW", "h1", None))
+            .unwrap()
+            .is_some());
     }
 
     #[test]

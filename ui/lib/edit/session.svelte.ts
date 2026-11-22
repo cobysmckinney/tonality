@@ -346,6 +346,27 @@ class EditSession {
     }
   }
 
+  /** Photos were removed from the library: stop showing (or loading) any of them. */
+  forget(ids: number[]) {
+    if (this.opening !== null && ids.includes(this.opening)) {
+      this.opening = this.image?.id ?? null;
+    }
+    if (!this.image || !ids.includes(this.image.id)) return;
+    if (this.opening === this.image.id) this.opening = null;
+    this.image = null;
+    this.pixels = null;
+    this.edit = null;
+    this.history = null;
+    this.compare = null;
+    this.applying = null;
+    this.cropEntry = null;
+    this.cropAspect = null;
+    this.masking = false;
+    this.maskIndex = null;
+    this.lassoing = null;
+    this.error = null;
+  }
+
   /** Queued operations that will replace `edit` with their result (undo, checkout, …). */
   private restoring = 0;
 

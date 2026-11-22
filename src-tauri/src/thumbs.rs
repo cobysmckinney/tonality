@@ -15,7 +15,7 @@ use crate::history::CatalogState;
 use crate::store::Store;
 
 pub const SCHEME: &str = "thumb";
-const EDGE: u32 = 640;
+pub(crate) const EDGE: u32 = 640;
 
 /// Thumbnail work is IO + JPEG decode heavy; a small dedicated pool keeps the UI responsive
 /// and bounds memory when the grid asks for hundreds at once.

@@ -17,6 +17,7 @@ import type { ExportSummary } from "$lib/bindings/ExportSummary";
 import type { AiTarget } from "$lib/bindings/AiTarget";
 import type { AiModelInfo } from "$lib/bindings/AiModelInfo";
 import type { LensCorrection } from "$lib/bindings/LensCorrection";
+import type { RemoveSummary } from "$lib/bindings/RemoveSummary";
 import type { Settings } from "$lib/bindings/Settings";
 import type { UpdateInfo } from "$lib/bindings/UpdateInfo";
 
@@ -112,6 +113,8 @@ export const api = {
     /** Catalogue originals in the library folder the catalog doesn't know (restoring sidecar edits). */
     recover: () => invoke<ImportSummary>("library_recover"),
     images: (query: ImageQuery) => invoke<ImageRow[]>("library_images", { query }),
+    /** Take photos out of the library; their files go to the system's Trash / Recycle Bin. */
+    remove: (ids: number[]) => inOrder(() => invoke<RemoveSummary>("library_remove", { ids })),
     setRating: (ids: number[], rating: number) =>
       inOrder(() => invoke<void>("library_set_rating", { ids, rating })),
     setFlag: (ids: number[], flag: number) =>
