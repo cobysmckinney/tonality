@@ -1,0 +1,16 @@
+name: Feature request
+description: Suggest something tonality should do.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What you're trying to do
+      description: The task or photo that's hard today. This matters more than the solution.
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would help
+      description: How you'd like it to work, if you have an idea. How other editors do it is useful too.

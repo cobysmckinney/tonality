@@ -89,15 +89,19 @@ the TypeScript types in `ui/lib/bindings` from the Rust ones; commit them when t
 
 [ROADMAP.md](ROADMAP.md) is the list of what's next and what's done. Work happens on a branch
 from `main` and comes back through a pull request; the branch is deleted once it's merged.
+`main` is protected by a ruleset: no direct or force pushes, and the **Rust** and **UI** CI
+checks must pass before a pull request merges. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ### Releases
 
 To cut a stable release, run `npm run release` (next patch), `npm run release -- minor`,
 `npm run release -- major` or `npm run release -- 1.4.2`, or use **Actions → Release → Run
 workflow** on GitHub. The [release workflow](.github/workflows/release.yml) bumps the version
-on `main` (with [`scripts/version.mjs`](scripts/version.mjs)), commits and tags it, builds the
-three installers, and publishes the release once all of them have uploaded. Pushing a `vX.Y.Z`
-tag that matches `src-tauri/tauri.conf.json` still works too.
+on `main` (with [`scripts/version.mjs`](scripts/version.mjs)), commits and tags it; the tag
+then starts a second run that builds the three installers and publishes the release once all
+of them have uploaded. Pushing a `vX.Y.Z` tag that matches `src-tauri/tauri.conf.json` still
+works too. The bump gets past `main`'s protection by pushing with the `RELEASE_DEPLOY_KEY`
+secret, a write deploy key that the `main` and `v*` tag rulesets let through.
 
 A [nightly](.github/workflows/nightly.yml) is built from `main` at 07:00 UTC whenever it has
 changed, replacing the rolling [`nightly`](https://github.com/cobysmckinney/tonality/releases/tag/nightly)
