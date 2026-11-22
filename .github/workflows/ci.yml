@@ -5,6 +5,8 @@ on:
   pull_request:
   push:
     branches: [main]
+  # Dependabot licences dispatches this after pushing, since its push can't trigger a run.
+  workflow_dispatch:
 
 # A newer push to the same branch replaces the run in progress.
 concurrency:

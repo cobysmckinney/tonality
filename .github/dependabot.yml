@@ -1,8 +1,9 @@
 # Dependency updates. Security fixes come as soon as an advisory is published, whatever the
 # schedule below; these are the routine version bumps, grouped so each ecosystem opens one PR.
 #
-# Cargo bumps change licences/THIRD-PARTY-NOTICES.txt, which CI checks: on a Cargo PR, run
-# `npm run licences` and push the result before merging.
+# Cargo bumps change licences/THIRD-PARTY-NOTICES.txt, which CI checks. The Dependabot licences
+# workflow regenerates it on each Cargo PR and pushes the result. After that push Dependabot
+# won't rebase the PR itself: comment `@dependabot recreate` if it needs one.
 version: 2
 updates:
   - package-ecosystem: github-actions
