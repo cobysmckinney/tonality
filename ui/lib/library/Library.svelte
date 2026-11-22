@@ -177,9 +177,9 @@
         disabled={!!library.importing}
         title="Import a folder (Ctrl+Shift+I)"
       >
-        <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"
-          ><path d="M8 2v8M5 7l3 3 3-3M3 11v2h10v-2" /></svg
-        >
+        <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+          <path d="M8 2v8M5 7l3 3 3-3M3 11v2h10v-2" />
+        </svg>
         Import Folder…
       </button>
       <button
@@ -224,8 +224,8 @@
           class:active={is({ kind: "all" })}
           onclick={() => library.show({ kind: "all" })}
         >
-          <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"
-            ><rect x="2" y="2" width="5" height="5" rx="1.2" /><rect
+          <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true">
+            <rect x="2" y="2" width="5" height="5" rx="1.2" /><rect
               x="9"
               y="2"
               width="5"
@@ -237,8 +237,8 @@
               width="5"
               height="5"
               rx="1.2"
-            /></svg
-          >
+            />
+          </svg>
           <span class="label">All Photos</span>
           <span class="count">{library.total}</span>
         </button>
@@ -248,9 +248,9 @@
         <div class="eyebrow head">
           Albums
           <button class="icon-btn add" onclick={() => newAlbum()} title="New album">
-            <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"
-              ><path d="M8 3v10M3 8h10" /></svg
-            >
+            <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
+              <path d="M8 3v10M3 8h10" />
+            </svg>
           </button>
         </div>
 
@@ -316,18 +316,18 @@
                   onclick={() => startRename(a.id, a.name)}
                   title="Rename album"
                 >
-                  <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true"
-                    ><path d="M10.5 2.5l3 3L6 13H3v-3z" /></svg
-                  >
+                  <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
+                    <path d="M10.5 2.5l3 3L6 13H3v-3z" />
+                  </svg>
                 </button>
                 <button
                   class="icon-btn danger"
                   onclick={() => library.deleteAlbum(a.id)}
                   title="Delete album (photos stay in the library)"
                 >
-                  <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true"
-                    ><path d="M3 4.5h10M6.5 4.5V3h3v1.5M4.5 4.5l.6 8.5h5.8l.6-8.5" /></svg
-                  >
+                  <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
+                    <path d="M3 4.5h10M6.5 4.5V3h3v1.5M4.5 4.5l.6 8.5h5.8l.6-8.5" />
+                  </svg>
                 </button>
               </div>
             </div>
@@ -355,8 +355,10 @@
               viewBox="0 0 16 16"
               width="10"
               height="10"
-              aria-hidden="true"><path d="m6 4 4 4-4 4" /></svg
+              aria-hidden="true"
             >
+              <path d="m6 4 4 4-4 4" />
+            </svg>
             Recent Imports
           </button>
           {#if importsOpen}
@@ -397,11 +399,11 @@
           <span class="sel">{selCount} selected</span>
           <div class="menu" bind:this={menuRoot}>
             <button class="btn" class:on={menuOpen} onclick={() => (menuOpen = !menuOpen)}>
-              <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"
-                ><rect x="2" y="4" width="12" height="9" rx="1.5" /><path
+              <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+                <rect x="2" y="4" width="12" height="9" rx="1.5" /><path
                   d="M5 2h6M8 6.5v4M6 8.5h4"
-                /></svg
-              >
+                />
+              </svg>
               Add to Album
             </button>
             {#if menuOpen}
@@ -426,9 +428,9 @@
                   </button>
                 {/each}
                 <button role="menuitem" class="new" onclick={() => newAlbum(library.targets())}>
-                  <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"
-                    ><path d="M8 3v10M3 8h10" /></svg
-                  >
+                  <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
+                    <path d="M8 3v10M3 8h10" />
+                  </svg>
                   New Album with {selCount === 1 ? "this photo" : `${selCount} photos`}…
                 </button>
               </div>
@@ -459,8 +461,9 @@
               class:on={library.query.minRating >= n}
               onclick={() => library.setQuery({ minRating: library.query.minRating === n ? 0 : n })}
               title={library.query.minRating === n ? "Clear rating filter" : `${n}+ stars`}
-              >★</button
             >
+              ★
+            </button>
           {/each}
         </div>
 
@@ -469,8 +472,10 @@
             <button
               class:active={library.query.flag === f.value}
               onclick={() => library.setQuery({ flag: f.value })}
-              title={f.title}>{f.label}</button
+              title={f.title}
             >
+              {f.label}
+            </button>
           {/each}
         </div>
 
@@ -541,17 +546,19 @@
             <button
               class="btn primary"
               onclick={() => library.importFolder()}
-              disabled={!!library.importing}>Import Folder…</button
+              disabled={!!library.importing}
             >
+              Import Folder…
+            </button>
           {:else if inAlbum && library.query.minRating === 0 && library.query.flag === null}
             <p class="big">This album is empty</p>
             <p class="dim">
               Go to All Photos, select some, and drag them onto<br />“{library.viewName}” in the
               sidebar — or use Add to Album.
             </p>
-            <button class="btn" onclick={() => library.show({ kind: "all" })}
-              >Browse All Photos</button
-            >
+            <button class="btn" onclick={() => library.show({ kind: "all" })}>
+              Browse All Photos
+            </button>
           {:else}
             <p class="dim">No photos match these filters.</p>
           {/if}
@@ -569,12 +576,12 @@
           <span class="dim">{date(focused.meta.capturedAt)}</span>
         {/if}
       {:else}
-        <span class="dim"
-          >Click to select · Enter to edit · 1–5 rate · P pick · X reject · Drag onto an album to
-          add</span
-        >
-        {#if library.root}<span class="dim end" title="Your library folder">{library.root}</span
-          >{/if}
+        <span class="dim">
+          Click to select · Enter to edit · 1–5 rate · P pick · X reject · Drag onto an album to add
+        </span>
+        {#if library.root}<span class="dim end" title="Your library folder">
+            {library.root}
+          </span>{/if}
       {/if}
     </footer>
   </section>

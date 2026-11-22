@@ -280,9 +280,9 @@
   aria-label="Mask"
 >
   <defs>
-    <clipPath id="mask-frame"
-      ><rect x={frame.x} y={frame.y} width={frame.w} height={frame.h} /></clipPath
-    >
+    <clipPath id="mask-frame">
+      <rect x={frame.x} y={frame.y} width={frame.w} height={frame.h} />
+    </clipPath>
   </defs>
   {#if linear}
     <g clip-path="url(#mask-frame)">

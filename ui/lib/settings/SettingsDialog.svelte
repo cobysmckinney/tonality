@@ -59,8 +59,10 @@
               class:active={s.channel === c.id}
               onclick={() => updates.setChannel(c.id)}
               disabled={updates.status === "installing"}
-              title={c.hint}>{c.label}</button
+              title={c.hint}
             >
+              {c.label}
+            </button>
           {/each}
         </div>
       </div>
@@ -74,11 +76,12 @@
       <div class="row">
         <span class="label">Automatic</span>
         <div class="seg">
-          <button class:active={s.autoUpdate} onclick={() => updates.setAutoUpdate(true)}>On</button
-          >
-          <button class:active={!s.autoUpdate} onclick={() => updates.setAutoUpdate(false)}
-            >Off</button
-          >
+          <button class:active={s.autoUpdate} onclick={() => updates.setAutoUpdate(true)}>
+            On
+          </button>
+          <button class:active={!s.autoUpdate} onclick={() => updates.setAutoUpdate(false)}>
+            Off
+          </button>
         </div>
       </div>
       <p class="hint">
@@ -125,12 +128,14 @@
           <button
             class="primary"
             onclick={() => updates.install()}
-            disabled={updates.status === "installing"}>Restart to Update</button
+            disabled={updates.status === "installing"}
           >
+            Restart to Update
+          </button>
         {:else}
-          <button class="ghost" onclick={() => updates.check()} disabled={busy}
-            >Check for Updates</button
-          >
+          <button class="ghost" onclick={() => updates.check()} disabled={busy}>
+            Check for Updates
+          </button>
         {/if}
         <button class="ghost" onclick={() => (updates.open = false)}>Done</button>
       </div>

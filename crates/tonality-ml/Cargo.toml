@@ -11,7 +11,7 @@ rayon.workspace = true
 thiserror.workspace = true
 ort = { version = "=2.0.0-rc.15", default-features = false, features = ["std", "download-binaries", "tls-native", "copy-dylibs", "api-31"] }
 ureq = "3"
-sha2 = "0.10"
+sha2 = "0.11"
 tonality-core.workspace = true
 
 [dev-dependencies]

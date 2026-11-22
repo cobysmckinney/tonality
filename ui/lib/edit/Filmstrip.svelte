@@ -56,9 +56,9 @@
   <div class="bar">
     <span class="source">{library.viewName}</span>
     {#if images.length}
-      <span class="pos"
-        >{index >= 0 ? `${index + 1} of ${images.length}` : `${images.length} photos`}</span
-      >
+      <span class="pos">
+        {index >= 0 ? `${index + 1} of ${images.length}` : `${images.length} photos`}
+      </span>
     {/if}
     <span class="keys">← → to switch photos</span>
   </div>

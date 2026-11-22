@@ -163,11 +163,11 @@
     <HistogramView {histogram} />
     <header>
       {#if mask}
-        <span class="kind-icon"
-          ><svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"
-            ><path d={SHAPE_ICON[mask.shape.kind]} /></svg
-          ></span
-        >
+        <span class="kind-icon">
+          <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true">
+            <path d={SHAPE_ICON[mask.shape.kind]} />
+          </svg>
+        </span>
         <span class="heading">
           <span class="name">{mask.name}</span>
           <span class="sub">{kindName(mask)}</span>
@@ -178,8 +178,10 @@
       <button
         class="primary"
         onclick={() => session.stopMasks()}
-        title="Back to the adjustments (M)">Done</button
+        title="Back to the adjustments (M)"
       >
+        Done
+      </button>
     </header>
   </div>
 
@@ -239,11 +241,12 @@
             <button
               class:active={!session.brush.erase}
               onclick={() => (session.brush.erase = false)}
-              >{mask.shape.kind === "ai" ? "Add" : "Paint"}</button
             >
-            <button class:active={session.brush.erase} onclick={() => (session.brush.erase = true)}
-              >Erase</button
-            >
+              {mask.shape.kind === "ai" ? "Add" : "Paint"}
+            </button>
+            <button class:active={session.brush.erase} onclick={() => (session.brush.erase = true)}>
+              Erase
+            </button>
           </div>
           <Slider
             label="Size"
@@ -296,12 +299,9 @@
           onclick={toggleInvert}
           aria-pressed={mask.invert}
         >
-          <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"
-            ><circle cx="8" cy="8" r="6" /><path
-              d="M8 2a6 6 0 0 0 0 12Z"
-              fill="currentColor"
-            /></svg
-          >
+          <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+            <circle cx="8" cy="8" r="6" /><path d="M8 2a6 6 0 0 0 0 12Z" fill="currentColor" />
+          </svg>
           Invert
         </button>
       </Section>

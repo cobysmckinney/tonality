@@ -462,8 +462,9 @@
     <div class="pane-label left">{before ? "Before" : compare.current}</div>
     <div class="pane-label right">
       {compare.label}
-      {#if oncloseCompare}<button onclick={oncloseCompare} title="Stop comparing (Esc)">×</button
-        >{/if}
+      {#if oncloseCompare}<button onclick={oncloseCompare} title="Stop comparing (Esc)">
+          ×
+        </button>{/if}
     </div>
   {:else if before}<div class="badge">Before</div>{/if}
   {#if error}<div class="error">{error}</div>{/if}

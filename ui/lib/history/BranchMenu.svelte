@@ -50,13 +50,13 @@
       onclick={() => (open = !open)}
       title="Versions of this photo"
     >
-      <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"
-        ><circle cx="4" cy="3.5" r="1.6" /><circle cx="4" cy="12.5" r="1.6" /><circle
+      <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
+        <circle cx="4" cy="3.5" r="1.6" /><circle cx="4" cy="12.5" r="1.6" /><circle
           cx="12"
           cy="5.5"
           r="1.6"
-        /><path d="M4 5.1v5.8M12 7.1c0 3-8 2-8 3.8" /></svg
-      >
+        /><path d="M4 5.1v5.8M12 7.1c0 3-8 2-8 3.8" />
+      </svg>
       <span class="name">{current}</span>
       {#if view.branches.length > 1}<span class="count">{view.branches.length}</span>{/if}
       <span class="caret">▾</span>
@@ -76,12 +76,12 @@
                 if (!isCurrent) session.switchBranch(b.name);
               }}
             >
-              <span class="thumb"
-                >{#if src}<img {src} alt="" />{/if}</span
-              >
-              <span class="label"
-                >{b.name}{#if isCurrent}<em>editing</em>{/if}</span
-              >
+              <span class="thumb">
+                {#if src}<img {src} alt="" />{/if}
+              </span>
+              <span class="label">
+                {b.name}{#if isCurrent}<em>editing</em>{/if}
+              </span>
             </button>
             {#if !isCurrent}
               <div class="actions">
@@ -91,15 +91,19 @@
                     session.startCompare(b.name);
                   }}
                   title="Compare side by side"
-                  class:on={session.compare?.branch === b.name}>Compare</button
+                  class:on={session.compare?.branch === b.name}
                 >
+                  Compare
+                </button>
                 <button
                   onclick={() => {
                     open = false;
                     session.applying = b.name;
                   }}
-                  title="Copy some or all of its settings onto {current}">Copy settings…</button
+                  title="Copy some or all of its settings onto {current}"
                 >
+                  Copy settings…
+                </button>
               </div>
             {/if}
           </div>

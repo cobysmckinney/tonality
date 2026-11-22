@@ -72,8 +72,9 @@
         {/each}
       </div>
       <div class="actions">
-        <button class="link" onclick={() => (chosen = new Set(panels.map((p) => p.id)))}>All</button
-        >
+        <button class="link" onclick={() => (chosen = new Set(panels.map((p) => p.id)))}>
+          All
+        </button>
         <span class="spacer"></span>
         <button class="ghost" onclick={() => (session.applying = null)}>Cancel</button>
         <button class="primary" onclick={apply} disabled={!chosen.size}>Copy</button>

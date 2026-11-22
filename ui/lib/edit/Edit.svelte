@@ -149,9 +149,9 @@
       <div class="panel-head">
         <span class="eyebrow">Versions</span>
         <button class="icon-btn" onclick={() => (historyOpen = false)} title="Hide panel">
-          <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"
-            ><path d="M10 3 5 8l5 5" /></svg
-          >
+          <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+            <path d="M10 3 5 8l5 5" />
+          </svg>
         </button>
       </div>
       <p class="hint">Open a photo to see its versions and history.</p>
@@ -192,9 +192,9 @@
         </div>
       {:else if !session.loading}
         <div class="empty">
-          <button class="btn primary" onclick={() => library.importFiles({ open: true })}
-            >Import Photos…</button
-          >
+          <button class="btn primary" onclick={() => library.importFiles({ open: true })}>
+            Import Photos…
+          </button>
           <p class="hint">Ctrl+O, or drop RAW files here. They’re copied into your library.</p>
         </div>
       {/if}
@@ -212,9 +212,9 @@
           onclick={() => (historyOpen = true)}
           title="Show versions &amp; history"
         >
-          <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"
-            ><path d="m6 3 5 5-5 5" /></svg
-          >
+          <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+            <path d="m6 3 5 5-5 5" />
+          </svg>
         </button>
       {/if}
     </section>
@@ -230,9 +230,9 @@
         onclick={toggleStrip}
         title={stripOpen ? "Hide filmstrip" : "Show filmstrip"}
       >
-        <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"
-          ><path d={stripOpen ? "m4 6 4 4 4-4" : "m4 10 4-4 4 4"} /></svg
-        >
+        <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
+          <path d={stripOpen ? "m4 6 4 4 4-4" : "m4 10 4-4 4 4"} />
+        </svg>
       </button>
     </div>
   </div>
