@@ -351,6 +351,10 @@ class LibraryState {
     await dropLibraryThumbs(ids);
     try {
       const s = await api.library.remove(ids);
+      // Out of the grid first, so no cell asks for a thumbnail that's no longer there.
+      const gone = new Set(s.removed);
+      this.images = this.images.filter((i) => !gone.has(i.id));
+      for (const id of s.removed) this.selected.delete(id);
       // Ids are given out again: nothing may still be held under these.
       for (const id of s.removed) invalidateThumb(id);
       session.forget(s.removed);
