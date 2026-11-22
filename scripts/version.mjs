@@ -62,6 +62,8 @@ function set(v) {
   for (const name of CRATES) {
     const at = new RegExp(`(\\[\\[package\\]\\]\\r?\\nname = "${name}"\\r?\\nversion = ")[^"]+(")`);
     replace("Cargo.lock", at, `$1${v}$2`);
+    // The licence notices list our own crates by version; CI fails if they go stale.
+    replace("licences/THIRD-PARTY-NOTICES.txt", new RegExp(`^(  ${name} )\\d+\\.\\d+\\.\\d+$`, "gm"), `$1${v}`);
   }
 }
 
