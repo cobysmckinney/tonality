@@ -1,0 +1,30 @@
+# Dependency updates. Security fixes come as soon as an advisory is published, whatever the
+# schedule below; these are the routine version bumps, grouped so each ecosystem opens one PR.
+#
+# Cargo bumps change licences/THIRD-PARTY-NOTICES.txt, which CI checks: on a Cargo PR, run
+# `npm run licences` and push the result before merging.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
+
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      npm:
+        update-types: [minor, patch]
+
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      cargo:
+        update-types: [minor, patch]

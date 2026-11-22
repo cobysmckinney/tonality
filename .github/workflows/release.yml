@@ -1,14 +1,19 @@
 # Stable releases. Two ways to start one:
 #
 #   - Actions → Release → Run workflow (or `npm run release -- minor`): bumps the version on
-#     main (patch, minor, major, or an exact X.Y.Z), commits "Release vX.Y.Z", tags it, builds
-#     and publishes. Nothing to do locally.
+#     main (patch, minor, major, or an exact X.Y.Z), commits "Release vX.Y.Z" and tags it.
+#     That run ends there; the tag push starts a second run that builds and publishes.
+#     Nothing to do locally.
 #   - Push a tag like `v0.2.0` yourself; it has to match the version in tauri.conf.json.
+#
+# main and v* tags are protected by repository rulesets, so the bump is pushed with the
+# RELEASE_DEPLOY_KEY secret: a deploy key with write access that the rulesets let through.
+# (Pushes made with the workflow's own token neither get past the rules nor start workflows.)
 #
 # The release stays a draft until every build has uploaded, so a half-built release is never
 # public, and the in-app updater (which reads the latest release's latest.json) never sees one.
 #
-# Only the small jobs that touch the repo or the release get a write token, and they run no
+# Only the small jobs that touch the repo or the release get write access, and they run no
 # dependencies: just git, gh, jq and scripts/version.mjs. The builds (build.yml) run `npm ci`,
 # every crate's build script and third-party actions, so they get a read-only token.
 name: Release
@@ -31,8 +36,38 @@ concurrency:
 permissions: {}
 
 jobs:
+  bump:
+    name: Bump and tag
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Releases are cut from main
+        if: github.ref != 'refs/heads/main'
+        run: |
+          echo "::error::Releases are cut from main (this run is on $GITHUB_REF)"
+          exit 1
+
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ssh-key: ${{ secrets.RELEASE_DEPLOY_KEY }}
+
+      - name: Bump the version, commit and tag
+        env:
+          BUMP: ${{ inputs.version }}
+        run: |
+          version=$(node scripts/version.mjs "$BUMP")
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -am "Release v$version"
+          git tag "v$version"
+          git push --atomic origin HEAD:refs/heads/main "refs/tags/v$version"
+          echo "Tagged v$version at $(git rev-parse HEAD); the tag's own run builds and publishes it."
+
   prepare:
-    name: Tag and draft
+    name: Draft the release
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -43,32 +78,14 @@ jobs:
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
-          # A manual release pushes its version bump back to main.
-          persist-credentials: ${{ github.event_name == 'workflow_dispatch' }}
-
-      - name: Bump the version, commit and tag
-        if: github.event_name == 'workflow_dispatch'
-        env:
-          BUMP: ${{ inputs.version }}
-        run: |
-          if [ "$GITHUB_REF" != "refs/heads/main" ]; then
-            echo "::error::Releases are cut from main (this run is on $GITHUB_REF)"
-            exit 1
-          fi
-          version=$(node scripts/version.mjs "$BUMP")
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git commit -am "Release v$version"
-          git tag "v$version"
-          git push --atomic origin HEAD:refs/heads/main "refs/tags/v$version"
-          echo "Released from $(git rev-parse HEAD)"
+          persist-credentials: false
 
       - name: Version
         id: version
         run: |
           version=$(node scripts/version.mjs)
           tag="v$version"
-          if [ "$GITHUB_EVENT_NAME" = push ] && [ "$GITHUB_REF_NAME" != "$tag" ]; then
+          if [ "$GITHUB_REF_NAME" != "$tag" ]; then
             echo "::error::Tag $GITHUB_REF_NAME does not match tauri.conf.json version $version (expected $tag)"
             exit 1
           fi
