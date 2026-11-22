@@ -858,8 +858,8 @@ mod tests {
                 assert!(std::fs::metadata(&copy).unwrap().permissions().readonly());
                 remove_readonly(&copy);
             }
-            Outcome::Duplicate(_) => panic!("duplicate"),
             Outcome::Failed(e) => panic!("{e}"),
+            _ => panic!("not imported"),
         }
         remove_readonly(&src);
         std::fs::remove_dir_all(&root).unwrap();
