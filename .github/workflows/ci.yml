@@ -54,7 +54,8 @@ jobs:
 
       # The runner has no GPU. Its software renderers are hidden so the GPU tests skip themselves:
       # Mesa's OpenGL can't render to the float target they need, and its Vulkan rounds
-      # differently enough from real hardware to fail the AgX comparison near black.
+      # differently enough from real hardware to fail the AgX comparison near black. The GPU
+      # job below is where they run.
       - name: Test
         run: cargo test --workspace
         env:
@@ -70,6 +71,29 @@ jobs:
           cargo install --locked cargo-about --version 0.9.3 --features cli
           npm run licences
           git diff --exit-code -- licences/THIRD-PARTY-NOTICES.txt
+
+  # The shader tests (AgX against its reference, the gain map, tone order, noise at black) need
+  # a GPU, which the Linux runners don't have. The macOS runners do: Apple silicon, with Metal.
+  # TONALITY_REQUIRE_GPU turns "no GPU, skipped" into a failure, so this job can't pass by not
+  # running them.
+  gpu:
+    name: GPU tests
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
+
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+
+      # --nocapture: the log then names the adapter and how far each comparison was off.
+      - name: Test
+        run: cargo test -p tonality-render -- --nocapture
+        env:
+          TONALITY_REQUIRE_GPU: 1
 
   ui:
     name: UI

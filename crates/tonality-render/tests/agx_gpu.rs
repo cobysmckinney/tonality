@@ -1,6 +1,8 @@
 //! The export shader's AgX against the CPU reference (`tonality_core::agx`), on the GPU, and
 //! colours outside Rec.2020 on their way to it. Skipped (passes with a note) on machines without
-//! a usable adapter.
+//! a usable adapter, unless `TONALITY_REQUIRE_GPU` is set.
+
+mod common;
 
 use half::f16;
 use tonality_core::agx::{Agx, Display, GAIN_LOG2, GAIN_OFFSET};
@@ -93,10 +95,6 @@ fn develop(
         .collect()
 }
 
-fn gpu() -> Option<Gpu> {
-    Gpu::new().map_err(|e| eprintln!("skipped: {e}")).ok()
-}
-
 /// The reference colours, as camera values and as the Rec.2020 colours the shader receives.
 fn reference_colours() -> (Mat3, Vec<[f32; 3]>, Vec<[f64; 3]>) {
     let reference: Reference = serde_json::from_str(include_str!(
@@ -142,7 +140,7 @@ fn worst(
 
 #[test]
 fn shader_agx_matches_the_cpu_reference() {
-    let Some(gpu) = gpu() else { return };
+    let Some(gpu) = common::gpu() else { return };
     let (m, cam, inputs) = reference_colours();
     for display in [Display::Srgb, Display::DisplayP3] {
         let out = develop(&gpu, &m, &cam, |p| *p = p.for_display(display));
@@ -161,7 +159,7 @@ fn shader_agx_matches_the_cpu_reference() {
 /// primaries), over the stored range.
 #[test]
 fn shader_gain_map_matches_the_cpu_reference() {
-    let Some(gpu) = gpu() else { return };
+    let Some(gpu) = common::gpu() else { return };
     let (m, cam, inputs) = reference_colours();
     let linear = |v: f64| {
         if v <= 0.04045 {
@@ -193,7 +191,7 @@ fn shader_gain_map_matches_the_cpu_reference() {
 /// negative green, which brings some red with it).
 #[test]
 fn colours_outside_rec2020_survive_tone() {
-    let Some(gpu) = gpu() else { return };
+    let Some(gpu) = common::gpu() else { return };
     // XYZ can't hold a negative luminance, but a real camera's matrix can produce one: this
     // camera's green takes away a fifth of its blue.
     let m: Mat3 = [[1.0, 0.0, 0.0], [0.0, 1.0, -0.2], [0.0, 0.0, 1.0]];
@@ -229,7 +227,7 @@ fn colours_outside_rec2020_survive_tone() {
 fn auto_tone_model_matches_the_shader() {
     use tonality_core::auto::{display_of_ev, tone_ev};
     use tonality_core::edit::Light;
-    let Some(gpu) = gpu() else { return };
+    let Some(gpu) = common::gpu() else { return };
     let m = invert(&REC2020_TO_XYZ).unwrap();
     let evs: Vec<f32> = (0..=56).map(|i| -10.0 + i as f32 * 0.25).collect();
     let cam: Vec<[f32; 3]> = evs
