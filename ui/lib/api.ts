@@ -70,6 +70,8 @@ export const api = {
   },
   exportImages: (ids: number[], settings: ExportSettings) =>
     invoke<ExportSummary>("export_images", { ids, settings }),
+  /** Stop the running export once the file it's on is written. */
+  exportCancel: () => invoke<void>("export_cancel"),
   /**
    * Raster mask layers: `layers` 8-bit `width × height` images, one per brush or AI mask.
    * `missing`: indices of AI masks whose raster hasn't been generated yet.
@@ -110,6 +112,8 @@ export const api = {
   library: {
     overview: () => invoke<LibraryOverview>("library_overview"),
     import: (paths: string[]) => invoke<ImportSummary>("library_import", { paths }),
+    /** Stop the running import: photos already copied stay, the rest are left out. */
+    cancelImport: () => invoke<void>("library_import_cancel"),
     /** Catalogue originals in the library folder the catalog doesn't know (restoring sidecar edits). */
     recover: () => invoke<ImportSummary>("library_recover"),
     images: (query: ImageQuery) => invoke<ImageRow[]>("library_images", { query }),

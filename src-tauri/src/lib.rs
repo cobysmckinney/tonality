@@ -1,4 +1,5 @@
 mod ai;
+mod cancel;
 mod export;
 mod history;
 mod images;
@@ -392,6 +393,7 @@ pub fn run() {
             preview_pixels,
             detail_region,
             export::export_images,
+            export::export_cancel,
             develop_params,
             presence_maps,
             develop_curve,
@@ -414,6 +416,7 @@ pub fn run() {
             thumbs::library_save_edited,
             library::library_overview,
             library::library_import,
+            library::library_import_cancel,
             library::library_recover,
             library::library_remove,
             library::library_images,

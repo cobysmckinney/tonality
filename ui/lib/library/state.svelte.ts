@@ -70,6 +70,8 @@ class LibraryState {
   anchor: number | null = null;
   thumbSize = $state(storedSize());
   importing = $state<{ done: number; total: number } | null>(null);
+  /** Stop was asked for: photos being copied finish first. */
+  stoppingImport = $state(false);
   /** The launch-time scan for untracked originals (shown only once it finds some). */
   restoring = $state<{ done: number; total: number } | null>(null);
   /** Files are being dragged over the window. */
@@ -196,6 +198,7 @@ class LibraryState {
       if (s.duplicates) parts.push(`${s.duplicates} already in library`);
       if (s.restored) parts.push(`edits restored for ${s.restored}`);
       if (s.failed) parts.push(`${s.failed} failed${s.error ? ` (${s.error})` : ""}`);
+      if (s.skipped) parts.unshift("Import stopped", `${s.skipped} left out`);
       this.message = parts.length ? parts.join(" · ") : (s.error ?? "Nothing to import");
       if (s.failed && s.error) console.warn("[import]", s.error);
       // Show what just arrived.
@@ -212,7 +215,15 @@ class LibraryState {
       this.message = String(e);
     } finally {
       this.importing = null;
+      this.stoppingImport = false;
     }
+  }
+
+  /** Stop the running import. Photos already copied stay in the library. */
+  async stopImport() {
+    if (!this.importing || this.stoppingImport) return;
+    this.stoppingImport = true;
+    await api.library.cancelImport().catch((e) => (this.message = String(e)));
   }
 
   #recovered = false;

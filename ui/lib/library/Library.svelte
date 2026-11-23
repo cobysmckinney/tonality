@@ -208,10 +208,21 @@
               : 0}%"
           ></div>
         </div>
-        <span>
-          {library.importing.total
-            ? `Copying ${library.importing.done} of ${library.importing.total}`
-            : "Looking for photos…"}
+        <span class="import-status">
+          {#if library.stoppingImport}
+            Stopping…
+          {:else}
+            {library.importing.total
+              ? `Copying ${library.importing.done} of ${library.importing.total}`
+              : "Looking for photos…"}
+            <button
+              class="stop"
+              onclick={() => library.stopImport()}
+              title="Stop importing. Photos already copied stay in your library."
+            >
+              Stop
+            </button>
+          {/if}
         </span>
       </div>
     {:else if library.restoring?.total}
@@ -672,6 +683,19 @@
     padding: 0 var(--space-2);
     font-size: var(--fs-xs);
     color: var(--text-2);
+  }
+  .import-status {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--space-2);
+  }
+  .stop {
+    color: var(--text-1);
+    font-size: var(--fs-xs);
+  }
+  .stop:hover {
+    color: var(--text-0);
   }
   .bar {
     height: 3px;

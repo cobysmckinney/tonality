@@ -14,6 +14,10 @@ import: ImportInfo | null, added: number,
  */
 duplicates: number, failed: number, 
 /**
+ * Left out because the import was stopped before it reached them.
+ */
+skipped: number, 
+/**
  * Photos whose edits, rating or flag came from a `.tonality` sidecar.
  */
 restored: number, 

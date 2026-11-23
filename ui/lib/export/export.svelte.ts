@@ -30,6 +30,8 @@ class Exporter {
     ...stored(),
   });
   running = $state(false);
+  /** Stop was asked for: the file being written finishes first. */
+  stopping = $state(false);
   progress = $state<{ done: number; total: number; name: string } | null>(null);
   result = $state<ExportSummary | null>(null);
   error = $state<string | null>(null);
@@ -66,6 +68,7 @@ class Exporter {
       /* per-viewer convenience only */
     }
     this.running = true;
+    this.stopping = false;
     this.progress = null;
     this.result = null;
     this.error = null;
@@ -75,7 +78,15 @@ class Exporter {
       this.error = String(e);
     } finally {
       this.running = false;
+      this.stopping = false;
     }
+  }
+
+  /** Stop the running export. Files already written stay. */
+  async stop() {
+    if (!this.running || this.stopping) return;
+    this.stopping = true;
+    await api.exportCancel().catch((e) => (this.error = String(e)));
   }
 }
 
