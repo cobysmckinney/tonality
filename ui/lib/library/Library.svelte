@@ -4,7 +4,7 @@
   import type { ImageMeta } from "$lib/bindings/ImageMeta";
   import type { ImageQuery } from "$lib/bindings/ImageQuery";
   import Grid from "./Grid.svelte";
-  import { library, type View } from "./state.svelte";
+  import { BIN as bin, library, type View } from "./state.svelte";
   import { thumbKey, thumbnail } from "./thumbs";
   import { targetOwnsKey } from "$lib/keys";
 
@@ -39,6 +39,13 @@
       library.importFiles();
       return;
     }
+    const del = e.key === "Delete" || e.key === "Backspace";
+    // Delete alone means "out of this album" inside one; with Ctrl it's always the library.
+    if (del && !e.altKey && (mod || !inAlbum)) {
+      e.preventDefault();
+      library.remove();
+      return;
+    }
     if (mod || e.altKey) return;
     if (e.key.startsWith("Arrow")) {
       e.preventDefault();
@@ -54,7 +61,7 @@
     } else if (e.key === "Enter" && library.focus !== null) {
       e.preventDefault();
       library.open();
-    } else if ((e.key === "Delete" || e.key === "Backspace") && inAlbum) {
+    } else if (del) {
       library.removeFromAlbum();
     } else if (e.key === "Escape") {
       if (menuOpen) menuOpen = false;
@@ -442,6 +449,15 @@
             title="Take the selected photos back to as-shot, deleting all their versions and steps"
           >
             Reset History…
+          </button>
+          <button
+            class="btn"
+            onclick={() => library.remove()}
+            title="Remove from your library and move the files to the {bin} ({inAlbum
+              ? 'Ctrl+Delete'
+              : 'Delete'})"
+          >
+            Move to {bin}…
           </button>
           {#if inAlbum}
             <button

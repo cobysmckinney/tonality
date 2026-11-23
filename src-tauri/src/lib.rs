@@ -415,6 +415,7 @@ pub fn run() {
             library::library_overview,
             library::library_import,
             library::library_recover,
+            library::library_remove,
             library::library_images,
             library::library_set_rating,
             library::library_set_flag,

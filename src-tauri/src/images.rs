@@ -172,6 +172,23 @@ impl Images {
         let _ = tx.lock().unwrap().send((id, path.to_path_buf()));
     }
 
+    /// Drop everything held for `ids` (photos removed from the library: a photo imported later
+    /// can be given one of their ids, and mustn't be shown their pixels).
+    pub fn forget(&self, ids: &[ImageId]) {
+        self.previews
+            .lock()
+            .unwrap()
+            .retain(|(i, _)| !ids.contains(i));
+        self.presence
+            .lock()
+            .unwrap()
+            .retain(|(i, _)| !ids.contains(i));
+        let mut full = self.full.lock().unwrap();
+        if full.as_ref().is_some_and(|(i, _)| ids.contains(i)) {
+            *full = None;
+        }
+    }
+
     pub fn get(&self, id: ImageId) -> Option<Arc<Preview>> {
         self.previews
             .lock()

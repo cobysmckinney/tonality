@@ -23,6 +23,9 @@ const RAW_FILTER = [
   },
 ];
 
+/** What this system calls the place deleted files go. */
+export const BIN = navigator.userAgent.includes("Windows") ? "Recycle Bin" : "Trash";
+
 function storedSize(): number {
   try {
     const v = Number(localStorage.getItem(SIZE_KEY));
@@ -318,6 +321,54 @@ class LibraryState {
     for (const id of edited) invalidateThumb(id);
     if (session.history && edited.includes(session.history.imageId)) await session.reloadHistory();
     await this.refresh();
+  }
+
+  /**
+   * Take the selected photos out of the library, moving their files to the system's Trash.
+   * Their edits go along in the sidecars, so importing them again from there brings those back.
+   */
+  async remove() {
+    const ids = this.targets();
+    if (!ids.length) return;
+    const one = ids.length === 1;
+    const ok = await ask(
+      `Move ${one ? "this photo" : `these ${ids.length} photos`} to the ${BIN}? ` +
+        `${one ? "It leaves" : "They leave"} your library, along with ${one ? "its" : "their"} ` +
+        `edits, versions, rating and album places.\n\n` +
+        `You can get ${one ? "it" : "them"} back from the ${BIN}: import ${one ? "it" : "them"} ` +
+        `again from there and the edits come back too.`,
+      {
+        title: one ? "Remove photo" : "Remove photos",
+        kind: "warning",
+        okLabel: `Move to ${BIN}`,
+        cancelLabel: "Cancel",
+      },
+    );
+    if (!ok) return;
+    // Where the first of them was, to leave the focus on the photo that takes its place.
+    const at = this.images.findIndex((i) => ids.includes(i.id));
+    // A thumbnail still to be saved for one of them mustn't land after it's gone.
+    await dropLibraryThumbs(ids);
+    try {
+      const s = await api.library.remove(ids);
+      // Out of the grid first, so no cell asks for a thumbnail that's no longer there.
+      const gone = new Set(s.removed);
+      this.images = this.images.filter((i) => !gone.has(i.id));
+      for (const id of s.removed) this.selected.delete(id);
+      // Ids are given out again: nothing may still be held under these.
+      for (const id of s.removed) invalidateThumb(id);
+      session.forget(s.removed);
+      const n = s.removed.length;
+      this.message = s.failed
+        ? `Couldn’t move ${s.failed} photo${s.failed === 1 ? "" : "s"} to the ${BIN}: ${s.error}`
+        : `Moved ${n} photo${n === 1 ? "" : "s"} to the ${BIN}`;
+    } catch (e) {
+      this.message = String(e);
+    }
+    await this.refresh();
+    if (!this.selected.size && this.images.length) {
+      this.focus = this.anchor = this.images[Math.min(Math.max(at, 0), this.images.length - 1)].id;
+    }
   }
 
   // ---- albums ----
