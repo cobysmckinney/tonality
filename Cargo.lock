@@ -5705,6 +5705,7 @@ dependencies = [
  "image",
  "kamadak-exif",
  "libc",
+ "log",
  "rayon",
  "serde",
  "serde_json",
@@ -5772,6 +5773,7 @@ version = "0.1.1"
 dependencies = [
  "half",
  "image",
+ "log",
  "naga",
  "pollster",
  "rayon",

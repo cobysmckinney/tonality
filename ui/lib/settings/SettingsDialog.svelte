@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { revealItemInDir } from "@tauri-apps/plugin-opener";
+  import { api } from "$lib/api";
   import type { ReleaseChannel } from "$lib/bindings/ReleaseChannel";
   import { updates } from "./updates.svelte";
 
@@ -22,6 +24,12 @@
     updates.progress?.total ? (100 * updates.progress.downloaded) / updates.progress.total : 0,
   );
   const mb = (bytes: number) => `${(bytes / 1_000_000).toFixed(1)} MB`;
+
+  /** Show the log file in the file manager, for attaching to a bug report. */
+  async function showLog() {
+    const path = await api.logPath();
+    if (path) await revealItemInDir(path);
+  }
 
   function onKey(e: KeyboardEvent) {
     if (!updates.open) return;
@@ -122,6 +130,13 @@
       </div>
 
       <div class="actions">
+        <button
+          class="ghost log"
+          onclick={showLog}
+          title="Errors are recorded in this file. Attach it when you report a problem."
+        >
+          Show Log File
+        </button>
         {#if updates.status === "available"}
           <button class="primary" onclick={() => updates.download()}>Download</button>
         {:else if updates.status === "ready" || updates.status === "installing"}
@@ -265,6 +280,11 @@
     padding: 6px 16px;
     border-radius: var(--radius-m);
     font-weight: 500;
+  }
+  .actions .log {
+    margin-right: auto;
+    padding-left: 0;
+    font-weight: 400;
   }
   .primary {
     background: var(--bg-3);

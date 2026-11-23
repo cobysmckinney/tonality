@@ -59,7 +59,7 @@ impl Store {
                 "the library is already open in another tonality window",
             )),
             Err(TryLockError::Error(e)) => {
-                eprintln!("[tonality] cannot lock the library ({e}); continuing unlocked");
+                log::warn!("cannot lock the library ({e}); continuing unlocked");
                 Ok(f)
             }
         }
@@ -123,7 +123,7 @@ pub fn rename_noreplace(from: &Path, to: &Path) -> io::Result<()> {
     match std::fs::hard_link(from, to) {
         Ok(()) => {
             if let Err(e) = std::fs::remove_file(from) {
-                eprintln!("[tonality] cannot remove {}: {e}", from.display());
+                log::warn!("cannot remove {}: {e}", from.display());
             }
             return Ok(());
         }

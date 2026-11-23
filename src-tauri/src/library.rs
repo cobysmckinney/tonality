@@ -468,7 +468,7 @@ pub async fn library_import(paths: Vec<String>, app: AppHandle) -> CmdResult<Imp
                     }
                 }
                 Outcome::Failed(e) => {
-                    eprintln!("[import] {e}");
+                    log::warn!("import: {e}");
                     s.failed += 1;
                     s.error.get_or_insert(e);
                 }
@@ -551,7 +551,7 @@ pub async fn library_recover(app: AppHandle) -> CmdResult<ImportSummary> {
                 Ok(None) => s.duplicates += 1,
                 Err(e) => {
                     let e = format!("{}: {e}", path.display());
-                    eprintln!("[recover] {e}");
+                    log::warn!("recover: {e}");
                     s.failed += 1;
                     s.error.get_or_insert(e);
                 }

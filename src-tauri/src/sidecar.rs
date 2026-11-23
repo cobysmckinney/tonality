@@ -53,13 +53,13 @@ pub fn adopt(catalog: &CatalogState, id: ImageId, original: &Path) -> bool {
     match read(original) {
         None => false,
         Some(Err(e)) => {
-            eprintln!("[sidecar] ignoring {}: {e}", path_for(original).display());
+            log::warn!("ignoring {}: {e}", path_for(original).display());
             false
         }
         Some(Ok(sc)) => match catalog.edit(&[id], |c| c.merge_sidecar(id, &sc)) {
             Ok(m) => m.changed(),
             Err(e) => {
-                eprintln!("[sidecar] ignoring {}: {e}", path_for(original).display());
+                log::warn!("ignoring {}: {e}", path_for(original).display());
                 false
             }
         },
@@ -88,11 +88,7 @@ fn write_file(path: &Path, sc: &Sidecar) -> CmdResult<()> {
                 });
             if !usable {
                 let aside = set_aside(path)?;
-                eprintln!(
-                    "[sidecar] kept unreadable {} as {}",
-                    path.display(),
-                    aside.display()
-                );
+                log::warn!("kept unreadable {} as {}", path.display(), aside.display());
             }
         }
     }
@@ -170,10 +166,7 @@ impl Pending {
             },
             Some(Err(e)) => e,
         };
-        eprintln!(
-            "[sidecar] leaving {} alone: {err}",
-            path_for(&original).display()
-        );
+        log::warn!("leaving {} alone: {err}", path_for(&original).display());
         Reconciled::Unreadable
     }
 }
@@ -202,7 +195,7 @@ impl Queue {
     fn write_all(&mut self, app: &AppHandle) {
         for id in std::mem::take(&mut self.dirty) {
             if let Err(e) = write(app, id) {
-                eprintln!("[sidecar] {e}");
+                log::warn!("{e}");
             }
         }
         for done in self.flushes.drain(..) {
@@ -230,7 +223,7 @@ fn reconcile(app: &AppHandle, pending: &Pending, rx: &Receiver<Msg>, q: &mut Que
         }
         if catalog.with(|c| Ok(pending.reconcile(c, id))) == Ok(Reconciled::Ready) {
             if let Err(e) = write(app, id) {
-                eprintln!("[sidecar] {e}");
+                log::warn!("{e}");
             }
         }
     }

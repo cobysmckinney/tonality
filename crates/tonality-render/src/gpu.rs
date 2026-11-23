@@ -77,13 +77,13 @@ impl Gpu {
         let flag = lost.clone();
         device.set_device_lost_callback(move |reason, message| {
             if reason != wgpu::DeviceLostReason::Destroyed {
-                eprintln!("GPU device lost ({reason:?}): {message}");
+                log::error!("GPU device lost ({reason:?}): {message}");
             }
             flag.store(true, Ordering::SeqCst);
         });
         let flag = lost.clone();
         device.on_uncaptured_error(Arc::new(move |e: wgpu::Error| {
-            eprintln!("uncaptured GPU error: {e}");
+            log::error!("uncaptured GPU error: {e}");
             flag.store(true, Ordering::SeqCst);
         }));
 
