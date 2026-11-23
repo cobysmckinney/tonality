@@ -7,6 +7,7 @@
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
+use crate::grading::ColorGrading;
 use crate::lens::LensCorrection;
 use crate::mask::{describe_masks, Mask};
 
@@ -30,6 +31,10 @@ pub struct EditState {
     #[serde(skip_serializing_if = "LensCorrection::is_default")]
     #[ts(optional = nullable)]
     pub lens: LensCorrection,
+    /// Colour grading. Omitted from the JSON while untouched (older states keep their hashes).
+    #[serde(skip_serializing_if = "ColorGrading::is_default")]
+    #[ts(optional = nullable)]
+    pub grading: ColorGrading,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, TS)]
@@ -321,6 +326,7 @@ pub enum Panel {
     Light,
     ToneCurve,
     Color,
+    ColorGrading,
     Detail,
     Effects,
     Crop,
@@ -329,11 +335,12 @@ pub enum Panel {
 }
 
 impl Panel {
-    pub const ALL: [Panel; 9] = [
+    pub const ALL: [Panel; 10] = [
         Panel::WhiteBalance,
         Panel::Light,
         Panel::ToneCurve,
         Panel::Color,
+        Panel::ColorGrading,
         Panel::Detail,
         Panel::Effects,
         Panel::Crop,
@@ -347,6 +354,7 @@ impl Panel {
             Panel::Light => "Light",
             Panel::ToneCurve => "Tone Curve",
             Panel::Color => "Color",
+            Panel::ColorGrading => "Color Grading",
             Panel::Detail => "Detail",
             Panel::Effects => "Effects",
             Panel::Crop => "Crop",
@@ -366,6 +374,7 @@ impl EditState {
                 Panel::Light => out.light = src.light.clone(),
                 Panel::ToneCurve => out.curve = src.curve.clone(),
                 Panel::Color => out.color = src.color.clone(),
+                Panel::ColorGrading => out.grading = src.grading.clone(),
                 Panel::Detail => out.detail = src.detail.clone(),
                 Panel::Effects => out.effects = src.effects.clone(),
                 Panel::Crop => out.crop = src.crop.clone(),
@@ -677,6 +686,16 @@ pub fn describe_change(prev: &EditState, next: &EditState) -> String {
             "Chromatic Aberration Off"
         });
     }
+    // Grading is named as one thing: a linked drag moves all three ranges at once.
+    let (a, b) = (&prev.grading, &next.grading);
+    let grading = match b.link {
+        Some(h) if a.link != b.link => format!("Color Grading Linked: {}", h.label()),
+        None if a.link.is_some() => "Color Grading Unlinked".into(),
+        _ => "Color Grading".into(),
+    };
+    if a != b {
+        curves.push(&grading);
+    }
     let masks = describe_masks(&prev.masks, &next.masks);
     if let ([], [], [(_, full)]) = (changed.as_slice(), curves.as_slice(), masks.as_slice()) {
         return full.clone();
@@ -703,6 +722,7 @@ pub fn describe_change(prev: &EditState, next: &EditState) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::grading::Harmony;
 
     #[test]
     fn presence_settings_stay_out_of_the_hash_until_used() {
@@ -813,6 +833,50 @@ mod tests {
         let mut f = a.clone();
         f.detail.sharpen_radius = 1.5;
         assert_eq!(describe_change(&a, &f), "Sharpen Radius 1.5");
+    }
+
+    #[test]
+    fn grading_stays_out_of_the_hash_until_used() {
+        let mut s = EditState::default();
+        assert!(!s.to_canonical_json().contains("grading"));
+        let untouched = s.hash();
+        s.grading.shadows.saturation = 40.0;
+        s.grading.shadows.hue = 220.0;
+        s.grading.link = Some(Harmony::Complementary);
+        let json = s.to_canonical_json();
+        assert!(json.contains("\"link\":\"complementary\""), "{json}");
+        assert_ne!(s.hash(), untouched);
+        assert_eq!(serde_json::from_str::<EditState>(&json).unwrap(), s);
+        s.grading = ColorGrading::default();
+        assert_eq!(s.hash(), untouched);
+    }
+
+    #[test]
+    fn grading_changes_are_named() {
+        let a = EditState::default();
+        let mut b = a.clone();
+        b.grading.shadows.saturation = 40.0;
+        b.grading.highlights.saturation = 40.0;
+        b.grading.highlights.hue = 180.0;
+        assert_eq!(describe_change(&a, &b), "Color Grading");
+        let mut c = b.clone();
+        c.grading.link = Some(Harmony::Triadic);
+        c.grading.midtones.saturation = 40.0;
+        assert_eq!(describe_change(&b, &c), "Color Grading Linked: Triadic");
+        assert_eq!(describe_change(&c, &b), "Color Grading Unlinked");
+        b.light.exposure = 1.0;
+        assert_eq!(describe_change(&a, &b), "Exposure, Color Grading");
+    }
+
+    #[test]
+    fn grading_is_a_panel_to_copy() {
+        let mut src = EditState::default();
+        src.grading.midtones.luminance = 12.0;
+        src.color.saturation = 30.0;
+        let out = EditState::default().with_panels_from(&src, &[Panel::ColorGrading]);
+        assert_eq!(out.grading, src.grading);
+        assert_eq!(out.color.saturation, 0.0);
+        assert!(Panel::ALL.contains(&Panel::ColorGrading));
     }
 
     #[test]

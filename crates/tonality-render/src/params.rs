@@ -24,6 +24,8 @@ pub struct DevelopParams {
     pub mix_hue: [[f32; 4]; 2],
     pub mix_sat: [[f32; 4]; 2],
     pub mix_lum: [[f32; 4]; 2],
+    /// Colour grading (`ColorGrading::uniform`).
+    pub grade: [[f32; 4]; 4],
     pub vignette: [f32; 4],
     pub grain: [f32; 4],
     pub detail0: [f32; 4],
@@ -49,10 +51,10 @@ pub struct DevelopParams {
 
 impl DevelopParams {
     pub const FLOATS: usize =
-        80 + MAX_MASKS * MASK_VEC4S * 4 + 4 + LENS_KNOTS * 4 + 2 * AGX_VEC4S * 4 + 4 + 4 * 4;
+        96 + MAX_MASKS * MASK_VEC4S * 4 + 4 + LENS_KNOTS * 4 + 2 * AGX_VEC4S * 4 + 4 + 4 * 4;
     /// Float offsets of blocks the preview reads back: framing (geo0, geo1) and `lens_head`.
-    pub const GEO_OFFSET: usize = 68;
-    pub const LENS_OFFSET: usize = 80 + MAX_MASKS * MASK_VEC4S * 4;
+    pub const GEO_OFFSET: usize = 84;
+    pub const LENS_OFFSET: usize = 96 + MAX_MASKS * MASK_VEC4S * 4;
     /// The `presence` block: [`Self::FLOATS`] minus its 4 vec4s.
     pub const PRESENCE_OFFSET: usize = Self::FLOATS - 16;
 
@@ -96,6 +98,7 @@ impl DevelopParams {
             mix_hue: split(bands.map(|b| n(b.hue))),
             mix_sat: split(bands.map(|b| n(b.saturation))),
             mix_lum: split(bands.map(|b| n(b.luminance))),
+            grade: edit.grading.uniform(),
             vignette: [n(v.amount), u(v.midpoint), u(v.feather), 0.0],
             grain: [u(g.amount), u(g.size), 0.0, 0.0],
             detail0: [
@@ -283,6 +286,9 @@ impl DevelopParams {
         for block in [&self.mix_hue, &self.mix_sat, &self.mix_lum] {
             v.extend_from_slice(&block[0]);
             v.extend_from_slice(&block[1]);
+        }
+        for r in &self.grade {
+            v.extend_from_slice(r);
         }
         v.extend_from_slice(&self.vignette);
         v.extend_from_slice(&self.grain);
