@@ -15,8 +15,9 @@ change is a step you can go back to, and a photo can have several versions side 
   DNG.
 - **Library:** import folders, rate and flag photos, filter, and collect them in albums.
 - **Edit:** white balance (presets, Auto, or your own), light, tone curve, colour and an
-  eight-band colour mixer, sharpening and noise reduction, lens correction, crop and straighten,
-  texture, clarity, dehaze, vignette and grain.
+  eight-band colour mixer, colour grading for shadows, midtones and highlights, sharpening and
+  noise reduction, lens correction, crop and straighten, texture, clarity, dehaze, vignette and
+  grain.
 - **Masks:** gradients, a brush, and AI masks for the subject, sky, people, or an object you
   circle. The models run on your computer; photos never leave it.
 - **Versions and history:** every edit is a step in the photo's history. Branch off a version
@@ -83,7 +84,7 @@ the TypeScript types in `ui/lib/bindings` from the Rust ones; commit them when t
 | `crates/tonality-ml`     | On-device models for AI masks                                               |
 | `src-tauri`              | The desktop app: catalog, commands, export                                  |
 | `ui`                     | The interface, in Svelte                                                    |
-| `docs`                   | How the colour, Auto, presence and metadata features work                   |
+| `docs`                   | How the colour, grading, Auto, presence and metadata features work          |
 
 ### Working on it
 
