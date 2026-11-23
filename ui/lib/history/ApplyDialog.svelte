@@ -9,6 +9,7 @@
     { id: "light", label: "Light" },
     { id: "toneCurve", label: "Tone Curve" },
     { id: "color", label: "Color" },
+    { id: "colorGrading", label: "Color Grading" },
     { id: "detail", label: "Detail" },
     { id: "effects", label: "Effects" },
     { id: "crop", label: "Crop" },

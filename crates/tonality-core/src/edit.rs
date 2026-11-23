@@ -689,8 +689,8 @@ pub fn describe_change(prev: &EditState, next: &EditState) -> String {
     // Grading is named as one thing: a linked drag moves all three ranges at once.
     let (a, b) = (&prev.grading, &next.grading);
     let grading = match b.link {
-        Some(h) if a.link != b.link => format!("Color Grading Linked: {}", h.label()),
-        None if a.link.is_some() => "Color Grading Unlinked".into(),
+        Some(h) if a.link != b.link => format!("Color Grading: {}", h.label()),
+        None if a.link.is_some() => "Color Grading: Unlinked".into(),
         _ => "Color Grading".into(),
     };
     if a != b {
@@ -862,8 +862,8 @@ mod tests {
         let mut c = b.clone();
         c.grading.link = Some(Harmony::Triadic);
         c.grading.midtones.saturation = 40.0;
-        assert_eq!(describe_change(&b, &c), "Color Grading Linked: Triadic");
-        assert_eq!(describe_change(&c, &b), "Color Grading Unlinked");
+        assert_eq!(describe_change(&b, &c), "Color Grading: Triadic");
+        assert_eq!(describe_change(&c, &b), "Color Grading: Unlinked");
         b.light.exposure = 1.0;
         assert_eq!(describe_change(&a, &b), "Exposure, Color Grading");
     }

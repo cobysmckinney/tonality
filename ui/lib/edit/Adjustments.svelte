@@ -14,7 +14,9 @@
   import type { ImageInfo } from "$lib/bindings/ImageInfo";
   import Section from "$lib/design/Section.svelte";
   import Slider from "$lib/design/Slider.svelte";
+  import ColorGradingPanel from "./ColorGrading.svelte";
   import CurveEditor from "./CurveEditor.svelte";
+  import { GRADING_DEFAULT } from "./grading";
   import { session } from "./session.svelte";
   import HistogramView from "./Histogram.svelte";
   import type { Histogram } from "./renderer";
@@ -155,6 +157,14 @@
       return v.hue || v.saturation || v.luminance;
     }),
   );
+  // ---- colour grading ----
+  // `edit.grading` is absent until first touched, like the lens settings.
+  const grading = $derived(edit.grading ?? GRADING_DEFAULT);
+  function resetGrading() {
+    edit.grading = structuredClone(GRADING_DEFAULT);
+    oncommit?.(null);
+  }
+
   // ---- lens ----
   // `edit.lens` is absent until first touched (so untouched states keep their hashes).
   const LENS_DEFAULT: LensCorrection = {
@@ -200,6 +210,7 @@
     curve: !!defaults && !same(edit.curve, defaults.curve),
     color: edit.color.vibrance !== 0 || edit.color.saturation !== 0,
     mixer: mixerEdited,
+    grading: !!edit.grading && !same(edit.grading, GRADING_DEFAULT),
     detail: !!defaults && !same(edit.detail, defaults.detail),
     lens: !!edit.lens && !same(edit.lens, LENS_DEFAULT),
     effects: !!defaults && !same(edit.effects, defaults.effects),
@@ -412,6 +423,14 @@
           oncommit={() => oncommit?.(`mixer.${b.id}.${mixerMode}`)}
         />
       {/each}
+    </Section>
+
+    <Section title="Color Grading" open={false} edited={edited.grading} onreset={resetGrading}>
+      <ColorGradingPanel
+        value={grading}
+        oninput={(g) => (edit.grading = g)}
+        oncommit={(key) => oncommit?.(key)}
+      />
     </Section>
 
     <Section title="Detail" open={false} edited={edited.detail} onreset={() => reset("detail")}>
