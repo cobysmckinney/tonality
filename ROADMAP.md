@@ -183,6 +183,7 @@ _(new ideas go here)_
 - Tethered shooting; printing.
 
 ## Done
+- 2026-11-23 — Colour grading: one wheel with a dot each for shadows, midtones and highlights, plus Blending and Balance; the dots can be linked in a shape (analogous, complementary, triadic, split-complementary) so dragging one turns and grows all three (`feat/colour-grading`; `docs/colour-grading.md`).
 - 2026-11-17 — Auto: Light (exposure, then range sliders, from a model of tone + AgX checked against the shader) and white balance (grey pixels from As Shot), in Edit, one undo step each (`auto-settings`; `docs/auto.md`).
 - 2026-11-17 — Camera metadata in exports: EXIF (camera, lens, exposure, capture time, artist, copyright), star rating as EXIF + XMP, GPS behind an Export toggle (off by default); every format incl. Ultra HDR (`export-metadata`; `docs/export-metadata.md`).
 - 2026-11-17 — Ultra HDR files without JFIF (MPF must follow SOI), one ICC profile per space (fixed a flaky test); repo formatted with rustfmt and Prettier, format checks added to the checklist (`leftovers-2`).

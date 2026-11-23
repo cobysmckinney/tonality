@@ -25,7 +25,7 @@ export const MAX_ZOOM = 8;
  * block (geo0, geo1), `lens_head` (`.y`: the lens's tile margin) and `presence` (`[2].w`: maps
  * bound).
  */
-let GEO_OFFSET = 68;
+let GEO_OFFSET = 84;
 let LENS_OFFSET = 0;
 let MAPS_FLAG = -1;
 

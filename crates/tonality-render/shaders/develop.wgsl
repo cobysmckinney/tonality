@@ -18,6 +18,10 @@ struct Params {
     mix_sat1: vec4<f32>,
     mix_lum0: vec4<f32>,
     mix_lum1: vec4<f32>,
+    // Colour grading (see `tonality_core::grading`): 0–2, for shadows, midtones and highlights:
+    // xy: the tint (OkLab a, b per unit of lightness), z: brightness (stops). 3: x: blending
+    // (0..1), y: balance (-1..1), z: 1 if any of it changes the picture.
+    grade: array<vec4<f32>, 4>,
     vignette: vec4<f32>, // x: amount (-1..1), y: midpoint (0..1), z: feather (0..1)
     grain: vec4<f32>,    // x: amount (0..1), y: size (0..1)
     detail0: vec4<f32>,  // x: sharpen amount, y: sharpen radius (px), z: masking (0..1), w: luminance NR (0..1)
@@ -345,6 +349,30 @@ fn color(rgb: vec3<f32>, saturation: f32, vibrance: f32, hue: f32) -> vec3<f32> 
 
     let hr = radians(h);
     return from_oklab(vec3<f32>(l, c * cos(hr), c * sin(hr)));
+}
+
+// ---- Colour grading (docs/colour-grading.md) --------------------------------------------------
+// A tint and a brightness change for each of the shadows, midtones and highlights. The three are
+// told apart by how bright the pixel will look on the display (0..1), so "shadows" means what is
+// dark in the picture, whatever the exposure it took to get there. Their weights always sum to
+// one. The tint is added in OkLab in proportion to lightness, which leaves the lightness alone
+// and keeps black black.
+fn grade(rgb: vec3<f32>) -> vec3<f32> {
+    let head = params.grade[3];
+    if (head.z < 0.5) {
+        return rgb;
+    }
+    let seen = srgb_encode(agx(vec3<f32>(max(dot(rgb, REC2020_LUMA), 0.0)), 0)).y;
+    // Balance bends the scale: positive counts more of the picture as highlights.
+    let x = pow(clamp(seen, 0.0, 1.0), exp2(-2.0 * head.y));
+    // Blending: how far the shadows and highlights reach towards each other.
+    let reach = mix(0.25, 0.75, head.x);
+    let shadows = 1.0 - smoothstep(0.0, reach, x);
+    let highlights = smoothstep(1.0 - reach, 1.0, x);
+    let midtones = 1.0 - shadows - highlights;
+    let g = shadows * params.grade[0].xyz + midtones * params.grade[1].xyz + highlights * params.grade[2].xyz;
+    let lab = to_oklab(rgb);
+    return from_oklab(vec3<f32>(lab.x, lab.yz + lab.x * g.xy)) * exp2(g.z);
 }
 
 // ---- Effects ---------------------------------------------------------------------------------
@@ -758,6 +786,7 @@ fn develop(cam: vec3<f32>, f: vec2<f32>, uv: vec2<f32>, aspect: f32, tc: vec2<f3
     rgb = vignette(rgb, f);
     rgb = tone(rgb, t, blacks);
     rgb = color(rgb, saturation, vibrance, hue);
+    rgb = grade(rgb);
     if (params.output.x > 0.5) {
         // The Ultra HDR gain map: how much brighter (or darker) AgX HDR is than AgX Base, per
         // channel. The base image carries the curve and grain; the gain applies on top.
