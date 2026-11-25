@@ -6,6 +6,9 @@
 -->
 <script lang="ts">
   import { ask } from "@tauri-apps/plugin-dialog";
+  import { api } from "$lib/api";
+  import type { Change } from "$lib/bindings/Change";
+  import type { CommitInfo } from "$lib/bindings/CommitInfo";
   import type { HistoryView } from "$lib/bindings/HistoryView";
   import { session } from "$lib/edit/session.svelte";
   import { branchThumbs, requestBranchThumb } from "$lib/edit/versions";
@@ -33,6 +36,34 @@
 
   // ---- sessions: one time label where a pause of over half an hour ends ----
   const sessionStart = $derived(sessionLabels(groups.flatMap((g) => g.steps.map((s) => s.commit))));
+
+  // ---- step details: what a step changed, on hover or focus ----
+  let tip = $state<{ commit: CommitInfo; top: number; bottom: number; left: number } | null>(null);
+  let changes = $state<Change[] | null>(null);
+  let tipTimer: ReturnType<typeof setTimeout> | undefined;
+  let panel = $state<HTMLDivElement>();
+  const changeCache = new Map<string, Change[]>();
+
+  function showTip(el: HTMLElement, commit: CommitInfo, delay: number) {
+    clearTimeout(tipTimer);
+    tipTimer = setTimeout(async () => {
+      const r = el.getBoundingClientRect();
+      const right = panel?.getBoundingClientRect().right ?? r.right;
+      tip = { commit, top: r.top, bottom: r.bottom, left: right + 6 };
+      const key = `${commit.id}:${commit.time}`;
+      changes = changeCache.get(key) ?? null;
+      if (changes) return;
+      const c = await api.history.changes(commit.id).catch(() => []);
+      changeCache.set(key, c);
+      if (tip?.commit.id === commit.id) changes = c;
+    }, delay);
+  }
+  function hideTip() {
+    clearTimeout(tipTimer);
+    tip = null;
+  }
+  // Below the middle of the window, the details open upwards from the row.
+  const tipUp = $derived(!!tip && tip.top > window.innerHeight / 2);
 
   // ---- thumbnails (rendered with the live renderer, cached per commit) ----
   const thumbCommit = (name: string, tip: number) => (name === current ? view.head.commit : tip);
@@ -83,7 +114,7 @@
   const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? "" : "s"}`;
 </script>
 
-<div class="panel">
+<div class="panel" bind:this={panel}>
   <!-- ================= Versions ================= -->
   <section class="versions">
     <header>
@@ -246,7 +277,11 @@
               <button
                 class="step"
                 onclick={() => session.checkout(s.commit.id)}
-                title="Go back to this step · {stepTime(s.commit.time, now)}"
+                onpointerenter={(e) => showTip(e.currentTarget, s.commit, 350)}
+                onpointerleave={hideTip}
+                onfocus={(e) => showTip(e.currentTarget, s.commit, 0)}
+                onblur={hideTip}
+                aria-describedby={tip?.commit.id === s.commit.id ? "step-details" : undefined}
               >
                 <span class="node"></span>
                 <span class="summary">{s.commit.summary}</span>
@@ -284,6 +319,40 @@
       {/each}
     </div>
   </section>
+
+  {#if tip}
+    <div
+      id="step-details"
+      class="details"
+      role="tooltip"
+      style:left="{tip.left}px"
+      style:top={tipUp ? undefined : `${tip.top}px`}
+      style:bottom={tipUp ? `${window.innerHeight - tip.bottom}px` : undefined}
+    >
+      <div class="details-head">
+        <span>{tip.commit.summary}</span>
+        <span class="details-time">{stepTime(tip.commit.time, now)}</span>
+      </div>
+      {#if changes === null}
+        <p class="details-note">…</p>
+      {:else if changes.length === 0}
+        <p class="details-note">
+          {tip.commit.parent === null ? "The photo as shot." : "Nothing changed."}
+        </p>
+      {:else}
+        <ul>
+          {#each changes as c, k (k)}
+            <li>
+              <span class="details-label">{c.label}</span>
+              {#if c.from != null && c.to != null}
+                <span class="details-value">{c.from} → {c.to}</span>
+              {/if}
+            </li>
+          {/each}
+        </ul>
+      {/if}
+    </div>
+  {/if}
 </div>
 
 <style>
@@ -615,5 +684,61 @@
   }
   .chip:hover {
     background: color-mix(in srgb, var(--c) 15%, transparent);
+  }
+
+  /* ---- step details ---- */
+  .details {
+    position: fixed;
+    z-index: 50;
+    width: max-content;
+    min-width: 180px;
+    max-width: 300px;
+    max-height: 50vh;
+    overflow: hidden;
+    padding: var(--space-2) var(--space-3);
+    border-radius: var(--radius-m);
+    background: var(--bg-1);
+    box-shadow: var(--shadow-pop);
+    font-size: var(--fs-xs);
+    white-space: normal;
+    pointer-events: none;
+  }
+  .details-head {
+    display: flex;
+    justify-content: space-between;
+    gap: var(--space-3);
+    margin-bottom: var(--space-1);
+    color: var(--text-0);
+    font-size: var(--fs-s);
+  }
+  .details-time {
+    flex: none;
+    color: var(--text-2);
+    font-size: var(--fs-xs);
+    font-variant-numeric: tabular-nums;
+  }
+  .details ul {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    gap: 2px;
+  }
+  .details li {
+    display: flex;
+    justify-content: space-between;
+    gap: var(--space-3);
+  }
+  .details-label {
+    color: var(--text-1);
+  }
+  .details-value {
+    flex: none;
+    color: var(--text-0);
+    font-family: var(--font-num);
+  }
+  .details-note {
+    margin: 0;
+    color: var(--text-2);
   }
 </style>
