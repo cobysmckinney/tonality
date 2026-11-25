@@ -14,6 +14,8 @@
   import { untrack } from "svelte";
   import type { EditState } from "$lib/bindings/EditState";
   import type { Histogram } from "./renderer";
+  import { onMount } from "svelte";
+  import { palette, shortcut } from "$lib/palette/commands.svelte";
 
   let historyOpen = $state(true);
   let before = $state(false);
@@ -149,6 +151,33 @@
   function onKeyUp(e: KeyboardEvent) {
     if (e.key === "\\") before = false;
   }
+
+  // The command palette's actions that live in this component's state.
+  onMount(() =>
+    palette.provide({
+      "view.zoomFit": () => canvas?.setZoom(null),
+      "view.zoom100": () => canvas?.setZoom(1),
+      "view.zoomIn": () => canvas?.zoomBy(Math.SQRT2),
+      "view.zoomOut": () => canvas?.zoomBy(Math.SQRT1_2),
+      "view.zoomToggle": () => canvas?.toggleZoom(),
+      "crop.apply": () => {
+        level = false;
+        session.finishCrop();
+      },
+      "crop.cancel": () => {
+        level = false;
+        session.cancelCrop();
+      },
+      "view.filmstrip": {
+        run: toggleStrip,
+        title: () => (stripOpen ? "Hide filmstrip" : "Show filmstrip"),
+      },
+      "view.versions": {
+        run: () => (historyOpen = !historyOpen),
+        title: () => (historyOpen ? "Hide versions panel" : "Show versions panel"),
+      },
+    }),
+  );
 </script>
 
 <svelte:window onkeydown={onKeyDown} onkeyup={onKeyUp} onblur={() => (before = false)} />
@@ -202,24 +231,20 @@
         {#if session.masking && session.masks.length && !session.cropping}
           <MaskList />
         {/if}
-        <div class="caption">
-          <span>{session.image.name}</span>
-          <span class="dim">{session.image.make} {session.image.model}</span>
-        </div>
       {:else if !session.loading}
         <div class="empty">
           <button class="btn primary" onclick={() => library.importFiles({ open: true })}>
             Import Photos…
           </button>
           <p class="hint">Ctrl+O, or drop RAW files here. They’re copied into your library.</p>
+          <p class="hint">
+            {shortcut("Mod+K")} finds any command; ? lists the keyboard shortcuts.
+          </p>
         </div>
       {/if}
 
       {#if session.loading}
         <div class="status">{session.loading}</div>
-      {/if}
-      {#if session.error}
-        <div class="status error">{session.error}</div>
       {/if}
 
       {#if !historyOpen}
@@ -239,7 +264,12 @@
       {#if stripOpen}
         <Filmstrip />
       {:else}
-        <span class="strip-label">Filmstrip</span>
+        <span class="strip-label">
+          {#if session.image}
+            <span class="name">{session.image.name}</span>
+            <span class="dim">{session.image.make} {session.image.model}</span>
+          {:else}Filmstrip{/if}
+        </span>
       {/if}
       <button
         class="icon-btn strip-toggle"
@@ -321,10 +351,20 @@
     height: 30px;
   }
   .strip-label {
-    display: block;
-    padding: 7px var(--space-3);
+    display: flex;
+    gap: var(--space-2);
+    padding: 7px 36px 7px var(--space-3);
     font-size: var(--fs-xs);
     color: var(--text-2);
+    white-space: nowrap;
+  }
+  .strip-label .name {
+    color: var(--text-1);
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .strip-label .dim {
+    flex: none;
   }
   .strip-toggle {
     position: absolute;
@@ -332,9 +372,6 @@
     right: 4px;
     width: 24px;
     height: 24px;
-  }
-  .filmstrip :global(.keys) {
-    margin-right: 28px;
   }
   .canvas-area {
     position: relative;
@@ -347,28 +384,9 @@
     min-width: 0;
     overflow: hidden;
   }
-  .caption {
-    position: absolute;
-    bottom: var(--space-3);
-    left: 50%;
-    transform: translateX(-50%);
-    display: flex;
-    gap: var(--space-3);
-    padding: 3px 12px;
-    border-radius: var(--radius-pill);
-    background: color-mix(in srgb, var(--bg-1) 80%, transparent);
-    font-size: var(--fs-xs);
-    color: var(--text-1);
-    white-space: nowrap;
-    pointer-events: none;
-  }
-  .dim,
   .hint {
     color: var(--text-2);
     font-size: var(--fs-s);
-  }
-  .caption .dim {
-    font-size: var(--fs-xs);
   }
   .hint {
     padding: 0 var(--space-4);
@@ -391,10 +409,6 @@
     background: var(--bg-1);
     color: var(--text-1);
     font-size: var(--fs-s);
-  }
-  .status.error {
-    bottom: var(--space-6);
-    color: var(--danger);
   }
   .adjust {
     min-height: 0;

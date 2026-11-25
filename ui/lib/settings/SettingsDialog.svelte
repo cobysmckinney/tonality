@@ -153,9 +153,6 @@
         {#if updates.update?.notes && (updates.status === "available" || updates.status === "ready")}
           <pre class="notes">{updates.update.notes}</pre>
         {/if}
-        {#if updates.status === "error" && updates.error}
-          <p class="error">{updates.error}</p>
-        {/if}
       </div>
 
       <div class="actions">
@@ -292,12 +289,6 @@
     font: inherit;
     font-size: var(--fs-xs);
     color: var(--text-1);
-  }
-  .error {
-    margin: 0;
-    color: var(--danger);
-    font-size: var(--fs-xs);
-    overflow-wrap: anywhere;
   }
   .actions {
     display: flex;
