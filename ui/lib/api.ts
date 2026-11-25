@@ -1,6 +1,7 @@
 // Typed wrappers around Tauri commands. Types come from Rust via ts-rs.
 import { invoke } from "@tauri-apps/api/core";
 import { convertFileSrc } from "@tauri-apps/api/core";
+import type { Change } from "$lib/bindings/Change";
 import type { Checkout } from "$lib/bindings/Checkout";
 import type { WbPresetInfo } from "$lib/bindings/WbPresetInfo";
 import type { ImageQuery } from "$lib/bindings/ImageQuery";
@@ -111,6 +112,8 @@ export const api = {
     applyFrom: (imageId: number, source: string, panels: Panel[]) =>
       invoke<Checkout>("history_apply_from", { imageId, source, panels }),
     state: (commit: number) => invoke<EditState>("history_state", { commit }),
+    /** What a step changed from the one before it, setting by setting. */
+    changes: (commit: number) => invoke<Change[]>("history_changes", { commit }),
     /** Back to as-shot, deleting every version and step. Can't be undone. */
     reset: (imageIds: number[]) => invoke<void>("history_reset", { imageIds }),
   },

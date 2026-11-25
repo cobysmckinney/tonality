@@ -719,6 +719,145 @@ pub fn describe_change(prev: &EditState, next: &EditState) -> String {
     }
 }
 
+/// One setting a step changed, for the history panel's step details.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct Change {
+    pub label: String,
+    /// The value before and after, formatted as the step labels are. `None` for changes that
+    /// have no single value to show (a curve, a crop, a mask).
+    #[ts(optional = nullable)]
+    pub from: Option<String>,
+    #[ts(optional = nullable)]
+    pub to: Option<String>,
+}
+
+/// Colour grading as scalars, for [`list_changes`] only: step labels name grading as one thing.
+macro_rules! grade_range {
+    ($name:literal, $r:ident) => {
+        [
+            Field {
+                label: concat!($name, " Hue"),
+                get: |s| Some(s.grading.$r.hue),
+                fmt: Fmt::Plain,
+            },
+            Field {
+                label: concat!($name, " Saturation"),
+                get: |s| Some(s.grading.$r.saturation),
+                fmt: Fmt::Plain,
+            },
+            Field {
+                label: concat!($name, " Luminance"),
+                get: |s| Some(s.grading.$r.luminance),
+                fmt: Fmt::Signed(0),
+            },
+        ]
+    };
+}
+
+const GRADE_RANGES: &[[Field; 3]] = &[
+    grade_range!("Shadows", shadows),
+    grade_range!("Midtones", midtones),
+    grade_range!("Highlights", highlights),
+];
+
+const GRADE_FIELDS: &[Field] = &[
+    Field {
+        label: "Grading Blending",
+        get: |s| Some(s.grading.blending),
+        fmt: Fmt::Plain,
+    },
+    Field {
+        label: "Grading Balance",
+        get: |s| Some(s.grading.balance),
+        fmt: Fmt::Signed(0),
+    },
+];
+
+/// Every setting that differs from `prev` to `next`, with old and new values where there are
+/// any: the long form of [`describe_change`], e.g. `Exposure +1.20 → +2.85`.
+pub fn list_changes(prev: &EditState, next: &EditState) -> Vec<Change> {
+    let value = |label: &str, from: String, to: String| Change {
+        label: label.into(),
+        from: Some(from),
+        to: Some(to),
+    };
+    let named = |label: &str| Change {
+        label: label.into(),
+        from: None,
+        to: None,
+    };
+    let on_off = |b: bool| if b { "On" } else { "Off" }.to_string();
+    let mut out = Vec::new();
+
+    let mode = |w: &WhiteBalance| match (w.preset, w.temperature, w.tint) {
+        (Some(p), ..) => p.label(),
+        (None, None, None) => "As Shot",
+        _ => "Custom",
+    };
+    let (was, now) = (mode(&prev.white_balance), mode(&next.white_balance));
+    if was != now {
+        out.push(value("White Balance", was.into(), now.into()));
+    }
+    let scalars = |fields: &mut dyn Iterator<Item = &Field>, out: &mut Vec<Change>| {
+        for f in fields {
+            let (a, b) = ((f.get)(prev), (f.get)(next));
+            if a != b {
+                out.push(value(
+                    f.label,
+                    format_value(&f.fmt, a),
+                    format_value(&f.fmt, b),
+                ));
+            }
+        }
+    };
+    scalars(&mut FIELDS.iter(), &mut out);
+    for (label, c) in CURVES {
+        if c(prev) != c(next) {
+            out.push(named(label));
+        }
+    }
+    scalars(&mut BANDS.iter().flatten(), &mut out);
+
+    let (a, b) = (&prev.grading, &next.grading);
+    scalars(&mut GRADE_RANGES.iter().flatten(), &mut out);
+    scalars(&mut GRADE_FIELDS.iter(), &mut out);
+    if a.link != b.link {
+        let link = |h: Option<crate::grading::Harmony>| h.map_or("Off", |h| h.label()).to_string();
+        out.push(value("Grading Link", link(a.link), link(b.link)));
+    }
+
+    let (a, b) = (&prev.crop, &next.crop);
+    if a.turns != b.turns {
+        let deg = |t: u8| format!("{}°", u32::from(t) * 90);
+        out.push(value("Rotate", deg(a.turns), deg(b.turns)));
+    }
+    if a.flip != b.flip {
+        out.push(value("Flip", on_off(a.flip), on_off(b.flip)));
+    }
+    if a.rect != b.rect {
+        out.push(named("Crop"));
+    }
+    let (a, b) = (&prev.lens, &next.lens);
+    if a.profile != b.profile {
+        out.push(value("Lens Profile", on_off(a.profile), on_off(b.profile)));
+    }
+    if a.chromatic != b.chromatic {
+        out.push(value(
+            "Chromatic Aberration",
+            on_off(a.chromatic),
+            on_off(b.chromatic),
+        ));
+    }
+    out.extend(
+        describe_masks(&prev.masks, &next.masks)
+            .into_iter()
+            .map(|(_, full)| named(&full)),
+    );
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -833,6 +972,101 @@ mod tests {
         let mut f = a.clone();
         f.detail.sharpen_radius = 1.5;
         assert_eq!(describe_change(&a, &f), "Sharpen Radius 1.5");
+    }
+
+    /// `list_changes`, one line per change: "Label from → to", or just "Label".
+    fn lines(a: &EditState, b: &EditState) -> Vec<String> {
+        list_changes(a, b)
+            .into_iter()
+            .map(|c| match (c.from, c.to) {
+                (Some(f), Some(t)) => format!("{} {f} → {t}", c.label),
+                _ => c.label,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn lists_every_change_with_old_and_new_values() {
+        let a = EditState::default();
+        assert!(lines(&a, &a).is_empty());
+        let mut b = a.clone();
+        b.light.exposure = 1.2;
+        let mut c = b.clone();
+        c.light.exposure = 2.85;
+        c.light.shadows = 40.0;
+        c.light.blacks = -10.0;
+        c.light.whites = 5.0;
+        c.color.mixer.blue.saturation = -30.0;
+        c.curve.rgb = vec![[0.0, 0.0], [0.5, 0.6], [1.0, 1.0]];
+        assert_eq!(describe_change(&b, &c), "6 adjustments");
+        assert_eq!(
+            lines(&b, &c),
+            [
+                "Exposure +1.20 → +2.85",
+                "Shadows 0 → +40",
+                "Whites 0 → +5",
+                "Blacks 0 → -10",
+                "Tone Curve",
+                "Blue Saturation 0 → -30",
+            ]
+        );
+    }
+
+    #[test]
+    fn lists_white_balance_framing_lens_grading_and_masks() {
+        let a = EditState::default();
+        let mut w = a.clone();
+        w.white_balance = WhiteBalance {
+            temperature: Some(2850.0),
+            tint: Some(0.0),
+            preset: Some(WbPreset::Tungsten),
+        };
+        assert_eq!(
+            lines(&a, &w),
+            [
+                "White Balance As Shot → Tungsten",
+                "Temperature As Shot → 2850K",
+                "Tint As Shot → 0",
+            ]
+        );
+
+        let mut f = a.clone();
+        f.crop.turns = 1;
+        f.crop.flip = true;
+        f.crop.rect = [0.1, 0.1, 0.8, 0.8];
+        f.lens.profile = !a.lens.profile;
+        assert_eq!(
+            lines(&a, &f),
+            [
+                "Rotate 0° → 90°",
+                "Flip Off → On",
+                "Crop",
+                format!(
+                    "Lens Profile {} → {}",
+                    if a.lens.profile { "On" } else { "Off" },
+                    if f.lens.profile { "On" } else { "Off" }
+                )
+                .as_str(),
+            ]
+        );
+
+        let mut g = a.clone();
+        g.grading.shadows.hue = 210.0;
+        g.grading.shadows.saturation = 30.0;
+        g.grading.link = Some(Harmony::Complementary);
+        assert_eq!(
+            lines(&a, &g),
+            [
+                "Shadows Hue 0 → 210",
+                "Shadows Saturation 0 → 30",
+                "Grading Link Off → Complementary",
+            ]
+        );
+
+        let mut m = a.clone();
+        m.masks.push(crate::mask::Mask::default());
+        assert_eq!(lines(&a, &m).len(), 1);
+        assert_eq!(lines(&a, &m)[0], describe_change(&a, &m));
     }
 
     #[test]

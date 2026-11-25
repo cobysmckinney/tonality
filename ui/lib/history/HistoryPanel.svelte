@@ -6,10 +6,16 @@
 -->
 <script lang="ts">
   import { ask } from "@tauri-apps/plugin-dialog";
+  import { api } from "$lib/api";
+  import type { Change } from "$lib/bindings/Change";
+  import type { CommitInfo } from "$lib/bindings/CommitInfo";
+  import type { EditState } from "$lib/bindings/EditState";
   import type { HistoryView } from "$lib/bindings/HistoryView";
   import { session } from "$lib/edit/session.svelte";
   import { branchThumbs, requestBranchThumb } from "$lib/edit/versions";
-  import { branchSteps, relativeTime, versions } from "./graph";
+  import { branchSteps, versions } from "./graph";
+  import { sessionLabel, sessionLabels, stepTime } from "./sessions";
+  import { DEFAULT_WIDTH, MAX_WIDTH, MIN_WIDTH, historyWidth } from "./width.svelte";
 
   interface Props {
     view: HistoryView;
@@ -23,12 +29,124 @@
   const groups = $derived(branchSteps(view));
   const ownSteps = $derived(groups[0]?.inherited ? 0 : (groups[0]?.steps.length ?? 0));
 
-  // Re-render relative times every 30s.
+  // "Today" and "Yesterday" move on at midnight.
   let now = $state(Date.now());
   $effect(() => {
-    const t = setInterval(() => (now = Date.now()), 30_000);
+    const t = setInterval(() => (now = Date.now()), 60_000);
     return () => clearInterval(t);
   });
+
+  // ---- sessions: one time label where a pause of over half an hour ends ----
+  const sessionStart = $derived(sessionLabels(groups.flatMap((g) => g.steps.map((s) => s.commit))));
+
+  // ---- hover a version: show it on the canvas, until the pointer leaves the list ----
+  const PREVIEW_DELAY = 120;
+  let hovered: string | null = null;
+  let hoverTimer: ReturnType<typeof setTimeout> | undefined;
+  let previewSeq = 0;
+  /** Tip states, by commit and its last change (a tip can be updated in place). */
+  const tipStates = new Map<string, EditState>();
+
+  function hoverVersion(name: string | null) {
+    if (name === hovered) return;
+    hovered = name;
+    clearTimeout(hoverTimer);
+    if (name === null || name === current) {
+      previewSeq++;
+      session.preview = null;
+      return;
+    }
+    hoverTimer = setTimeout(() => showPreview(name), PREVIEW_DELAY);
+  }
+
+  async function showPreview(name: string) {
+    const seq = ++previewSeq;
+    const tip = view.branches.find((b) => b.name === name)?.tip;
+    if (tip === undefined) return;
+    const key = `${tip}:${view.commits.find((c) => c.id === tip)?.time}`;
+    let state = tipStates.get(key);
+    if (!state) {
+      state = await api.history.state(tip).catch(() => undefined);
+      if (!state) return;
+      tipStates.set(key, state);
+    }
+    if (seq === previewSeq && hovered === name) session.preview = { label: name, state };
+  }
+
+  function leaveVersions(e: FocusEvent | PointerEvent) {
+    const to = e.relatedTarget as Node | null;
+    if (!to || !(e.currentTarget as HTMLElement).contains(to)) hoverVersion(null);
+  }
+
+  // Never leave a preview behind (hiding the panel, leaving Edit).
+  $effect(() => () => {
+    clearTimeout(hoverTimer);
+    session.preview = null;
+  });
+
+  // ---- step details: what a step changed, on hover or focus ----
+  let tip = $state<{ commit: CommitInfo; top: number; bottom: number; left: number } | null>(null);
+  let changes = $state<Change[] | null>(null);
+  let tipTimer: ReturnType<typeof setTimeout> | undefined;
+  let panel = $state<HTMLDivElement>();
+  const changeCache = new Map<string, Change[]>();
+
+  function showTip(el: HTMLElement, commit: CommitInfo, delay: number) {
+    clearTimeout(tipTimer);
+    tipTimer = setTimeout(async () => {
+      const r = el.getBoundingClientRect();
+      const right = panel?.getBoundingClientRect().right ?? r.right;
+      tip = { commit, top: r.top, bottom: r.bottom, left: right + 6 };
+      const key = `${commit.id}:${commit.time}`;
+      changes = changeCache.get(key) ?? null;
+      if (changes) return;
+      const c = await api.history.changes(commit.id).catch(() => []);
+      changeCache.set(key, c);
+      if (tip?.commit.id === commit.id) changes = c;
+    }, delay);
+  }
+  function hideTip() {
+    clearTimeout(tipTimer);
+    tip = null;
+  }
+  // Below the middle of the window, the details open upwards from the row.
+  const tipUp = $derived(!!tip && tip.top > window.innerHeight / 2);
+
+  // ---- resize from the right edge ----
+  function startResize(e: PointerEvent) {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    const el = e.currentTarget as HTMLElement;
+    el.setPointerCapture(e.pointerId);
+    const x0 = e.clientX;
+    const w0 = historyWidth.px;
+    historyWidth.dragging = true;
+    const move = (m: PointerEvent) => historyWidth.set(w0 + m.clientX - x0);
+    const up = () => {
+      historyWidth.dragging = false;
+      historyWidth.save();
+      el.removeEventListener("pointermove", move);
+      el.removeEventListener("pointerup", up);
+      el.removeEventListener("pointercancel", up);
+    };
+    el.addEventListener("pointermove", move);
+    el.addEventListener("pointerup", up);
+    el.addEventListener("pointercancel", up);
+  }
+  function resizeKey(e: KeyboardEvent) {
+    const step = e.shiftKey ? 40 : 10;
+    if (e.key === "ArrowLeft") historyWidth.set(historyWidth.px - step);
+    else if (e.key === "ArrowRight") historyWidth.set(historyWidth.px + step);
+    else if (e.key === "Home") historyWidth.set(MIN_WIDTH);
+    else if (e.key === "End") historyWidth.set(MAX_WIDTH);
+    else return;
+    e.preventDefault();
+    historyWidth.save();
+  }
+  function resetWidth() {
+    historyWidth.set(DEFAULT_WIDTH);
+    historyWidth.save();
+  }
 
   // ---- thumbnails (rendered with the live renderer, cached per commit) ----
   const thumbCommit = (name: string, tip: number) => (name === current ? view.head.commit : tip);
@@ -76,23 +194,10 @@
     if (ok) await session.deleteBranch(name).catch(() => {});
   }
 
-  // Something to reset: more than the as-shot step, or more than one version.
-  const resettable = $derived(view.commits.length > 1 || view.branches.length > 1);
-
-  async function resetAll() {
-    const versions = plural(view.branches.length, "version");
-    const steps = plural(view.commits.length - 1, "step");
-    const ok = await ask(
-      `Reset this photo to as-shot? All ${versions} and ${steps} of its history are deleted. This can't be undone.`,
-      { title: "Reset history", kind: "warning", okLabel: "Reset", cancelLabel: "Cancel" },
-    );
-    if (ok) await session.resetHistory();
-  }
-
   const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? "" : "s"}`;
 </script>
 
-<div class="panel">
+<div class="panel" bind:this={panel}>
   <!-- ================= Versions ================= -->
   <section class="versions">
     <header>
@@ -117,11 +222,18 @@
       </div>
     </header>
 
-    <ul>
+    <!-- Hovering (or focusing) a version shows it on the canvas until the pointer leaves the list. -->
+    <ul onpointerleave={leaveVersions} onfocusout={leaveVersions}>
       {#each all as v (v.name)}
         {@const isCurrent = v.name === current}
         {@const src = thumb(v.name, v.tip)}
-        <li class:current={isCurrent} style:--c="var(--branch-{v.color})">
+        <li
+          class:current={isCurrent}
+          style:--c="var(--branch-{v.color})"
+          onpointerenter={() => hoverVersion(v.name)}
+          onfocusin={() => hoverVersion(v.name)}
+          onclickcapture={() => hoverVersion(null)}
+        >
           <button
             class="card"
             onclick={() => !isCurrent && session.switchBranch(v.name)}
@@ -242,15 +354,27 @@
         {/if}
         <ol class:inherited={g.inherited} style:--c="var(--branch-{colorOf.get(g.branch) ?? 0})">
           {#each g.steps as s, i (s.commit.id)}
-            <li class:head={s.isHead} class:ahead={s.ahead} class:last={i === g.steps.length - 1}>
+            {@const start = sessionStart.get(s.commit.id)}
+            <li
+              class:head={s.isHead}
+              class:ahead={s.ahead}
+              class:last={i === g.steps.length - 1}
+              class:session-start={start !== undefined}
+            >
+              {#if start !== undefined}
+                <span class="session">{sessionLabel(start, now)}</span>
+              {/if}
               <button
                 class="step"
                 onclick={() => session.checkout(s.commit.id)}
-                title="Go back to this step"
+                onpointerenter={(e) => showTip(e.currentTarget, s.commit, 350)}
+                onpointerleave={hideTip}
+                onfocus={(e) => showTip(e.currentTarget, s.commit, 0)}
+                onblur={hideTip}
+                aria-describedby={tip?.commit.id === s.commit.id ? "step-details" : undefined}
               >
                 <span class="node"></span>
                 <span class="summary">{s.commit.summary}</span>
-                <span class="time">{relativeTime(s.commit.time, now)}</span>
               </button>
               <button
                 class="fork icon-btn"
@@ -286,23 +410,61 @@
     </div>
   </section>
 
-  <footer>
-    <button
-      class="reset"
-      onclick={resetAll}
-      disabled={!resettable}
-      title="Delete every version and step, back to as-shot"
+  {#if tip}
+    <div
+      id="step-details"
+      class="details"
+      role="tooltip"
+      style:left="{tip.left}px"
+      style:top={tipUp ? undefined : `${tip.top}px`}
+      style:bottom={tipUp ? `${window.innerHeight - tip.bottom}px` : undefined}
     >
-      <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
-        <path d="M3 3v4h4" /><path d="M3.5 7A5 5 0 1 1 5 11.5" />
-      </svg>
-      Reset all history…
-    </button>
-  </footer>
+      <div class="details-head">
+        <span>{tip.commit.summary}</span>
+        <span class="details-time">{stepTime(tip.commit.time, now)}</span>
+      </div>
+      {#if changes === null}
+        <p class="details-note">…</p>
+      {:else if changes.length === 0}
+        <p class="details-note">
+          {tip.commit.parent === null ? "The photo as shot." : "Nothing changed."}
+        </p>
+      {:else}
+        <ul>
+          {#each changes as c, k (k)}
+            <li>
+              <span class="details-label">{c.label}</span>
+              {#if c.from != null && c.to != null}
+                <span class="details-value">{c.from} → {c.to}</span>
+              {/if}
+            </li>
+          {/each}
+        </ul>
+      {/if}
+    </div>
+  {/if}
+
+  <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
+  <div
+    class="resize"
+    class:active={historyWidth.dragging}
+    role="separator"
+    aria-orientation="vertical"
+    aria-label="Panel width"
+    aria-valuenow={historyWidth.px}
+    aria-valuemin={MIN_WIDTH}
+    aria-valuemax={MAX_WIDTH}
+    tabindex="0"
+    title="Drag to resize · double-click for the default width"
+    onpointerdown={startResize}
+    onkeydown={resizeKey}
+    ondblclick={resetWidth}
+  ></div>
 </div>
 
 <style>
   .panel {
+    position: relative;
     display: flex;
     flex-direction: column;
     height: 100%;
@@ -454,36 +616,6 @@
   }
 
   /* ---- steps ---- */
-  footer {
-    flex: none;
-    padding: var(--space-2);
-    border-top: 1px solid var(--line);
-  }
-  .reset {
-    display: flex;
-    align-items: center;
-    gap: var(--space-2);
-    width: 100%;
-    height: 30px;
-    padding: 0 var(--space-2);
-    border-radius: var(--radius-s);
-    font-size: var(--fs-xs);
-    color: var(--text-2);
-  }
-  .reset svg {
-    fill: none;
-    stroke: currentColor;
-    stroke-width: 1.4;
-    stroke-linecap: round;
-    stroke-linejoin: round;
-  }
-  .reset:hover:not(:disabled) {
-    background: var(--bg-3);
-    color: var(--danger);
-  }
-  .reset:disabled {
-    opacity: 0.4;
-  }
   .steps {
     flex: 1;
     min-height: 0;
@@ -608,11 +740,20 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-  .time {
-    flex: none;
+  /* One time label per session, above its newest step. */
+  .session {
+    display: block;
+    padding: var(--space-2) var(--space-2) 2px calc(var(--space-2) + 9px + var(--space-3));
     font-size: var(--fs-xs);
     color: var(--text-2);
     font-variant-numeric: tabular-nums;
+  }
+  li.session-start:not(:first-child) .node::before {
+    display: none;
+  }
+  ol li.session-start .fork {
+    top: auto;
+    bottom: 3px;
   }
   .fork {
     position: absolute;
@@ -630,10 +771,6 @@
   ol li:focus-within .fork {
     opacity: 1;
     pointer-events: auto;
-  }
-  ol li:hover .time,
-  ol li:focus-within .time {
-    visibility: hidden;
   }
   .forks {
     display: flex;
@@ -655,5 +792,87 @@
   }
   .chip:hover {
     background: color-mix(in srgb, var(--c) 15%, transparent);
+  }
+
+  /* ---- step details ---- */
+  .details {
+    position: fixed;
+    z-index: 50;
+    width: max-content;
+    min-width: 180px;
+    max-width: 300px;
+    max-height: 50vh;
+    overflow: hidden;
+    padding: var(--space-2) var(--space-3);
+    border-radius: var(--radius-m);
+    background: var(--bg-1);
+    box-shadow: var(--shadow-pop);
+    font-size: var(--fs-xs);
+    white-space: normal;
+    pointer-events: none;
+  }
+  .details-head {
+    display: flex;
+    justify-content: space-between;
+    gap: var(--space-3);
+    margin-bottom: var(--space-1);
+    color: var(--text-0);
+    font-size: var(--fs-s);
+  }
+  .details-time {
+    flex: none;
+    color: var(--text-2);
+    font-size: var(--fs-xs);
+    font-variant-numeric: tabular-nums;
+  }
+  .details ul {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    gap: 2px;
+  }
+  .details li {
+    display: flex;
+    justify-content: space-between;
+    gap: var(--space-3);
+  }
+  .details-label {
+    color: var(--text-1);
+  }
+  .details-value {
+    flex: none;
+    color: var(--text-0);
+    font-family: var(--font-num);
+  }
+  .details-note {
+    margin: 0;
+    color: var(--text-2);
+  }
+
+  /* ---- resize ---- */
+  .resize {
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: 6px;
+    z-index: 3;
+    cursor: col-resize;
+  }
+  .resize::after {
+    content: "";
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    right: 0;
+    width: 2px;
+    background: transparent;
+    transition: background 120ms var(--ease);
+  }
+  .resize:hover::after,
+  .resize:focus-visible::after,
+  .resize.active::after {
+    background: var(--line-strong);
   }
 </style>

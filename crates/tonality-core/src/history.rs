@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use crate::catalog::{Catalog, CatalogError, ImageId, Result};
-use crate::edit::{describe_change, EditState, Panel};
+use crate::edit::{describe_change, list_changes, Change, EditState, Panel};
 
 pub type CommitId = i64;
 
@@ -351,6 +351,19 @@ impl Catalog {
 
     pub fn state_at(&self, commit: CommitId) -> Result<EditState> {
         load_state(&self.conn, &commit_row(&self.conn, commit)?.state_hash)
+    }
+
+    /// What `commit` changed from its parent, setting by setting. Nothing for the first commit.
+    pub fn changes_at(&self, commit: CommitId) -> Result<Vec<Change>> {
+        let row = commit_row(&self.conn, commit)?;
+        let Some(parent) = row.parent else {
+            return Ok(Vec::new());
+        };
+        let prev = self.state_at(parent)?;
+        Ok(list_changes(
+            &prev,
+            &load_state(&self.conn, &row.state_hash)?,
+        ))
     }
 
     fn checkout_result(&self, image: ImageId) -> Result<Checkout> {
@@ -739,6 +752,29 @@ mod tests {
         assert_eq!(summaries(&c).last(), Some(&"All settings from bw"));
         assert!(cat.apply_from_branch(img, "main", &[Panel::Light]).is_err());
         assert!(cat.apply_from_branch(img, "bw", &[]).is_err());
+    }
+
+    #[test]
+    fn lists_what_each_step_changed() {
+        let (mut cat, _, img) = catalog();
+        let root = cat.history_open(img).unwrap().view.head.commit;
+        assert!(cat.changes_at(root).unwrap().is_empty());
+        cat.commit(img, &exp(1.2), None).unwrap();
+        let mut s = exp(2.85);
+        s.light.contrast = 10.0;
+        let c = cat.commit(img, &s, None).unwrap();
+        let changes = cat.changes_at(c.view.head.commit).unwrap();
+        let lines: Vec<_> = changes
+            .iter()
+            .map(|c| format!("{} {:?} {:?}", c.label, c.from, c.to))
+            .collect();
+        assert_eq!(
+            lines,
+            [
+                r#"Exposure Some("+1.20") Some("+2.85")"#,
+                r#"Contrast Some("0") Some("+10")"#
+            ]
+        );
     }
 
     #[test]
