@@ -450,6 +450,7 @@ pub fn run() {
             history::history_rename,
             history::history_delete,
             history::history_apply_from,
+            history::history_merge_preview,
             history::history_state,
             history::history_changes,
             history::history_reset,

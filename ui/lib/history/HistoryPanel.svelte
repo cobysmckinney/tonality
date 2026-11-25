@@ -284,12 +284,14 @@
               <button
                 class="icon-btn"
                 onclick={() => (session.applying = v.name)}
-                title="Copy settings from {v.name} onto {current}…"
+                title="Merge from {v.name} into {current}…"
               >
                 <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
-                  <rect x="5" y="5" width="8" height="8" rx="1.5" /><path
-                    d="M11 5V3.5A1.5 1.5 0 0 0 9.5 2h-6A1.5 1.5 0 0 0 2 3.5v6A1.5 1.5 0 0 0 3.5 11H5"
-                  />
+                  <circle cx="4.5" cy="3.5" r="1.5" /><circle cx="4.5" cy="12.5" r="1.5" /><circle
+                    cx="11.5"
+                    cy="8"
+                    r="1.5"
+                  /><path d="M4.5 5v6M10 8C7 8 4.5 7 4.5 5" />
                 </svg>
               </button>
             {/if}

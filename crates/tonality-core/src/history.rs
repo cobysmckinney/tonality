@@ -387,29 +387,39 @@ impl Catalog {
         self.commit_inner(image, state, key, None)
     }
 
-    /// Copy `panels` from the tip of branch `source` onto HEAD, as one commit
-    /// ("Color from B&W"). A no-op if nothing differs.
-    pub fn apply_from_branch(
-        &mut self,
+    /// HEAD's state with `panels` taken from the tip of branch `source`: what
+    /// [`apply_from_branch`](Self::apply_from_branch) would commit, for previewing a merge.
+    pub fn merged_from_branch(
+        &self,
         image: ImageId,
         source: &str,
         panels: &[Panel],
-    ) -> Result<Checkout> {
+    ) -> Result<EditState> {
         if panels.is_empty() {
             return Err(CatalogError::Invalid("choose at least one panel".into()));
         }
         let h = self.require_head(image)?;
         if h.branch == source {
             return Err(CatalogError::Invalid(
-                "can't copy a branch onto itself".into(),
+                "can't merge a branch into itself".into(),
             ));
         }
         let tip = branch_tip(&self.conn, image, source)?;
         let src = self.state_at(tip)?;
-        let cur = self.state_at(h.commit)?;
-        let next = cur.with_panels_from(&src, panels);
+        Ok(self.state_at(h.commit)?.with_panels_from(&src, panels))
+    }
+
+    /// Merge `panels` from the tip of branch `source` into HEAD, as one commit
+    /// ("Merged Color from B&W"). A no-op if nothing differs.
+    pub fn apply_from_branch(
+        &mut self,
+        image: ImageId,
+        source: &str,
+        panels: &[Panel],
+    ) -> Result<Checkout> {
+        let next = self.merged_from_branch(image, source, panels)?;
         let what = if panels.len() == Panel::ALL.len() {
-            "All settings".to_string()
+            "all settings".to_string()
         } else {
             Panel::ALL
                 .iter()
@@ -418,7 +428,12 @@ impl Catalog {
                 .collect::<Vec<_>>()
                 .join(", ")
         };
-        self.commit_inner(image, &next, None, Some(format!("{what} from {source}")))
+        self.commit_inner(
+            image,
+            &next,
+            None,
+            Some(format!("Merged {what} from {source}")),
+        )
     }
 
     fn commit_inner(
@@ -740,17 +755,42 @@ mod tests {
         cat.commit(img, &bw, None).unwrap();
         cat.switch_branch(img, "main").unwrap();
 
+        // The preview is what the merge commits, and commits nothing itself.
+        let steps = cat.history_view(img).unwrap().commits.len();
+        let preview = cat
+            .merged_from_branch(img, "bw", &[Panel::Light, Panel::Color])
+            .unwrap();
+        assert_eq!(cat.history_view(img).unwrap().commits.len(), steps);
+        assert_eq!(
+            (preview.light.exposure, preview.light.contrast),
+            (0.0, 20.0)
+        );
+        assert!(cat
+            .merged_from_branch(img, "main", &[Panel::Light])
+            .is_err());
+
         let c = cat.apply_from_branch(img, "bw", &[Panel::Color]).unwrap();
         assert_eq!(c.view.head.branch, "main");
         assert_eq!(c.state.color.saturation, -100.0);
         assert_eq!(c.state.light.exposure, 1.0, "Light was not copied");
         assert_eq!(c.state.light.contrast, 0.0);
-        assert_eq!(summaries(&c).last(), Some(&"Color from bw"));
+        assert_eq!(summaries(&c).last(), Some(&"Merged Color from bw"));
 
+        // Effects are the same on both: only Light changes, but the step names what was chosen.
+        let c = cat
+            .apply_from_branch(img, "bw", &[Panel::Light, Panel::Effects])
+            .unwrap();
+        assert_eq!(c.state, preview);
+        assert_eq!(summaries(&c).last(), Some(&"Merged Light, Effects from bw"));
+
+        cat.undo(img).unwrap();
         let c = cat.apply_from_branch(img, "bw", &Panel::ALL).unwrap();
         assert_eq!(c.state, bw);
-        assert_eq!(summaries(&c).last(), Some(&"All settings from bw"));
-        assert!(cat.apply_from_branch(img, "main", &[Panel::Light]).is_err());
+        assert_eq!(summaries(&c).last(), Some(&"Merged all settings from bw"));
+        // (Merging after an undo forked a new version.)
+        let here = c.view.head.branch.clone();
+        assert_ne!(here, "main");
+        assert!(cat.apply_from_branch(img, &here, &[Panel::Light]).is_err());
         assert!(cat.apply_from_branch(img, "bw", &[]).is_err());
     }
 
