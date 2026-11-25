@@ -21,7 +21,24 @@ commit.
 
 In review. Move each to **Done** when its pull request merges.
 
-_(nothing in review)_
+From a review of the interface (2026-11-24), built in parallel:
+
+- [ ] Rate, pick and reject in Edit; an edited mark on grid and filmstrip thumbnails
+      (`edit-culling`).
+- [ ] White balance as a dropdown with Temperature and Tint always shown, hover to preview a
+      preset, and an eyedropper (`wb-controls`). Also 0.3's eyedropper item.
+- [ ] Right panel: a tool strip under the histogram, the shooting info (ISO, shutter, aperture,
+      focal length), Auto as a real button, sections that remember being open, and an option to
+      keep one open at a time (`right-panel`).
+- [ ] History: what a step changed, on hover; hover a version to preview it; times by session
+      instead of "now" on every step; Reset all history moved into the version menu; a
+      resizable panel (`history-panel`).
+- [ ] Merge from another version, panel by panel, with a live preview (`merge-versions`).
+- [ ] Canvas: file name and camera moved to the filmstrip, a zoom menu, no "← →" hint
+      (`canvas-chrome`); a pixel readout and a navigator when zoomed in (`canvas-inspect`).
+- [ ] Errors and notices as toasts (`toasts`). Also 0.2's toast item.
+- [ ] Command palette (Ctrl+K), with every shortcut listed under `?` (`command-palette`).
+- [ ] Compare with another photo, side by side, to match a look (`reference-compare`).
 
 ---
 
