@@ -21,11 +21,7 @@ commit.
 
 In review. Move each to **Done** when its pull request merges.
 
-- [ ] A bad raw file can't take the app down; log file with panics in it; `.x3f` dropped (#58).
-- [ ] Remove photos from the library, to the system's Trash; read-only files import (#59).
-- [ ] Stop a running import or export (#60).
-- [ ] GPU tests run in CI, on a macOS runner (#61).
-- [ ] macOS build signed and notarised once the Apple secrets exist (#62).
+_(nothing in review)_
 
 ---
 
@@ -39,7 +35,7 @@ Each milestone is a release. The order inside one is a suggestion.
 
 ### 0.2 Trust
 
-What's left after the five fixes in **Now**.
+What's left after #58–#62.
 
 - [ ] Say so when the library is already open in another window. Today the app exits with
       nothing on screen (the reason is in the log).
@@ -91,7 +87,7 @@ What a raw editor is expected to have.
 - [ ] Highlight reconstruction. Blown highlights currently clip to neutral after white balance.
 - [ ] Spot healing and clone.
 - [ ] Perspective: keystone sliders, then guided or automatic upright.
-- [ ] Colour grading: shadows, midtones and highlights.
+- [x] Colour grading: shadows, midtones and highlights (#64).
 - [ ] Black and white with a mixer.
 - [ ] Hot and dead pixel removal.
 - [ ] Lens corrections the camera wrote into the file for Fujifilm, OM/Olympus and Panasonic
@@ -183,7 +179,12 @@ _(new ideas go here)_
 - Tethered shooting; printing.
 
 ## Done
-- 2026-11-23 — Colour grading: one wheel with a dot each for shadows, midtones and highlights, plus Blending and Balance; the dots can be linked in a shape (analogous, complementary, triadic, split-complementary) so dragging one turns and grows all three (`feat/colour-grading`; `docs/colour-grading.md`).
+- 2026-11-23 — macOS build signed and notarised once the Apple secrets exist (#62).
+- 2026-11-23 — GPU tests run in CI, on a macOS runner (#61).
+- 2026-11-23 — Stop a running import or export (#60).
+- 2026-11-23 — Remove photos from the library, to the system's Trash; read-only files import (#59).
+- 2026-11-23 — A bad raw file can't take the app down; log file with panics in it; `.x3f` dropped (#58).
+- 2026-11-23 — Colour grading (#64): one wheel with a dot each for shadows, midtones and highlights, plus Blending and Balance; the dots can be linked in a shape (analogous, complementary, triadic, split-complementary) so dragging one turns and grows all three (`feat/colour-grading`; `docs/colour-grading.md`).
 - 2026-11-17 — Auto: Light (exposure, then range sliders, from a model of tone + AgX checked against the shader) and white balance (grey pixels from As Shot), in Edit, one undo step each (`auto-settings`; `docs/auto.md`).
 - 2026-11-17 — Camera metadata in exports: EXIF (camera, lens, exposure, capture time, artist, copyright), star rating as EXIF + XMP, GPS behind an Export toggle (off by default); every format incl. Ultra HDR (`export-metadata`; `docs/export-metadata.md`).
 - 2026-11-17 — Ultra HDR files without JFIF (MPF must follow SOI), one ICC profile per space (fixed a flaky test); repo formatted with rustfmt and Prettier, format checks added to the checklist (`leftovers-2`).
