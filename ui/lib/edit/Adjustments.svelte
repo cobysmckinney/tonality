@@ -128,7 +128,8 @@
 
   // Hovering (or arrowing onto) a mode in the open list shows it on the photo; closing the list
   // without choosing puts back what was there. Only choosing commits.
-  let wbBefore: { id: number; wb: WhiteBalance } | null = null;
+  // `mode`: what the list shows as chosen meanwhile.
+  let wbBefore = $state.raw<{ id: number; wb: WhiteBalance; mode: WbMode } | null>(null);
   let previewSeq = 0;
   function previewWb(mode: string | null) {
     const seq = ++previewSeq;
@@ -138,7 +139,7 @@
       wbBefore = null;
       return;
     }
-    wbBefore ??= { id: image.id, wb: $state.snapshot(edit.whiteBalance) };
+    wbBefore ??= { id: image.id, wb: $state.snapshot(edit.whiteBalance), mode: wbMode };
     const id = image.id;
     wbOf(mode, wbBefore.wb).then((w) => {
       if (w && seq === previewSeq && wbBefore && image.id === id) edit.whiteBalance = w;
@@ -323,7 +324,7 @@
         <Select
           label="White balance"
           options={wbOptions}
-          value={wbMode}
+          value={wbBefore && wbBefore.id === image.id ? wbBefore.mode : wbMode}
           onpreview={previewWb}
           onchoose={chooseWb}
         />
