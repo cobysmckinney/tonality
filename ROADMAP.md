@@ -24,21 +24,21 @@ In review. Move each to **Done** when its pull request merges.
 From a review of the interface (2026-11-24), built in parallel:
 
 - [ ] Rate, pick and reject in Edit; an edited mark on grid and filmstrip thumbnails
-      (`edit-culling`).
+      (#75).
 - [ ] White balance as a dropdown with Temperature and Tint always shown, hover to preview a
-      preset, and an eyedropper (`wb-controls`). Also 0.3's eyedropper item.
+      preset, and an eyedropper (#68). Also 0.3's eyedropper item.
 - [ ] Right panel: a tool strip under the histogram, the shooting info (ISO, shutter, aperture,
       focal length), Auto as a real button, sections that remember being open, and an option to
-      keep one open at a time (`right-panel`).
+      keep one open at a time (#69).
 - [ ] History: what a step changed, on hover; hover a version to preview it; times by session
       instead of "now" on every step; Reset all history moved into the version menu; a
-      resizable panel (`history-panel`).
-- [ ] Merge from another version, panel by panel, with a live preview (`merge-versions`).
+      resizable panel (#73).
+- [ ] Merge from another version, panel by panel, with a live preview (#74).
 - [ ] Canvas: file name and camera moved to the filmstrip, a zoom menu, no "← →" hint
-      (`canvas-chrome`); a pixel readout and a navigator when zoomed in (`canvas-inspect`).
-- [ ] Errors and notices as toasts (`toasts`). Also 0.2's toast item.
-- [ ] Command palette (Ctrl+K), with every shortcut listed under `?` (`command-palette`).
-- [ ] Compare with another photo, side by side, to match a look (`reference-compare`).
+      (#70); a pixel readout and a navigator when zoomed in (#72).
+- [ ] Errors and notices as toasts (#66). Also 0.2's toast item.
+- [ ] Command palette (Ctrl+K), with every shortcut listed under `?` (#67).
+- [ ] Compare with another photo, side by side, to match a look (#71).
 
 ---
 
@@ -64,6 +64,8 @@ What's left after #58–#62.
       photos frees their ids for the next import; #59 clears the caches kept by id, and a
       catalog migration would end the hazard. Changes the catalog: do it before the format
       freezes.
+- [ ] `export::tests::writes_ultra_hdr` is flaky: it compares two ICC profiles that record
+      their creation time to the second, so it fails when they're made a second apart.
 - [ ] Answer a thumbnail request whose job panicked, so the grid cell doesn't wait for ever.
 - [ ] Sign the Windows installer. Open question: the route (SignPath Foundation, Azure
       Artifact Signing, or stay unsigned); see "Signing" in the README.
