@@ -42,6 +42,11 @@
     oncrop?: (c: Crop) => void;
     onlevel?: () => void;
     onhistogram?: (h: Histogram) => void;
+    /**
+     * Pick mode (the white balance eyedropper): a crosshair, and a click calls this with the
+     * frame position under it (0..1 across the photo as framed) instead of zooming.
+     */
+    onpick?: ((at: [number, number]) => void) | null;
   }
   let {
     image,
@@ -57,6 +62,7 @@
     oncrop,
     onlevel,
     onhistogram,
+    onpick = null,
   }: Props = $props();
   let frameRect = $state({ x: 0, y: 0, w: 0, h: 0 });
   const turned = $derived(turnedSize(edit.crop, image.fullWidth, image.fullHeight));
@@ -182,6 +188,13 @@
   function onPointerDown(e: PointerEvent) {
     if (e.button !== 0 || !renderer || cropping) return;
     const [x, y] = local(e);
+    if (onpick) {
+      // `frameRect` is the photo on screen (the left pane when comparing).
+      const r = frameRect;
+      const f: [number, number] = [(x - r.x) / r.w, (y - r.y) / r.h];
+      if (r.w > 0 && r.h > 0 && f.every((v) => v >= 0 && v <= 1)) onpick(f);
+      return;
+    }
     if (renderer.isFit && !renderer.hit(x, y)) return;
     drag = { x: e.clientX, y: e.clientY, moved: false, id: e.pointerId };
     canvas.setPointerCapture(e.pointerId);
@@ -412,6 +425,7 @@
     bind:this={canvas}
     class:zoomed={!fit}
     class:panning
+    class:picking={!!onpick}
     onpointerdown={onPointerDown}
     onpointermove={onPointerMove}
     onpointerup={onPointerUp}
@@ -487,6 +501,9 @@
   }
   canvas.panning {
     cursor: grabbing;
+  }
+  canvas.picking {
+    cursor: crosshair;
   }
   .pane-label {
     position: absolute;

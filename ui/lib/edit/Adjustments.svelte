@@ -16,6 +16,7 @@
   import Slider from "$lib/design/Slider.svelte";
   import Select, { type SelectOption } from "$lib/design/Select.svelte";
   import type { WhiteBalance } from "$lib/bindings/WhiteBalance";
+  import { wbPick } from "./wbpick.svelte";
   import ColorGradingPanel from "./ColorGrading.svelte";
   import CurveEditor from "./CurveEditor.svelte";
   import { GRADING_DEFAULT } from "./grading";
@@ -326,7 +327,26 @@
           onpreview={previewWb}
           onchoose={chooseWb}
         />
+        <button
+          class="icon-btn wb-pick"
+          class:on={wbPick.active}
+          aria-pressed={wbPick.active}
+          onclick={() => wbPick.toggle()}
+          title="White balance picker (W): click something in the photo that should be neutral grey"
+        >
+          <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true">
+            <path
+              d="M9 3.5 12.5 7M10.8 1.7a1.6 1.6 0 0 1 2.3 0l1.2 1.2a1.6 1.6 0 0 1 0 2.3L12 7.5 8.5 4Z"
+            />
+            <path d="M10.3 5.7 4.5 11.5 3 14l-1-1 2.5-1.5" />
+          </svg>
+        </button>
       </div>
+      {#if wbPick.active}
+        <p class="note">
+          {wbPick.miss ?? "Click something that should be neutral grey. Esc cancels."}
+        </p>
+      {/if}
       <Slider
         label="Temperature"
         value={wb.temperature ?? image.asShotTemperature}
@@ -733,6 +753,12 @@
     grid-template-columns: 1fr auto;
     gap: var(--space-1);
     align-items: center;
+  }
+  .wb-pick {
+    width: 28px;
+    height: 28px;
+    background: var(--bg-2);
+    color: var(--text-1);
   }
   .spacer {
     height: var(--space-1);
