@@ -114,6 +114,44 @@ async fn auto_white_balance(
     .await
 }
 
+/// White balance that makes the spot at frame position `at` (0..1 across the photo as `edit`
+/// frames it) neutral grey: `[temperature, tint]`, read from the camera data of a 5 × 5 pixel
+/// patch of the preview. `None` when the spot is outside the photo, clipped or black.
+#[tauri::command]
+async fn pick_white_balance(
+    id: ImageId,
+    edit: EditState,
+    at: [f32; 2],
+    images: State<'_, Images>,
+) -> CmdResult<Option<[f32; 2]>> {
+    let p = images.get(id).ok_or("image not open")?;
+    blocking(move || {
+        let lens = tonality_core::lens::lens_table(
+            p.lens.as_ref(),
+            &edit.lens,
+            p.full_width as f32,
+            p.full_height as f32,
+        );
+        let px = |x: u32, y: u32| {
+            let i = ((y * p.width + x) * 3) as usize;
+            [0, 1, 2].map(|k| half::f16::from_bits(p.pixels[i + k]).to_f32())
+        };
+        let cam = tonality_core::auto::sample_around(
+            p.width,
+            p.height,
+            px,
+            &edit.crop,
+            &lens,
+            p.full_width,
+            p.full_height,
+            at,
+            5,
+        );
+        Ok(tonality_core::auto::white_balance_at(&cam, &p.color).map(|(t, tint)| [t, tint]))
+    })
+    .await
+}
+
 /// Dev convenience: `TONALITY_OPEN=/path/to/file.ARW npm run tauri dev` imports a file and opens it.
 #[tauri::command]
 fn startup_path() -> Option<String> {
@@ -403,6 +441,7 @@ pub fn run() {
             wb_presets,
             auto_tone,
             auto_white_balance,
+            pick_white_balance,
             startup_path,
             startup_import,
             logging::ui_log,
@@ -436,8 +475,10 @@ pub fn run() {
             history::history_rename,
             history::history_delete,
             history::history_apply_from,
+            history::history_merge_preview,
             history::history_state,
             history::history_head,
+            history::history_changes,
             history::history_reset,
             thumbs::library_save_edited,
             library::library_overview,

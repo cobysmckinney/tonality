@@ -3,6 +3,7 @@
 use std::sync::{Arc, Mutex, OnceLock};
 
 use tauri::{Manager, State};
+use tonality_core::edit::Change;
 use tonality_core::{Catalog, Checkout, CommitId, EditState, Head, ImageId, Panel};
 
 use crate::sidecar::Sidecars;
@@ -194,7 +195,21 @@ pub async fn history_delete(
         .await
 }
 
-/// Copy `panels` from the tip of `source` onto the current version, as one commit.
+/// What merging `panels` from the tip of `source` would make of the current version, without
+/// committing anything (the Merge dialog's live preview).
+#[tauri::command]
+pub async fn history_merge_preview(
+    image_id: ImageId,
+    source: String,
+    panels: Vec<Panel>,
+    catalog: State<'_, CatalogState>,
+) -> CmdResult<EditState> {
+    catalog
+        .read(move |c| c.merged_from_branch(image_id, &source, &panels))
+        .await
+}
+
+/// Merge `panels` from the tip of `source` into the current version, as one commit.
 #[tauri::command]
 pub async fn history_apply_from(
     image_id: ImageId,
@@ -226,6 +241,15 @@ pub async fn history_head(
     catalog: State<'_, CatalogState>,
 ) -> CmdResult<Option<Head>> {
     catalog.read(move |c| c.history_head(image_id)).await
+}
+
+/// What `commit` changed from its parent, setting by setting (the history panel's step details).
+#[tauri::command]
+pub async fn history_changes(
+    commit: CommitId,
+    catalog: State<'_, CatalogState>,
+) -> CmdResult<Vec<Change>> {
+    catalog.read(move |c| c.changes_at(commit)).await
 }
 
 /// Take photos back to as-shot and delete all their history (see

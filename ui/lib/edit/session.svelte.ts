@@ -12,6 +12,7 @@ import type { ImageInfo } from "$lib/bindings/ImageInfo";
 import type { Panel } from "$lib/bindings/Panel";
 import type { Mask } from "$lib/bindings/Mask";
 import { invalidateThumb } from "$lib/library/thumbs";
+import { toasts } from "$lib/toasts/toasts.svelte";
 import { dropLibraryThumbs, scheduleLibraryThumb } from "./versions";
 import { afterHistory, afterOpen, afterRemoved, type Compare } from "./compare";
 import {
@@ -27,10 +28,7 @@ import {
 
 /** Where an AI mask's detection stands (keyed by `aiKey`). */
 export type AiStatus =
-  | { state: "working" }
-  | { state: "found" }
-  | { state: "empty" }
-  | { state: "error"; message: string };
+  { state: "working" } | { state: "found" } | { state: "empty" } | { state: "error" };
 
 /** The latest `ai-progress` event: a model download, or a detection running. */
 export interface AiProgress {
@@ -48,11 +46,14 @@ class EditSession {
   edit = $state<EditState | null>(null);
   history = $state<HistoryView | null>(null);
   loading = $state<string | null>(null);
-  error = $state<string | null>(null);
+  /** A photo's file name, for messages about one that isn't open (set by the Library). */
+  nameOf: (id: number) => string | undefined = () => undefined;
   /** Side-by-side compare with another branch (its tip), or with another photo. */
   compare = $state<Compare | null>(null);
-  /** Branch whose settings the "Copy settings" dialog is offering. */
+  /** Version the Merge dialog is merging from. */
   applying = $state<string | null>(null);
+  /** Shown on the canvas instead of `edit` (hovering a version); never committed. */
+  preview = $state.raw<{ label: string; state: EditState } | null>(null);
   /** Crop mode: the crop as it was on entering (for Cancel). Changes commit on Done. */
   cropEntry = $state<Crop | null>(null);
   /** Locked crop aspect (pixel w/h), or null for free. */
@@ -126,7 +127,13 @@ class EditSession {
   /** Ask before a model's first download. Resolves false if declined. */
   private async confirmModel(model: string): Promise<boolean> {
     if (this.approved.has(model)) return true;
-    const info = (await api.ai.models()).find((m) => m.id === model);
+    let info;
+    try {
+      info = (await api.ai.models()).find((m) => m.id === model);
+    } catch (e) {
+      toasts.error("Couldn’t look up the AI models", e);
+      return false;
+    }
     if (!info || info.installed) {
       this.approved.add(model);
       return true;
@@ -221,7 +228,11 @@ class EditSession {
         if (!this.aiStatus.has(k)) this.aiStatus.set(k, { state: "found" });
       }
     } catch (e) {
-      if (here()) this.aiStatus.set(key, { state: "error", message: String(e) });
+      // Kept as a state too: a failed mask isn't retried by itself, and offers Try Again.
+      if (here()) {
+        this.aiStatus.set(key, { state: "error" });
+        toasts.error(`Couldn’t make the “${m.name}” mask`, e);
+      }
     } finally {
       if (here()) {
         this.aiProgress = null;
@@ -282,7 +293,6 @@ class EditSession {
   private defaults: EditState | null = null;
   /** History operations run strictly in order, so a fast undo can't overtake a pending commit. */
   private queue: Promise<unknown> = Promise.resolve();
-  private errorTimer: ReturnType<typeof setTimeout> | undefined;
 
   async defaultEdit(): Promise<EditState> {
     this.defaults ??= await api.defaultEditState();
@@ -301,7 +311,6 @@ class EditSession {
     if (id === this.opening && this.openLoop) return this.openLoop;
     this.opening = id;
     this.loading = "Developing…";
-    this.error = null;
     this.openLoop ??= this.loadLatest().finally(() => (this.openLoop = null));
     return this.openLoop;
   }
@@ -322,6 +331,7 @@ class EditSession {
           this.pixels = pixels;
           this.setCompare(afterOpen(this.compare, id));
           this.applying = null;
+          this.preview = null;
           this.cropEntry = null;
           this.cropAspect = null;
           this.masking = false;
@@ -338,7 +348,7 @@ class EditSession {
           if (head?.parent != null) scheduleLibraryThumb(id, checkout.state);
         } catch (e) {
           if (this.opening !== id) continue;
-          this.error = String(e);
+          toasts.error(`Couldn’t open ${this.nameOf(id) ?? "this photo"}`, e);
           this.opening = this.image?.id ?? null;
         }
       }
@@ -361,12 +371,12 @@ class EditSession {
     this.history = null;
     this.setCompare(null);
     this.applying = null;
+    this.preview = null;
     this.cropEntry = null;
     this.cropAspect = null;
     this.masking = false;
     this.maskIndex = null;
     this.lassoing = null;
-    this.error = null;
   }
 
   /** Queued operations that will replace `edit` with their result (undo, checkout, …). */
@@ -394,7 +404,7 @@ class EditSession {
         if (moved) scheduleLibraryThumb(id, r.state);
         if (this.compare) this.compare = afterHistory(this.compare, r.view);
       } catch (e) {
-        this.flashError(String(e));
+        toasts.error("Couldn’t update the history", e);
         throw e;
       } finally {
         if (applyState) this.restoring--;
@@ -402,12 +412,6 @@ class EditSession {
     });
     this.queue = next.catch(() => {});
     return next;
-  }
-
-  private flashError(msg: string) {
-    this.error = msg;
-    clearTimeout(this.errorTimer);
-    this.errorTimer = setTimeout(() => (this.error = null), 4000);
   }
 
   /** Record the current edit as a commit. `key` names the control, so rapid nudges coalesce. */
@@ -468,7 +472,7 @@ class EditSession {
     try {
       await api.history.reset([id]);
     } catch (e) {
-      this.flashError(String(e));
+      toasts.error("Couldn’t reset the history", e);
       return;
     }
     if (this.history?.imageId === id) await this.reloadHistory(id);
@@ -487,7 +491,7 @@ class EditSession {
       const state = await api.history.state(b.tip);
       this.setCompare({ kind: "version", branch, state });
     } catch (e) {
-      this.flashError(String(e));
+      toasts.error(`Couldn’t show “${branch}”`, e);
     }
   }
 
@@ -519,7 +523,9 @@ class EditSession {
       if (this.masking) this.stopMasks();
       this.setCompare({ kind: "photo", image, pixels, version: head?.branch ?? "main", state });
     } catch (e) {
-      if (seq === this.referenceSeq) this.flashError(String(e));
+      if (seq === this.referenceSeq) {
+        toasts.error(`Couldn’t compare with ${this.nameOf(id) ?? "that photo"}`, e);
+      }
     }
   }
 

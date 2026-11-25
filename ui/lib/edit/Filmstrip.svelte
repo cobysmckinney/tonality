@@ -2,6 +2,7 @@
   Filmstrip: the Library's current view (All Photos, an album, an import, with its filters) as a
   strip under the canvas, so photos can be switched without leaving Edit.
   Click a photo, or ← / → for the previous / next one. Horizontally virtualised.
+  The header also names the open photo and its camera.
 -->
 <script lang="ts">
   import { library } from "$lib/library/state.svelte";
@@ -93,7 +94,13 @@
         {index >= 0 ? `${index + 1} of ${images.length}` : `${images.length} photos`}
       </span>
     {/if}
-    <span class="keys">← → to switch photos</span>
+    {#if session.image}
+      {@const camera = `${session.image.make} ${session.image.model}`.trim()}
+      <span class="photo" title="{session.image.name} · {camera}">
+        <span class="name">{session.image.name}</span>
+        <span class="camera">{camera}</span>
+      </span>
+    {/if}
   </div>
   <div
     class="scroller"
@@ -196,8 +203,22 @@
   .pos {
     font-variant-numeric: tabular-nums;
   }
-  .keys {
+  /* The open photo's file and camera, at the right (clear of Edit's hide button). */
+  .photo {
+    display: flex;
+    gap: var(--space-2);
+    min-width: 0;
     margin-left: auto;
+    margin-right: 28px;
+    overflow: hidden;
+  }
+  .photo .name {
+    color: var(--text-1);
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .photo .camera {
+    flex: none;
   }
   .scroller {
     position: relative;

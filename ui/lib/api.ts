@@ -1,6 +1,7 @@
 // Typed wrappers around Tauri commands. Types come from Rust via ts-rs.
 import { invoke } from "@tauri-apps/api/core";
 import { convertFileSrc } from "@tauri-apps/api/core";
+import type { Change } from "$lib/bindings/Change";
 import type { Checkout } from "$lib/bindings/Checkout";
 import type { WbPresetInfo } from "$lib/bindings/WbPresetInfo";
 import type { ImageQuery } from "$lib/bindings/ImageQuery";
@@ -41,6 +42,12 @@ export const api = {
   /** Auto white balance for the open photo: `[temperature, tint]`, or null if it can't tell. */
   autoWhiteBalance: (id: number, edit: EditState) =>
     invoke<[number, number] | null>("auto_white_balance", { id, edit }),
+  /**
+   * White balance making the spot at frame position `at` (0..1 across the photo as `edit` frames
+   * it) neutral: `[temperature, tint]`, or null if it's outside the photo, clipped or black.
+   */
+  pickWhiteBalance: (id: number, edit: EditState, at: [number, number]) =>
+    invoke<[number, number] | null>("pick_white_balance", { id, edit, at }),
   startupPath: () => invoke<string | null>("startup_path"),
   startupImport: () => invoke<string | null>("startup_import"),
   devSnapshotPath: () => invoke<string | null>("dev_snapshot_path"),
@@ -108,9 +115,14 @@ export const api = {
       invoke<Checkout>("history_delete", { imageId, name }),
     applyFrom: (imageId: number, source: string, panels: Panel[]) =>
       invoke<Checkout>("history_apply_from", { imageId, source, panels }),
+    /** What `applyFrom` would make of the current version, without committing it. */
+    mergePreview: (imageId: number, source: string, panels: Panel[]) =>
+      invoke<EditState>("history_merge_preview", { imageId, source, panels }),
     state: (commit: number) => invoke<EditState>("history_state", { commit }),
     /** The version a photo shows (null: never edited), without creating its history. */
     head: (imageId: number) => invoke<Head | null>("history_head", { imageId }),
+    /** What a step changed from the one before it, setting by setting. */
+    changes: (commit: number) => invoke<Change[]>("history_changes", { commit }),
     /** Back to as-shot, deleting every version and step. Can't be undone. */
     reset: (imageIds: number[]) => invoke<void>("history_reset", { imageIds }),
   },

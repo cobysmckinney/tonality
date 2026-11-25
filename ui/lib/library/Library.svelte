@@ -7,6 +7,7 @@
   import { BIN as bin, library, type View } from "./state.svelte";
   import { thumbKey, thumbnail } from "./thumbs";
   import { targetOwnsKey } from "$lib/keys";
+  import { palette } from "$lib/palette/commands.svelte";
 
   let grid = $state<ReturnType<typeof Grid> | null>(null);
 
@@ -125,6 +126,13 @@
     draft = "";
     naming = "new";
   }
+  // The command palette's actions that live in this component's state.
+  onMount(() =>
+    palette.provide({
+      "library.newAlbum": () => newAlbum(),
+      "library.newAlbumWith": () => newAlbum(library.targets()),
+    }),
+  );
   function startRename(id: number, name: string) {
     draft = name;
     naming = id;
@@ -398,10 +406,6 @@
         </div>
       {/if}
     </nav>
-
-    {#if library.message}
-      <p class="message">{library.message}</p>
-    {/if}
   </aside>
 
   <!-- ============================ grid ============================ -->
@@ -870,15 +874,6 @@
     display: block;
     font-size: var(--fs-xs);
     color: var(--text-2);
-  }
-  .message {
-    margin: auto 0 0;
-    padding: var(--space-2) var(--space-3);
-    border-radius: var(--radius-m);
-    background: var(--bg-2);
-    font-size: var(--fs-xs);
-    line-height: 1.45;
-    color: var(--text-1);
   }
 
   /* ---- main ---- */

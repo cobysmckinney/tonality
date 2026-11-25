@@ -3,6 +3,7 @@
   import Canvas from "./Canvas.svelte";
   import HistoryPanel from "$lib/history/HistoryPanel.svelte";
   import ApplyDialog from "$lib/history/ApplyDialog.svelte";
+  import { historyWidth } from "$lib/history/width.svelte";
   import CropPanel from "./CropPanel.svelte";
   import MaskPanel from "./MaskPanel.svelte";
   import MaskList from "./MaskList.svelte";
@@ -11,8 +12,12 @@
   import { library } from "$lib/library/state.svelte";
   import { session } from "./session.svelte";
   import { compareLabels, type Compare } from "./compare";
+  import { wbPick } from "./wbpick.svelte";
+  import { untrack } from "svelte";
   import type { EditState } from "$lib/bindings/EditState";
   import type { Histogram } from "./renderer";
+  import { onMount } from "svelte";
+  import { palette, shortcut } from "$lib/palette/commands.svelte";
 
   let historyOpen = $state(true);
   let before = $state(false);
@@ -38,6 +43,11 @@
   }
   $effect(() => {
     session.defaultEdit().then((d) => (beforeEdit = d));
+  });
+  // The eyedropper ends when another photo opens or crop or mask mode starts.
+  $effect(() => {
+    void [session.image?.id, session.cropping, session.masking];
+    untrack(() => wbPick.stop());
   });
 
   function onKeyDown(e: KeyboardEvent) {
@@ -66,6 +76,14 @@
       return;
     }
     const plain = !e.ctrlKey && !e.metaKey && !e.altKey;
+    if ((e.key === "w" || e.key === "W") && plain && !session.masking && !e.repeat) {
+      wbPick.toggle();
+      return;
+    }
+    if (e.key === "Escape" && wbPick.active) {
+      wbPick.stop();
+      return;
+    }
     if ((e.key === "m" || e.key === "M") && plain && session.edit) {
       if (session.masking) session.stopMasks();
       else session.startMasks();
@@ -142,13 +160,45 @@
   function onKeyUp(e: KeyboardEvent) {
     if (e.key === "\\") before = false;
   }
+
+  // The command palette's actions that live in this component's state.
+  onMount(() =>
+    palette.provide({
+      "view.zoomFit": () => canvas?.setZoom(null),
+      "view.zoom100": () => canvas?.setZoom(1),
+      "view.zoomIn": () => canvas?.zoomBy(Math.SQRT2),
+      "view.zoomOut": () => canvas?.zoomBy(Math.SQRT1_2),
+      "view.zoomToggle": () => canvas?.toggleZoom(),
+      "crop.apply": () => {
+        level = false;
+        session.finishCrop();
+      },
+      "crop.cancel": () => {
+        level = false;
+        session.cancelCrop();
+      },
+      "view.filmstrip": {
+        run: toggleStrip,
+        title: () => (stripOpen ? "Hide filmstrip" : "Show filmstrip"),
+      },
+      "view.versions": {
+        run: () => (historyOpen = !historyOpen),
+        title: () => (historyOpen ? "Hide versions panel" : "Show versions panel"),
+      },
+    }),
+  );
 </script>
 
 <svelte:window onkeydown={onKeyDown} onkeyup={onKeyUp} onblur={() => (before = false)} />
 
 <ApplyDialog />
 
-<div class="edit" class:history-closed={!historyOpen}>
+<div
+  class="edit"
+  class:history-closed={!historyOpen}
+  class:resizing={historyWidth.dragging}
+  style:--history-w="{historyWidth.px}px"
+>
   <!-- Crop mode: no undo or checkout until Done / Cancel (Cancel restores the crop it entered with). -->
   <aside class="history surface" inert={session.cropping} class:inert={session.cropping}>
     {#if session.history}
@@ -173,7 +223,7 @@
           bind:this={canvas}
           image={session.image}
           pixels={session.pixels}
-          edit={session.edit}
+          edit={session.preview?.state ?? session.edit}
           {before}
           {beforeEdit}
           compare={session.compare && session.history
@@ -186,28 +236,28 @@
           oncrop={(c) => session.edit && (session.edit.crop = c)}
           onlevel={() => (level = false)}
           onhistogram={(h) => (histogram = h)}
+          onpick={wbPick.active ? (at) => wbPick.pick(at) : null}
         />
+        {#if session.preview && !before}
+          <div class="preview-badge">Preview · {session.preview.label}</div>
+        {/if}
         {#if session.masking && session.masks.length && !session.cropping}
           <MaskList />
         {/if}
-        <div class="caption">
-          <span>{session.image.name}</span>
-          <span class="dim">{session.image.make} {session.image.model}</span>
-        </div>
       {:else if !session.loading}
         <div class="empty">
           <button class="btn primary" onclick={() => library.importFiles({ open: true })}>
             Import Photos…
           </button>
           <p class="hint">Ctrl+O, or drop RAW files here. They’re copied into your library.</p>
+          <p class="hint">
+            {shortcut("Mod+K")} finds any command; ? lists the keyboard shortcuts.
+          </p>
         </div>
       {/if}
 
       {#if session.loading}
         <div class="status">{session.loading}</div>
-      {/if}
-      {#if session.error}
-        <div class="status error">{session.error}</div>
       {/if}
 
       {#if !historyOpen}
@@ -227,7 +277,12 @@
       {#if stripOpen}
         <Filmstrip />
       {:else}
-        <span class="strip-label">Filmstrip</span>
+        <span class="strip-label">
+          {#if session.image}
+            <span class="name">{session.image.name}</span>
+            <span class="dim">{session.image.make} {session.image.model}</span>
+          {:else}Filmstrip{/if}
+        </span>
       {/if}
       <button
         class="icon-btn strip-toggle"
@@ -260,9 +315,26 @@
 <style>
   .edit {
     display: grid;
-    grid-template-columns: 268px 1fr var(--panel-w);
+    grid-template-columns: var(--history-w) 1fr var(--panel-w);
     height: 100%;
     transition: grid-template-columns 180ms var(--ease);
+  }
+  .edit.resizing {
+    transition: none;
+    cursor: col-resize;
+  }
+  .preview-badge {
+    position: absolute;
+    top: var(--space-3);
+    left: 50%;
+    transform: translateX(-50%);
+    padding: 2px 10px;
+    border-radius: var(--radius-pill);
+    background: rgba(0, 0, 0, 0.6);
+    font-size: var(--fs-xs);
+    color: var(--text-1);
+    pointer-events: none;
+    z-index: 2;
   }
   .edit.history-closed {
     grid-template-columns: 0 1fr var(--panel-w);
@@ -309,10 +381,20 @@
     height: 30px;
   }
   .strip-label {
-    display: block;
-    padding: 7px var(--space-3);
+    display: flex;
+    gap: var(--space-2);
+    padding: 7px 36px 7px var(--space-3);
     font-size: var(--fs-xs);
     color: var(--text-2);
+    white-space: nowrap;
+  }
+  .strip-label .name {
+    color: var(--text-1);
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .strip-label .dim {
+    flex: none;
   }
   .strip-toggle {
     position: absolute;
@@ -320,9 +402,6 @@
     right: 4px;
     width: 24px;
     height: 24px;
-  }
-  .filmstrip :global(.keys) {
-    margin-right: 28px;
   }
   .canvas-area {
     position: relative;
@@ -335,28 +414,9 @@
     min-width: 0;
     overflow: hidden;
   }
-  .caption {
-    position: absolute;
-    bottom: var(--space-3);
-    left: 50%;
-    transform: translateX(-50%);
-    display: flex;
-    gap: var(--space-3);
-    padding: 3px 12px;
-    border-radius: var(--radius-pill);
-    background: color-mix(in srgb, var(--bg-1) 80%, transparent);
-    font-size: var(--fs-xs);
-    color: var(--text-1);
-    white-space: nowrap;
-    pointer-events: none;
-  }
-  .dim,
   .hint {
     color: var(--text-2);
     font-size: var(--fs-s);
-  }
-  .caption .dim {
-    font-size: var(--fs-xs);
   }
   .hint {
     padding: 0 var(--space-4);
@@ -379,10 +439,6 @@
     background: var(--bg-1);
     color: var(--text-1);
     font-size: var(--fs-s);
-  }
-  .status.error {
-    bottom: var(--space-6);
-    color: var(--danger);
   }
   .adjust {
     min-height: 0;
