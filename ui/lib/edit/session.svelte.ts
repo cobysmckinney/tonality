@@ -13,6 +13,7 @@ import type { Panel } from "$lib/bindings/Panel";
 import type { Mask } from "$lib/bindings/Mask";
 import { invalidateThumb } from "$lib/library/thumbs";
 import { dropLibraryThumbs, scheduleLibraryThumb } from "./versions";
+import { afterHistory, afterOpen, afterRemoved, type Compare } from "./compare";
 import {
   MAX_MASKS,
   aiKey,
@@ -48,8 +49,8 @@ class EditSession {
   history = $state<HistoryView | null>(null);
   loading = $state<string | null>(null);
   error = $state<string | null>(null);
-  /** Side-by-side compare with another branch (its tip). */
-  compare = $state<{ branch: string; state: EditState } | null>(null);
+  /** Side-by-side compare with another branch (its tip), or with another photo. */
+  compare = $state<Compare | null>(null);
   /** Branch whose settings the "Copy settings" dialog is offering. */
   applying = $state<string | null>(null);
   /** Crop mode: the crop as it was on entering (for Cancel). Changes commit on Done. */
@@ -101,7 +102,7 @@ class EditSession {
 
   startMasks() {
     if (!this.edit || this.cropping) return;
-    this.compare = null;
+    this.setCompare(null);
     this.masking = true;
     if (this.selected === null && this.masks.length) this.maskIndex = this.masks.length - 1;
   }
@@ -259,7 +260,7 @@ class EditSession {
 
   startCrop() {
     if (!this.edit || this.cropping) return;
-    this.compare = null;
+    this.setCompare(null);
     this.masking = false;
     this.cropAspect = null; // the panel opens on "Free"
     this.cropEntry = $state.snapshot(this.edit.crop);
@@ -319,7 +320,7 @@ class EditSession {
             `[tonality] opened ${info.name} ${info.width}×${info.height} in ${Math.round(performance.now() - t0)}ms`,
           );
           this.pixels = pixels;
-          this.compare = null;
+          this.setCompare(afterOpen(this.compare, id));
           this.applying = null;
           this.cropEntry = null;
           this.cropAspect = null;
@@ -348,6 +349,7 @@ class EditSession {
 
   /** Photos were removed from the library: stop showing (or loading) any of them. */
   forget(ids: number[]) {
+    this.compare = afterRemoved(this.compare, ids); // (its pixels are dropped already)
     if (this.opening !== null && ids.includes(this.opening)) {
       this.opening = this.image?.id ?? null;
     }
@@ -357,7 +359,7 @@ class EditSession {
     this.pixels = null;
     this.edit = null;
     this.history = null;
-    this.compare = null;
+    this.setCompare(null);
     this.applying = null;
     this.cropEntry = null;
     this.cropAspect = null;
@@ -390,13 +392,7 @@ class EditSession {
           if (this.cropEntry) this.cropEntry = $state.snapshot(r.state.crop);
         }
         if (moved) scheduleLibraryThumb(id, r.state);
-        const cmp = this.compare;
-        if (
-          cmp &&
-          (!r.view.branches.some((b) => b.name === cmp.branch) || cmp.branch === r.view.head.branch)
-        ) {
-          this.compare = null;
-        }
+        if (this.compare) this.compare = afterHistory(this.compare, r.view);
       } catch (e) {
         this.flashError(String(e));
         throw e;
@@ -435,7 +431,8 @@ class EditSession {
   branch = (at: number, name: string | null = null) =>
     this.run((id) => api.history.branch(id, at, name), true);
   renameBranch = (old: string, name: string) => {
-    if (this.compare?.branch === old) this.compare.branch = name.trim();
+    if (this.compare?.kind === "version" && this.compare.branch === old)
+      this.compare.branch = name.trim();
     return this.run((id) => api.history.rename(id, old, name), true);
   };
   deleteBranch = (name: string) => this.run((id) => api.history.deleteBranch(id, name), true);
@@ -449,7 +446,7 @@ class EditSession {
   async reloadHistory(id: number | undefined = this.history?.imageId): Promise<void> {
     // Another photo was opened meanwhile: its state isn't ours to clear.
     if (id === undefined || this.history?.imageId !== id) return;
-    this.compare = null;
+    if (this.compare?.kind === "version") this.compare = null; // (a reference photo stays)
     this.applying = null;
     this.cropEntry = null;
     this.masking = false;
@@ -487,14 +484,55 @@ class EditSession {
     const b = this.history?.branches.find((x) => x.name === branch);
     if (!b || branch === this.history?.head.branch) return;
     try {
-      this.compare = { branch, state: await api.history.state(b.tip) };
+      const state = await api.history.state(b.tip);
+      this.setCompare({ kind: "version", branch, state });
     } catch (e) {
       this.flashError(String(e));
     }
   }
 
+  private referenceSeq = 0;
+
+  /**
+   * Show photo `id` next to the one being edited, read-only, at its current version (a
+   * reference, to match a look across a set). It stays while switching photos, until closed or
+   * opened itself. Its history is only read: nothing is created or changed for it.
+   */
+  async compareWith(id: number) {
+    const open = this.image?.id;
+    if (open === undefined || id === open || id === this.opening || this.cropping) return;
+    if (this.compare?.kind === "photo" && this.compare.image.id === id) return;
+    const seq = ++this.referenceSeq;
+    try {
+      const [image, head] = await Promise.all([api.openReference(id), api.history.head(id)]);
+      const [pixels, state] = await Promise.all([
+        api.previewPixels(id),
+        head ? api.history.state(head.commit) : this.defaultEdit(),
+      ]);
+      if (seq !== this.referenceSeq) return; // a newer one was asked for, or it was closed
+      // Opened meanwhile (or nothing is open any more): nothing to compare it with.
+      if (id === this.image?.id || id === this.opening || !this.image || this.cropping) {
+        api.closeReference(id).catch(() => {});
+        return;
+      }
+      // Mask handles belong over the photo being edited, which moves to the right.
+      if (this.masking) this.stopMasks();
+      this.setCompare({ kind: "photo", image, pixels, version: head?.branch ?? "main", state });
+    } catch (e) {
+      if (seq === this.referenceSeq) this.flashError(String(e));
+    }
+  }
+
   stopCompare() {
-    this.compare = null;
+    this.referenceSeq++; // (one still loading doesn't open)
+    this.setCompare(null);
+  }
+
+  /** Replace the compare. A reference photo that goes is no longer held for it. */
+  private setCompare(next: Compare | null) {
+    const prev = this.compare;
+    if (prev?.kind === "photo" && next !== prev) api.closeReference(prev.image.id).catch(() => {});
+    this.compare = next;
   }
 }
 
