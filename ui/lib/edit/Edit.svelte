@@ -3,6 +3,7 @@
   import Canvas from "./Canvas.svelte";
   import HistoryPanel from "$lib/history/HistoryPanel.svelte";
   import ApplyDialog from "$lib/history/ApplyDialog.svelte";
+  import { historyWidth } from "$lib/history/width.svelte";
   import CropPanel from "./CropPanel.svelte";
   import MaskPanel from "./MaskPanel.svelte";
   import MaskList from "./MaskList.svelte";
@@ -140,7 +141,12 @@
 
 <ApplyDialog />
 
-<div class="edit" class:history-closed={!historyOpen}>
+<div
+  class="edit"
+  class:history-closed={!historyOpen}
+  class:resizing={historyWidth.dragging}
+  style:--history-w="{historyWidth.px}px"
+>
   <!-- Crop mode: no undo or checkout until Done / Cancel (Cancel restores the crop it entered with). -->
   <aside class="history surface" inert={session.cropping} class:inert={session.cropping}>
     {#if session.history}
@@ -259,9 +265,13 @@
 <style>
   .edit {
     display: grid;
-    grid-template-columns: 268px 1fr var(--panel-w);
+    grid-template-columns: var(--history-w) 1fr var(--panel-w);
     height: 100%;
     transition: grid-template-columns 180ms var(--ease);
+  }
+  .edit.resizing {
+    transition: none;
+    cursor: col-resize;
   }
   .preview-badge {
     position: absolute;

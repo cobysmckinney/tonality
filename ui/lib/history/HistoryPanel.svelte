@@ -15,6 +15,7 @@
   import { branchThumbs, requestBranchThumb } from "$lib/edit/versions";
   import { branchSteps, versions } from "./graph";
   import { sessionLabel, sessionLabels, stepTime } from "./sessions";
+  import { DEFAULT_WIDTH, MAX_WIDTH, MIN_WIDTH, historyWidth } from "./width.svelte";
 
   interface Props {
     view: HistoryView;
@@ -110,6 +111,42 @@
   }
   // Below the middle of the window, the details open upwards from the row.
   const tipUp = $derived(!!tip && tip.top > window.innerHeight / 2);
+
+  // ---- resize from the right edge ----
+  function startResize(e: PointerEvent) {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    const el = e.currentTarget as HTMLElement;
+    el.setPointerCapture(e.pointerId);
+    const x0 = e.clientX;
+    const w0 = historyWidth.px;
+    historyWidth.dragging = true;
+    const move = (m: PointerEvent) => historyWidth.set(w0 + m.clientX - x0);
+    const up = () => {
+      historyWidth.dragging = false;
+      historyWidth.save();
+      el.removeEventListener("pointermove", move);
+      el.removeEventListener("pointerup", up);
+      el.removeEventListener("pointercancel", up);
+    };
+    el.addEventListener("pointermove", move);
+    el.addEventListener("pointerup", up);
+    el.addEventListener("pointercancel", up);
+  }
+  function resizeKey(e: KeyboardEvent) {
+    const step = e.shiftKey ? 40 : 10;
+    if (e.key === "ArrowLeft") historyWidth.set(historyWidth.px - step);
+    else if (e.key === "ArrowRight") historyWidth.set(historyWidth.px + step);
+    else if (e.key === "Home") historyWidth.set(MIN_WIDTH);
+    else if (e.key === "End") historyWidth.set(MAX_WIDTH);
+    else return;
+    e.preventDefault();
+    historyWidth.save();
+  }
+  function resetWidth() {
+    historyWidth.set(DEFAULT_WIDTH);
+    historyWidth.save();
+  }
 
   // ---- thumbnails (rendered with the live renderer, cached per commit) ----
   const thumbCommit = (name: string, tip: number) => (name === current ? view.head.commit : tip);
@@ -406,10 +443,28 @@
       {/if}
     </div>
   {/if}
+
+  <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
+  <div
+    class="resize"
+    class:active={historyWidth.dragging}
+    role="separator"
+    aria-orientation="vertical"
+    aria-label="Panel width"
+    aria-valuenow={historyWidth.px}
+    aria-valuemin={MIN_WIDTH}
+    aria-valuemax={MAX_WIDTH}
+    tabindex="0"
+    title="Drag to resize · double-click for the default width"
+    onpointerdown={startResize}
+    onkeydown={resizeKey}
+    ondblclick={resetWidth}
+  ></div>
 </div>
 
 <style>
   .panel {
+    position: relative;
     display: flex;
     flex-direction: column;
     height: 100%;
@@ -793,5 +848,31 @@
   .details-note {
     margin: 0;
     color: var(--text-2);
+  }
+
+  /* ---- resize ---- */
+  .resize {
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: 6px;
+    z-index: 3;
+    cursor: col-resize;
+  }
+  .resize::after {
+    content: "";
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    right: 0;
+    width: 2px;
+    background: transparent;
+    transition: background 120ms var(--ease);
+  }
+  .resize:hover::after,
+  .resize:focus-visible::after,
+  .resize.active::after {
+    background: var(--line-strong);
   }
 </style>
