@@ -68,6 +68,7 @@ const FULL_DELAY: Duration = Duration::from_millis(900);
 
 type Recent = Vec<(ImageId, Arc<Preview>)>;
 type RecentMaps = Vec<(ImageId, Arc<PresenceMaps>)>;
+type Held = (ImageId, Arc<Preview>);
 type FullSlot = Arc<OnceLock<Result<Arc<FullImage>, String>>>;
 type Prefetch = Arc<OnceLock<Mutex<Sender<(ImageId, PathBuf)>>>>;
 
@@ -82,6 +83,11 @@ pub struct Images {
     prefetch: Prefetch,
     /// Clarity / Dehaze maps of recently used photos (made from their previews).
     presence: Arc<Mutex<RecentMaps>>,
+    /// A photo shown next to the one being edited (compare), held apart from `previews` so
+    /// stepping through photos can't evict it, and opening it doesn't count as "latest".
+    reference: Arc<Mutex<Option<Held>>>,
+    /// The reference asked for last (-1: none), so a slow decode can't replace a newer one.
+    reference_wanted: Arc<AtomicI64>,
 }
 
 impl Images {
@@ -95,14 +101,19 @@ impl Images {
         // Before decoding: a slower decode of the photo opened before must not claim "latest"
         // after this one has.
         self.latest.store(id, Ordering::Relaxed);
-        let preview = match self.get(id) {
+        let preview = match self.recent(id) {
             Some(p) => p,
             None => {
-                let p = Arc::new(
-                    Rawler
-                        .decode_preview(path, max_edge)
-                        .map_err(|e| e.to_string())?,
-                );
+                // The reference, opened to edit: it joins the recent previews (and stays there
+                // once it's no longer the reference).
+                let p = match self.held_reference(id) {
+                    Some(p) => p,
+                    None => Arc::new(
+                        Rawler
+                            .decode_preview(path, max_edge)
+                            .map_err(|e| e.to_string())?,
+                    ),
+                };
                 let mut cache = self.previews.lock().unwrap();
                 cache.retain(|(i, _)| *i != id);
                 cache.push((id, p.clone()));
@@ -113,23 +124,78 @@ impl Images {
             }
         };
         self.prefetch_full(id, path);
-
-        let (t, tint) = preview.color.as_shot_temperature_tint();
-        Ok(ImageInfo {
-            id,
-            name,
-            width: preview.width,
-            height: preview.height,
-            full_width: preview.full_width,
-            full_height: preview.full_height,
-            make: preview.metadata.make.clone(),
-            model: preview.metadata.model.clone(),
-            as_shot_temperature: t.round(),
-            as_shot_tint: tint.round(),
-            lens: preview.lens.as_ref().map(LensInfo::from),
-        })
+        Ok(info(id, name, &preview))
     }
 
+    /// Decode a photo to show next to the one being edited, and hold it until `close_reference`
+    /// or another reference. Unlike `open`, it doesn't decode full resolution ahead or take a
+    /// place among the recent previews: the photo being edited keeps those.
+    pub fn open_reference(
+        &self,
+        id: ImageId,
+        path: &Path,
+        name: String,
+        max_edge: usize,
+    ) -> Result<ImageInfo, String> {
+        self.reference_wanted.store(id, Ordering::Relaxed);
+        let preview = match self.get(id) {
+            Some(p) => p,
+            None => Arc::new(
+                Rawler
+                    .decode_preview(path, max_edge)
+                    .map_err(|e| e.to_string())?,
+            ),
+        };
+        if self.reference_wanted.load(Ordering::Relaxed) == id {
+            *self.reference.lock().unwrap() = Some((id, preview.clone()));
+        }
+        Ok(info(id, name, &preview))
+    }
+
+    /// Stop holding photo `id` as the reference (if it still is: a newer one stays).
+    pub fn close_reference(&self, id: ImageId) {
+        let _ =
+            self.reference_wanted
+                .compare_exchange(id, -1, Ordering::Relaxed, Ordering::Relaxed);
+        let mut r = self.reference.lock().unwrap();
+        if r.as_ref().is_some_and(|(i, _)| *i == id) {
+            *r = None;
+        }
+    }
+
+    fn held_reference(&self, id: ImageId) -> Option<Arc<Preview>> {
+        let r = self.reference.lock().unwrap();
+        r.as_ref().filter(|(i, _)| *i == id).map(|(_, p)| p.clone())
+    }
+
+    fn recent(&self, id: ImageId) -> Option<Arc<Preview>> {
+        self.previews
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|(i, _)| *i == id)
+            .map(|(_, p)| p.clone())
+    }
+}
+
+fn info(id: ImageId, name: String, preview: &Preview) -> ImageInfo {
+    let (t, tint) = preview.color.as_shot_temperature_tint();
+    ImageInfo {
+        id,
+        name,
+        width: preview.width,
+        height: preview.height,
+        full_width: preview.full_width,
+        full_height: preview.full_height,
+        make: preview.metadata.make.clone(),
+        model: preview.metadata.model.clone(),
+        as_shot_temperature: t.round(),
+        as_shot_tint: tint.round(),
+        lens: preview.lens.as_ref().map(LensInfo::from),
+    }
+}
+
+impl Images {
     /// Decode full resolution ahead, so zooming in is instant by the time it's needed: once
     /// the photo has stayed open for `FULL_DELAY`, unless another has been opened meanwhile.
     fn prefetch_full(&self, id: ImageId, path: &Path) {
@@ -183,19 +249,21 @@ impl Images {
             .lock()
             .unwrap()
             .retain(|(i, _)| !ids.contains(i));
+        {
+            let mut reference = self.reference.lock().unwrap();
+            if reference.as_ref().is_some_and(|(i, _)| ids.contains(i)) {
+                *reference = None;
+            }
+        }
         let mut full = self.full.lock().unwrap();
         if full.as_ref().is_some_and(|(i, _)| ids.contains(i)) {
             *full = None;
         }
     }
 
+    /// A recent preview, or the reference's.
     pub fn get(&self, id: ImageId) -> Option<Arc<Preview>> {
-        self.previews
-            .lock()
-            .unwrap()
-            .iter()
-            .find(|(i, _)| *i == id)
-            .map(|(_, p)| p.clone())
+        self.recent(id).or_else(|| self.held_reference(id))
     }
 
     /// The full-resolution image, decoding it if needed. Concurrent callers for the same image
