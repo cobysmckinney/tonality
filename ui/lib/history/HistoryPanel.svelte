@@ -76,19 +76,6 @@
     if (ok) await session.deleteBranch(name).catch(() => {});
   }
 
-  // Something to reset: more than the as-shot step, or more than one version.
-  const resettable = $derived(view.commits.length > 1 || view.branches.length > 1);
-
-  async function resetAll() {
-    const versions = plural(view.branches.length, "version");
-    const steps = plural(view.commits.length - 1, "step");
-    const ok = await ask(
-      `Reset this photo to as-shot? All ${versions} and ${steps} of its history are deleted. This can't be undone.`,
-      { title: "Reset history", kind: "warning", okLabel: "Reset", cancelLabel: "Cancel" },
-    );
-    if (ok) await session.resetHistory();
-  }
-
   const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? "" : "s"}`;
 </script>
 
@@ -285,20 +272,6 @@
       {/each}
     </div>
   </section>
-
-  <footer>
-    <button
-      class="reset"
-      onclick={resetAll}
-      disabled={!resettable}
-      title="Delete every version and step, back to as-shot"
-    >
-      <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
-        <path d="M3 3v4h4" /><path d="M3.5 7A5 5 0 1 1 5 11.5" />
-      </svg>
-      Reset all history…
-    </button>
-  </footer>
 </div>
 
 <style>
@@ -454,36 +427,6 @@
   }
 
   /* ---- steps ---- */
-  footer {
-    flex: none;
-    padding: var(--space-2);
-    border-top: 1px solid var(--line);
-  }
-  .reset {
-    display: flex;
-    align-items: center;
-    gap: var(--space-2);
-    width: 100%;
-    height: 30px;
-    padding: 0 var(--space-2);
-    border-radius: var(--radius-s);
-    font-size: var(--fs-xs);
-    color: var(--text-2);
-  }
-  .reset svg {
-    fill: none;
-    stroke: currentColor;
-    stroke-width: 1.4;
-    stroke-linecap: round;
-    stroke-linejoin: round;
-  }
-  .reset:hover:not(:disabled) {
-    background: var(--bg-3);
-    color: var(--danger);
-  }
-  .reset:disabled {
-    opacity: 0.4;
-  }
   .steps {
     flex: 1;
     min-height: 0;

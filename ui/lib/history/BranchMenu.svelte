@@ -1,6 +1,7 @@
 <script lang="ts">
   // Top-bar branch switcher: every version of the open photo, with a thumbnail.
   // Click to switch · compare side by side · copy settings from it.
+  import { ask } from "@tauri-apps/plugin-dialog";
   import { session } from "$lib/edit/session.svelte";
   import { branchThumbs, requestBranchThumb } from "$lib/edit/versions";
 
@@ -37,6 +38,22 @@
     if (!view) return;
     open = false;
     await session.branch(view.head.commit);
+  }
+
+  // Something to reset: more than the as-shot step, or more than one version.
+  const resettable = $derived(!!view && (view.commits.length > 1 || view.branches.length > 1));
+  const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? "" : "s"}`;
+
+  async function resetAll() {
+    if (!view) return;
+    open = false;
+    const versions = plural(view.branches.length, "version");
+    const steps = plural(view.commits.length - 1, "step");
+    const ok = await ask(
+      `Reset this photo to as-shot? All ${versions} and ${steps} of its history are deleted. This can't be undone.`,
+      { title: "Reset history", kind: "warning", okLabel: "Reset", cancelLabel: "Cancel" },
+    );
+    if (ok) await session.resetHistory();
   }
 </script>
 
@@ -109,6 +126,14 @@
           </div>
         {/each}
         <button class="new" onclick={newBranch}>New version from current</button>
+        <button
+          class="reset"
+          onclick={resetAll}
+          disabled={!resettable}
+          title="Delete every version and step, back to as-shot"
+        >
+          Reset all history…
+        </button>
       </div>
     {/if}
   </div>
@@ -239,5 +264,19 @@
   }
   .new:hover {
     color: var(--text-0);
+  }
+  .reset {
+    display: block;
+    width: 100%;
+    padding: var(--space-2);
+    text-align: left;
+    font-size: var(--fs-s);
+    color: var(--text-2);
+  }
+  .reset:hover:not(:disabled) {
+    color: var(--danger);
+  }
+  .reset:disabled {
+    opacity: 0.4;
   }
 </style>
