@@ -3,6 +3,7 @@
   // With `grouped`, photos are laid out under a header per capture day.
   import { onMount, untrack } from "svelte";
   import { thumbKey, thumbnail } from "./thumbs";
+  import EditedMark from "./EditedMark.svelte";
   import type { ImageRow } from "$lib/bindings/ImageRow";
   import { dayKey, dayLabel } from "./dates";
   import { library } from "./state.svelte";
@@ -296,8 +297,13 @@
           {:else if img.flag < 0}
             <span class="flag reject" title="Rejected">✕</span>
           {/if}
-          {#if img.branches > 1}
-            <span class="versions" title="{img.branches} versions">{img.branches}</span>
+          {#if img.edited || img.branches > 1}
+            <div class="marks">
+              {#if img.edited}<EditedMark size={14} />{/if}
+              {#if img.branches > 1}
+                <span class="versions" title="{img.branches} versions">{img.branches}</span>
+              {/if}
+            </div>
           {/if}
           <div class="label">
             <span class="name">{img.name}</span>
@@ -415,10 +421,14 @@
   .reject {
     color: var(--danger);
   }
-  .versions {
+  .marks {
     position: absolute;
     top: 6px;
     right: 6px;
+    display: flex;
+    gap: 4px;
+  }
+  .versions {
     min-width: 18px;
     padding: 0 5px;
     border-radius: 9px;

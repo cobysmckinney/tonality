@@ -18,6 +18,12 @@
   import type { Histogram } from "./renderer";
   import { onMount } from "svelte";
   import { palette, shortcut } from "$lib/palette/commands.svelte";
+  import CullNote from "./CullNote.svelte";
+  import { flagNote, ratingNote } from "$lib/library/culling";
+  import { targetOwnsKey } from "$lib/keys";
+
+  const FLAG_KEYS: Record<string, number> = { p: 1, x: -1, u: 0 };
+  let cullNote = $state<ReturnType<typeof CullNote> | null>(null);
 
   let historyOpen = $state(true);
   let before = $state(false);
@@ -110,6 +116,14 @@
         return;
       }
     }
+    // 0–5 rate, P / X / U pick, reject, unflag the open photo, as in the Library.
+    if (plain && !e.repeat && session.image && !targetOwnsKey(e.target, e.key)) {
+      const note = cull(e.key, session.image.id);
+      if (note) {
+        cullNote?.show(note);
+        return;
+      }
+    }
     // ← / → switch photos (unless a slider has focus: there they nudge its value).
     if ((e.key === "ArrowLeft" || e.key === "ArrowRight") && plain && !e.shiftKey) {
       if (!(e.target instanceof Element && e.target.closest("[role=slider]"))) {
@@ -150,6 +164,18 @@
       canvas?.toggleZoom();
     }
   }
+  /** Rate or flag photo `id` for a culling key; returns the note to show, or null. */
+  function cull(key: string, id: number): string | null {
+    if (/^[0-5]$/.test(key)) {
+      const r = library.setRating(Number(key), [id]);
+      return r === null ? null : ratingNote(r);
+    }
+    const flag = FLAG_KEYS[key.toLowerCase()];
+    if (flag === undefined) return null;
+    library.setFlag(flag, [id]);
+    return flagNote(flag);
+  }
+
   /** What Canvas shows beside the photo: another version of it, or another photo. */
   function compareProp(c: Compare, current: string, name: string) {
     const l = compareLabels(c, current, name);
@@ -259,6 +285,7 @@
       {#if session.loading}
         <div class="status">{session.loading}</div>
       {/if}
+      <CullNote bind:this={cullNote} />
 
       {#if !historyOpen}
         <button

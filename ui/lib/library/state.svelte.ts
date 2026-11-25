@@ -7,12 +7,14 @@ import { SvelteSet } from "svelte/reactivity";
 import { api, RAW_EXTENSIONS } from "$lib/api";
 import { app } from "$lib/app.svelte";
 import type { AlbumInfo } from "$lib/bindings/AlbumInfo";
+import type { EditState } from "$lib/bindings/EditState";
 import type { ImageQuery } from "$lib/bindings/ImageQuery";
 import type { ImageRow } from "$lib/bindings/ImageRow";
 import type { ImportInfo } from "$lib/bindings/ImportInfo";
 import { session } from "$lib/edit/session.svelte";
 import { dropLibraryThumbs } from "$lib/edit/versions";
 import { invalidateThumb } from "$lib/library/thumbs";
+import { nextRating, sameJson } from "./culling";
 import { toasts } from "$lib/toasts/toasts.svelte";
 import { arrowSelect, clickSelect, type Mods } from "./selection";
 
@@ -86,6 +88,8 @@ class LibraryState {
       if (this.importing) this.importing = e.payload;
       else if (this.restoring) this.restoring = e.payload;
     });
+    // Edits in Edit move a photo's HEAD: keep its "edited" mark (filmstrip, grid) in step.
+    session.onHead = (id, state) => this.noteHead(id, state);
     getCurrentWebview()
       .onDragDropEvent((e) => {
         const p = e.payload;
@@ -296,21 +300,40 @@ class LibraryState {
     this.images = this.images.map((i) => (set.has(i.id) ? f(i) : i));
   }
 
-  async setRating(rating: number) {
-    const ids = this.targets();
-    if (!ids.length) return;
-    // Pressing the current rating again clears it.
-    const all = ids.every((id) => this.images.find((i) => i.id === id)?.rating === rating);
-    const r = all ? 0 : rating;
+  /**
+   * Rate `ids` (default: the selection, else the focused photo); pressing their current rating
+   * again clears it. Shown at once, saved behind. Returns the rating given, or null for no photos.
+   */
+  setRating(rating: number, ids = this.targets()): number | null {
+    if (!ids.length) return null;
+    const r = nextRating(
+      ids.map((id) => this.images.find((i) => i.id === id)?.rating),
+      rating,
+    );
     this.patch(ids, (i) => ({ ...i, rating: r }));
-    await api.library.setRating(ids, r).catch((e) => toasts.error("Couldn’t save the rating", e));
+    api.library.setRating(ids, r).catch((e) => toasts.error("Couldn’t save the rating", e));
+    return r;
   }
 
-  async setFlag(flag: number) {
-    const ids = this.targets();
-    if (!ids.length) return;
+  /** Flag `ids` (default: as for `setRating`): 1 pick, -1 reject, 0 none. */
+  setFlag(flag: number, ids = this.targets()): number | null {
+    if (!ids.length) return null;
     this.patch(ids, (i) => ({ ...i, flag }));
-    await api.library.setFlag(ids, flag).catch((e) => toasts.error("Couldn’t save the flag", e));
+    api.library.setFlag(ids, flag).catch((e) => toasts.error("Couldn’t save the flag", e));
+    return flag;
+  }
+
+  /** Newest `noteHead` per photo, so a late answer can't overwrite a newer one. */
+  private headState = new Map<number, EditState>();
+
+  /** Photo `id`'s HEAD now shows `state`: mark it edited, or not, without a refresh. */
+  private async noteHead(id: number, state: EditState) {
+    this.headState.set(id, state);
+    const edited = !sameJson(state, await session.defaultEdit());
+    if (this.headState.get(id) !== state) return;
+    this.headState.delete(id);
+    if (this.images.find((i) => i.id === id)?.edited !== edited)
+      this.patch([id], (i) => ({ ...i, edited }));
   }
 
   /** Take the selected photos back to as-shot, deleting all their versions and steps. */
