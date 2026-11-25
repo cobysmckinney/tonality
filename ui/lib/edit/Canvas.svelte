@@ -32,8 +32,15 @@
     /** Show the unedited image (before/after). */
     before?: boolean;
     beforeEdit: EditState;
-    /** Another version to show side by side, labelled `compare.label`. */
-    compare?: { label: string; current: string; state: EditState } | null;
+    /** Another version to show side by side, labelled `compare.label`. With `image` (and its
+     * preview `pixels`), another photo instead: on the left, with this one on the right. */
+    compare?: {
+      label: string;
+      current: string;
+      state: EditState;
+      image?: ImageInfo;
+      pixels?: Uint16Array;
+    } | null;
     oncloseCompare?: () => void;
     /** Crop mode: show the whole straightened frame with the crop box over it. */
     cropping?: boolean;
@@ -384,13 +391,35 @@
     if (cropping) renderer?.setZoom(null);
   });
 
+  // Another photo in the compare pane (before its params, below).
+  const other = $derived(compare?.image && compare.pixels ? compare.image : null);
+  $effect(() => {
+    const r = renderer;
+    const o = other;
+    const px = compare?.pixels;
+    if (!r) return;
+    r.setCompareImage(
+      o && px
+        ? {
+            id: o.id,
+            width: o.width,
+            height: o.height,
+            fullW: o.fullWidth,
+            fullH: o.fullHeight,
+            pixels: px,
+          }
+        : null,
+    );
+  });
+
   let comparing = false;
   $effect(() => {
     const r = renderer;
     const state = compare ? ($state.snapshot(compare.state) as EditState) : null;
+    const id = other?.id ?? image.id;
     if (!r) return;
     comparing = state !== null;
-    if (state) side(r, image.id, state);
+    if (state) side(r, id, state);
     else r.setCompare(null);
   });
 
@@ -458,13 +487,23 @@
     <button onclick={() => toggleZoom()} title="Toggle fit / 100% (Z)">{zoomLabel}</button>
     {#if loadingDetail}<span class="loading">Loading detail…</span>{/if}
   </div>
-  {#if compare}
+  {#snippet closeCompare()}
+    {#if oncloseCompare}<button onclick={oncloseCompare} title="Stop comparing (Esc)">
+        ×
+      </button>{/if}
+  {/snippet}
+  {#if compare?.image}
+    <!-- Another photo: it's on the left, the one being edited on the right. -->
+    <div class="pane-label left" title={compare.label}>
+      {compare.label}
+      {@render closeCompare()}
+    </div>
+    <div class="pane-label right">{before ? "Before" : compare.current}</div>
+  {:else if compare}
     <div class="pane-label left">{before ? "Before" : compare.current}</div>
     <div class="pane-label right">
       {compare.label}
-      {#if oncloseCompare}<button onclick={oncloseCompare} title="Stop comparing (Esc)">
-          ×
-        </button>{/if}
+      {@render closeCompare()}
     </div>
   {:else if before}<div class="badge">Before</div>{/if}
   {#if error}<div class="error">{error}</div>{/if}

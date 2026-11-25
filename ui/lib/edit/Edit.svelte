@@ -10,6 +10,7 @@
   import { turn } from "./crop";
   import { library } from "$lib/library/state.svelte";
   import { session } from "./session.svelte";
+  import { compareLabels, type Compare } from "./compare";
   import type { EditState } from "$lib/bindings/EditState";
   import type { Histogram } from "./renderer";
 
@@ -131,6 +132,13 @@
       canvas?.toggleZoom();
     }
   }
+  /** What Canvas shows beside the photo: another version of it, or another photo. */
+  function compareProp(c: Compare, current: string, name: string) {
+    const l = compareLabels(c, current, name);
+    const photo = c.kind === "photo" ? { image: c.image, pixels: c.pixels } : {};
+    return { label: l.other, current: l.main, state: c.state, ...photo };
+  }
+
   function onKeyUp(e: KeyboardEvent) {
     if (e.key === "\\") before = false;
   }
@@ -169,11 +177,7 @@
           {before}
           {beforeEdit}
           compare={session.compare && session.history
-            ? {
-                label: session.compare.branch,
-                current: session.history.head.branch,
-                state: session.compare.state,
-              }
+            ? compareProp(session.compare, session.history.head.branch, session.image.name)
             : null}
           oncloseCompare={() => session.stopCompare()}
           cropping={session.cropping}
