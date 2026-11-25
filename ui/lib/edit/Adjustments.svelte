@@ -18,6 +18,8 @@
   import type { WhiteBalance } from "$lib/bindings/WhiteBalance";
   import { wbPick } from "./wbpick.svelte";
   import ToolStrip from "./ToolStrip.svelte";
+  import { shootingInfo } from "./shooting";
+  import { library } from "$lib/library/state.svelte";
   import ColorGradingPanel from "./ColorGrading.svelte";
   import CurveEditor from "./CurveEditor.svelte";
   import { GRADING_DEFAULT } from "./grading";
@@ -36,6 +38,12 @@
     oncommit?: (key: string | null) => void;
   }
   let { edit = $bindable(), image, histogram, oncommit }: Props = $props();
+
+  // ISO, shutter, aperture, focal length: from the catalog row (ImageInfo has no capture data).
+  const shooting = $derived.by(() => {
+    const meta = library.images.find((i) => i.id === image.id)?.meta;
+    return meta ? shootingInfo(meta) : [];
+  });
 
   type LightKey = keyof EditState["light"];
   const lightControls: {
@@ -291,6 +299,7 @@
 <div class="panel">
   <div class="top">
     <HistogramView {histogram} />
+    {#if shooting.length}<p class="shooting">{shooting.join(" · ")}</p>{/if}
     <ToolStrip masks={edit.masks?.length ?? 0} />
   </div>
 
@@ -672,6 +681,17 @@
   }
   .end {
     height: var(--space-5);
+  }
+  .shooting {
+    margin: calc(-1 * var(--space-1)) 0 var(--space-2);
+    padding: 0 var(--space-4);
+    font-family: var(--font-num);
+    font-size: 10px;
+    color: var(--text-2);
+    text-align: center;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
   .wb-row {
     display: grid;
