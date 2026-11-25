@@ -103,16 +103,6 @@ export function layoutGraph(view: HistoryView): GraphLayout {
   return { rows, edges, lanes: Math.max(lanes, 1), branchColor };
 }
 
-/** Compact relative time: "now", "5m", "3h", "2d", or a date. */
-export function relativeTime(ms: number, now = Date.now()): string {
-  const s = Math.max(0, (now - ms) / 1000);
-  if (s < 45) return "now";
-  if (s < 3600) return `${Math.round(s / 60)}m`;
-  if (s < 86400) return `${Math.round(s / 3600)}h`;
-  if (s < 7 * 86400) return `${Math.round(s / 86400)}d`;
-  return new Date(ms).toLocaleDateString(undefined, { month: "short", day: "numeric" });
-}
-
 // ---------------------------------------------------------------------------------------------
 // One version at a time: what the History panel shows.
 //

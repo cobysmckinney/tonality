@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { HistoryView } from "$lib/bindings/HistoryView";
-import { branchSteps, layoutGraph, relativeTime, versions } from "./graph";
+import { branchSteps, layoutGraph, versions } from "./graph";
 
 const c = (id: number, parent: number | null) => ({ id, parent, summary: `c${id}`, time: 0 });
 
@@ -48,15 +48,6 @@ describe("layoutGraph", () => {
   it("draws the fork edge from the branch lane into the trunk", () => {
     const e = g.edges.find((e) => e.fromRow === row(4).row)!;
     expect(e).toMatchObject({ fromLane: 1, toLane: 0, toRow: row(2).row, color: 1 });
-  });
-});
-
-describe("relativeTime", () => {
-  it("formats", () => {
-    const now = 1_000_000_000;
-    expect(relativeTime(now - 10_000, now)).toBe("now");
-    expect(relativeTime(now - 5 * 60_000, now)).toBe("5m");
-    expect(relativeTime(now - 3 * 3_600_000, now)).toBe("3h");
   });
 });
 

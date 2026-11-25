@@ -9,7 +9,8 @@
   import type { HistoryView } from "$lib/bindings/HistoryView";
   import { session } from "$lib/edit/session.svelte";
   import { branchThumbs, requestBranchThumb } from "$lib/edit/versions";
-  import { branchSteps, relativeTime, versions } from "./graph";
+  import { branchSteps, versions } from "./graph";
+  import { sessionLabel, sessionLabels, stepTime } from "./sessions";
 
   interface Props {
     view: HistoryView;
@@ -23,12 +24,15 @@
   const groups = $derived(branchSteps(view));
   const ownSteps = $derived(groups[0]?.inherited ? 0 : (groups[0]?.steps.length ?? 0));
 
-  // Re-render relative times every 30s.
+  // "Today" and "Yesterday" move on at midnight.
   let now = $state(Date.now());
   $effect(() => {
-    const t = setInterval(() => (now = Date.now()), 30_000);
+    const t = setInterval(() => (now = Date.now()), 60_000);
     return () => clearInterval(t);
   });
+
+  // ---- sessions: one time label where a pause of over half an hour ends ----
+  const sessionStart = $derived(sessionLabels(groups.flatMap((g) => g.steps.map((s) => s.commit))));
 
   // ---- thumbnails (rendered with the live renderer, cached per commit) ----
   const thumbCommit = (name: string, tip: number) => (name === current ? view.head.commit : tip);
@@ -229,15 +233,23 @@
         {/if}
         <ol class:inherited={g.inherited} style:--c="var(--branch-{colorOf.get(g.branch) ?? 0})">
           {#each g.steps as s, i (s.commit.id)}
-            <li class:head={s.isHead} class:ahead={s.ahead} class:last={i === g.steps.length - 1}>
+            {@const start = sessionStart.get(s.commit.id)}
+            <li
+              class:head={s.isHead}
+              class:ahead={s.ahead}
+              class:last={i === g.steps.length - 1}
+              class:session-start={start !== undefined}
+            >
+              {#if start !== undefined}
+                <span class="session">{sessionLabel(start, now)}</span>
+              {/if}
               <button
                 class="step"
                 onclick={() => session.checkout(s.commit.id)}
-                title="Go back to this step"
+                title="Go back to this step · {stepTime(s.commit.time, now)}"
               >
                 <span class="node"></span>
                 <span class="summary">{s.commit.summary}</span>
-                <span class="time">{relativeTime(s.commit.time, now)}</span>
               </button>
               <button
                 class="fork icon-btn"
@@ -551,11 +563,20 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-  .time {
-    flex: none;
+  /* One time label per session, above its newest step. */
+  .session {
+    display: block;
+    padding: var(--space-2) var(--space-2) 2px calc(var(--space-2) + 9px + var(--space-3));
     font-size: var(--fs-xs);
     color: var(--text-2);
     font-variant-numeric: tabular-nums;
+  }
+  li.session-start:not(:first-child) .node::before {
+    display: none;
+  }
+  ol li.session-start .fork {
+    top: auto;
+    bottom: 3px;
   }
   .fork {
     position: absolute;
@@ -573,10 +594,6 @@
   ol li:focus-within .fork {
     opacity: 1;
     pointer-events: auto;
-  }
-  ol li:hover .time,
-  ol li:focus-within .time {
-    visibility: hidden;
   }
   .forks {
     display: flex;
