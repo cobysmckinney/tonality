@@ -18,4 +18,8 @@ head: number | null,
 /**
  * Width / height of the shown version, once a thumbnail of it has been made.
  */
-aspect: number | null, };
+aspect: number | null, 
+/**
+ * The shown version differs from as-shot. A photo reset, or undone, back to as-shot isn't.
+ */
+edited: boolean, };

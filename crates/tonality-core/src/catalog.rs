@@ -3,6 +3,8 @@
 //! One file, WAL mode. Schema changes go through `MIGRATIONS` keyed on `PRAGMA user_version`,
 //! so catalogs created by older builds upgrade in place.
 
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -30,6 +32,9 @@ pub type Clock = Box<dyn Fn() -> i64 + Send>;
 pub struct Catalog {
     pub(crate) conn: Connection,
     pub(crate) clock: Clock,
+    /// Whether each stored edit state (by hash) differs from as-shot. A stored state never
+    /// changes, so an answer holds for good. See [`Catalog::images`].
+    pub(crate) edited_states: RefCell<HashMap<String, bool>>,
 }
 
 const MIGRATIONS: &[&str] = &[
@@ -203,6 +208,7 @@ impl Catalog {
         Ok(Catalog {
             conn,
             clock: system_clock(),
+            edited_states: RefCell::default(),
         })
     }
 

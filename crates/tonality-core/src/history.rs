@@ -123,7 +123,7 @@ fn commit_row(c: &Connection, id: CommitId) -> Result<CommitRow> {
     .ok_or_else(|| CatalogError::NotFound(format!("commit {id}")))
 }
 
-fn load_state(c: &Connection, hash: &str) -> Result<EditState> {
+pub(crate) fn load_state(c: &Connection, hash: &str) -> Result<EditState> {
     let json: String = c
         .query_row(
             "SELECT json FROM edit_states WHERE hash = ?1",

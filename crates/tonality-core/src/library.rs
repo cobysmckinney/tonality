@@ -9,6 +9,8 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use crate::catalog::{Catalog, CatalogError, ImageId, Result};
+use crate::edit::EditState;
+use crate::history::load_state;
 
 pub type ImportId = i64;
 
@@ -78,6 +80,8 @@ pub struct ImageRow {
     pub head: Option<i64>,
     /// Width / height of the shown version, once a thumbnail of it has been made.
     pub aspect: Option<f32>,
+    /// The shown version differs from as-shot. A photo reset, or undone, back to as-shot isn't.
+    pub edited: bool,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -224,7 +228,9 @@ impl Catalog {
             "SELECT i.id, i.name, i.rating, i.flag, i.meta,
                     (SELECT COUNT(*) FROM refs r WHERE r.image_id = i.id),
                     (SELECT h.commit_id FROM heads h WHERE h.image_id = i.id),
-                    i.aspect
+                    i.aspect,
+                    (SELECT c.state_hash FROM heads h JOIN commits c ON c.id = h.commit_id
+                     WHERE h.image_id = i.id)
              FROM images i WHERE i.rating >= ?1",
         );
         let mut args: Vec<rusqlite::types::Value> = vec![(q.min_rating as i64).into()];
@@ -255,7 +261,8 @@ impl Catalog {
         let mut stmt = self.conn.prepare(&sql)?;
         let rows = stmt.query_map(params_from_iter(args), |r| {
             let meta: Option<String> = r.get(4)?;
-            Ok(ImageRow {
+            let state: Option<String> = r.get(8)?;
+            let row = ImageRow {
                 id: r.get(0)?,
                 name: r.get(1)?,
                 rating: r.get(2)?,
@@ -264,9 +271,33 @@ impl Catalog {
                 branches: r.get(5)?,
                 head: r.get(6)?,
                 aspect: r.get(7)?,
-            })
+                edited: false,
+            };
+            Ok((row, state))
         })?;
-        Ok(rows.collect::<rusqlite::Result<_>>()?)
+        let rows = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+        let as_shot = EditState::default().hash();
+        Ok(rows
+            .into_iter()
+            .map(|(mut row, state)| {
+                row.edited = state.is_some_and(|h| h != as_shot && self.state_is_edited(&h));
+                row
+            })
+            .collect())
+    }
+
+    /// Whether the stored state `hash` differs from as-shot. Compared by value: a state stored by
+    /// an older build can be as-shot and still hash differently from today's default.
+    fn state_is_edited(&self, hash: &str) -> bool {
+        if let Some(&e) = self.edited_states.borrow().get(hash) {
+            return e;
+        }
+        // A state that can't be read isn't taken for as-shot.
+        let edited = load_state(&self.conn, hash).map_or(true, |s| s != EditState::default());
+        self.edited_states
+            .borrow_mut()
+            .insert(hash.to_owned(), edited);
+        edited
     }
 
     /// The library-relative file, content hash and original name of an image.
@@ -582,5 +613,52 @@ mod tests {
         let root = cat.history_open(id).unwrap().view.head.commit;
         cat.create_branch(id, root, Some("B&W")).unwrap();
         assert_eq!(cat.images(&ImageQuery::default()).unwrap()[0].branches, 2);
+    }
+
+    #[test]
+    fn edited_follows_the_shown_version() {
+        let mut cat = Catalog::open_in_memory().unwrap();
+        let m = cat.begin_import("x", "/x").unwrap();
+        let id = cat
+            .add_image(m, &img("1.ARW", "h1", None))
+            .unwrap()
+            .unwrap();
+        let edited = |cat: &Catalog| cat.images(&ImageQuery::default()).unwrap()[0].edited;
+        assert!(!edited(&cat), "never opened");
+        cat.history_open(id).unwrap();
+        assert!(!edited(&cat), "opened, not changed");
+        let mut s = EditState::default();
+        s.light.exposure = 1.0;
+        cat.commit(id, &s, None).unwrap();
+        assert!(edited(&cat));
+        cat.undo(id).unwrap();
+        assert!(!edited(&cat), "undone back to as-shot");
+        cat.redo(id).unwrap();
+        assert!(edited(&cat));
+        // Slid back by hand: a new step, but as-shot again.
+        cat.commit(id, &EditState::default(), None).unwrap();
+        assert!(!edited(&cat), "changed back by hand");
+        cat.commit(id, &s, None).unwrap();
+        cat.reset_history(&[id]).unwrap();
+        assert!(!edited(&cat), "reset");
+    }
+
+    #[test]
+    fn as_shot_stored_by_an_older_build_is_not_edited() {
+        let mut cat = Catalog::open_in_memory().unwrap();
+        let m = cat.begin_import("x", "/x").unwrap();
+        let id = cat
+            .add_image(m, &img("1.ARW", "h1", None))
+            .unwrap()
+            .unwrap();
+        let root = cat.history_open(id).unwrap().view.head.commit;
+        // Written before today's fields existed: hashes differently, reads back as as-shot.
+        cat.conn
+            .execute_batch(&format!(
+                "INSERT INTO edit_states (hash, json) VALUES ('old', '{{}}');
+                 UPDATE commits SET state_hash = 'old' WHERE id = {root};"
+            ))
+            .unwrap();
+        assert!(!cat.images(&ImageQuery::default()).unwrap()[0].edited);
     }
 }
