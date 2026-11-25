@@ -208,6 +208,29 @@ async fn open_image(
         .map_err(|e| e.to_string())?
 }
 
+/// Decode a library photo to show next to the one being edited (see `Images::open_reference`).
+#[tauri::command]
+async fn open_reference(
+    id: ImageId,
+    images: State<'_, Images>,
+    store: State<'_, Store>,
+    catalog: State<'_, history::CatalogState>,
+) -> CmdResult<ImageInfo> {
+    let (rel, _, name) = catalog.read(move |c| c.image_file(id)).await?;
+    let path = store.abs(&rel);
+    let images = images.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        images.open_reference(id, &path, name, PREVIEW_EDGE)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+fn close_reference(id: ImageId, images: State<'_, Images>) {
+    images.close_reference(id);
+}
+
 /// Raw preview pixels: RGB16F little-endian, `width * height * 3` halves.
 #[tauri::command]
 async fn preview_pixels(id: ImageId, images: State<'_, Images>) -> CmdResult<Response> {
@@ -390,6 +413,8 @@ pub fn run() {
             dev_script,
             preview_shaders,
             open_image,
+            open_reference,
+            close_reference,
             preview_pixels,
             detail_region,
             export::export_images,
@@ -412,6 +437,7 @@ pub fn run() {
             history::history_delete,
             history::history_apply_from,
             history::history_state,
+            history::history_head,
             history::history_reset,
             thumbs::library_save_edited,
             library::library_overview,

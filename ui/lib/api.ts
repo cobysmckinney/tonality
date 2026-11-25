@@ -12,6 +12,7 @@ import type { Light } from "$lib/bindings/Light";
 import type { Panel } from "$lib/bindings/Panel";
 import type { GlslProgram } from "$lib/bindings/GlslProgram";
 import type { ImageInfo } from "$lib/bindings/ImageInfo";
+import type { Head } from "$lib/bindings/Head";
 import type { ExportSettings } from "$lib/bindings/ExportSettings";
 import type { ExportSummary } from "$lib/bindings/ExportSummary";
 import type { AiTarget } from "$lib/bindings/AiTarget";
@@ -49,6 +50,9 @@ export const api = {
     invoke<void>("dev_save_snapshot", { dataUrl, name }),
   previewShaders: () => invoke<GlslProgram>("preview_shaders"),
   openImage: (id: number) => invoke<ImageInfo>("open_image", { id }),
+  /** Decode a photo to show next to the one being edited; held until `closeReference`. */
+  openReference: (id: number) => invoke<ImageInfo>("open_reference", { id }),
+  closeReference: (id: number) => invoke<void>("close_reference", { id }),
   previewPixels: async (id: number) =>
     new Uint16Array(await invoke<ArrayBuffer>("preview_pixels", { id })),
   developParams: async (id: number, edit: EditState) =>
@@ -105,6 +109,8 @@ export const api = {
     applyFrom: (imageId: number, source: string, panels: Panel[]) =>
       invoke<Checkout>("history_apply_from", { imageId, source, panels }),
     state: (commit: number) => invoke<EditState>("history_state", { commit }),
+    /** The version a photo shows (null: never edited), without creating its history. */
+    head: (imageId: number) => invoke<Head | null>("history_head", { imageId }),
     /** Back to as-shot, deleting every version and step. Can't be undone. */
     reset: (imageIds: number[]) => invoke<void>("history_reset", { imageIds }),
   },
