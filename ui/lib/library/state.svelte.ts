@@ -7,12 +7,14 @@ import { SvelteSet } from "svelte/reactivity";
 import { api, RAW_EXTENSIONS } from "$lib/api";
 import { app } from "$lib/app.svelte";
 import type { AlbumInfo } from "$lib/bindings/AlbumInfo";
+import type { EditState } from "$lib/bindings/EditState";
 import type { ImageQuery } from "$lib/bindings/ImageQuery";
 import type { ImageRow } from "$lib/bindings/ImageRow";
 import type { ImportInfo } from "$lib/bindings/ImportInfo";
 import { session } from "$lib/edit/session.svelte";
 import { dropLibraryThumbs } from "$lib/edit/versions";
 import { invalidateThumb } from "$lib/library/thumbs";
+import { sameJson } from "./culling";
 import { arrowSelect, clickSelect, type Mods } from "./selection";
 
 const SIZE_KEY = "tonality.library.thumbSize";
@@ -85,6 +87,8 @@ class LibraryState {
       if (this.importing) this.importing = e.payload;
       else if (this.restoring) this.restoring = e.payload;
     });
+    // Edits in Edit move a photo's HEAD: keep its "edited" mark (filmstrip, grid) in step.
+    session.onHead = (id, state) => this.noteHead(id, state);
     getCurrentWebview()
       .onDragDropEvent((e) => {
         const p = e.payload;
@@ -306,6 +310,19 @@ class LibraryState {
     if (!ids.length) return;
     this.patch(ids, (i) => ({ ...i, flag }));
     await api.library.setFlag(ids, flag).catch((e) => (this.message = String(e)));
+  }
+
+  /** Newest `noteHead` per photo, so a late answer can't overwrite a newer one. */
+  private headState = new Map<number, EditState>();
+
+  /** Photo `id`'s HEAD now shows `state`: mark it edited, or not, without a refresh. */
+  private async noteHead(id: number, state: EditState) {
+    this.headState.set(id, state);
+    const edited = !sameJson(state, await session.defaultEdit());
+    if (this.headState.get(id) !== state) return;
+    this.headState.delete(id);
+    if (this.images.find((i) => i.id === id)?.edited !== edited)
+      this.patch([id], (i) => ({ ...i, edited }));
   }
 
   /** Take the selected photos back to as-shot, deleting all their versions and steps. */

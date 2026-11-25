@@ -6,6 +6,7 @@
 <script lang="ts">
   import { library } from "$lib/library/state.svelte";
   import { thumbKey, thumbnail } from "$lib/library/thumbs";
+  import EditedMark from "$lib/library/EditedMark.svelte";
   import { session } from "./session.svelte";
 
   const CELL = 76; // thumbnail box
@@ -90,6 +91,7 @@
           />
           {#if img.rating > 0}<span class="stars">{"★".repeat(img.rating)}</span>{/if}
           {#if img.flag > 0}<span class="flag">●</span>{/if}
+          {#if img.edited}<span class="mark"><EditedMark size={10} /></span>{/if}
         </button>
       {/each}
     </div>
@@ -189,6 +191,11 @@
     letter-spacing: 0.5px;
   }
   .flag {
+    right: 3px;
+  }
+  .mark {
+    position: absolute;
+    top: 3px;
     right: 3px;
   }
   .empty {

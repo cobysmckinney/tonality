@@ -288,6 +288,9 @@ class EditSession {
     return structuredClone(this.defaults);
   }
 
+  /** Told the state a photo's HEAD shows, each time it's opened or its history answers. */
+  onHead: ((imageId: number, state: EditState) => void) | null = null;
+
   /** The photo asked for last (it may still be loading). Stepping counts from here. */
   opening = $state<number | null>(null);
   private openLoop: Promise<void> | null = null;
@@ -331,6 +334,7 @@ class EditSession {
           this.edit = checkout.state;
           this.history = checkout.view;
           this.image = info;
+          this.onHead?.(id, checkout.state);
           // Refresh the grid's rendering of an edited photo (its history may have arrived from a
           // sidecar). An unedited one shows the plain thumbnail already: nothing to render.
           const head = checkout.view.commits.find((c) => c.id === checkout.view.head.commit);
@@ -384,6 +388,7 @@ class EditSession {
         if (this.history?.imageId !== id) return; // another image was opened meanwhile
         const moved = this.history.head.commit !== r.view.head.commit;
         this.history = r.view;
+        this.onHead?.(id, r.state);
         if (applyState) {
           this.edit = r.state;
           // Mid-crop, Cancel goes back to the crop of the state now shown, not the one replaced.
