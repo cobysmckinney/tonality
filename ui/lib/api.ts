@@ -105,6 +105,9 @@ export const api = {
       invoke<Checkout>("history_delete", { imageId, name }),
     applyFrom: (imageId: number, source: string, panels: Panel[]) =>
       invoke<Checkout>("history_apply_from", { imageId, source, panels }),
+    /** What `applyFrom` would make of the current version, without committing it. */
+    mergePreview: (imageId: number, source: string, panels: Panel[]) =>
+      invoke<EditState>("history_merge_preview", { imageId, source, panels }),
     state: (commit: number) => invoke<EditState>("history_state", { commit }),
     /** What a step changed from the one before it, setting by setting. */
     changes: (commit: number) => invoke<Change[]>("history_changes", { commit }),
