@@ -40,6 +40,12 @@ export const api = {
   /** Auto white balance for the open photo: `[temperature, tint]`, or null if it can't tell. */
   autoWhiteBalance: (id: number, edit: EditState) =>
     invoke<[number, number] | null>("auto_white_balance", { id, edit }),
+  /**
+   * White balance making the spot at frame position `at` (0..1 across the photo as `edit` frames
+   * it) neutral: `[temperature, tint]`, or null if it's outside the photo, clipped or black.
+   */
+  pickWhiteBalance: (id: number, edit: EditState, at: [number, number]) =>
+    invoke<[number, number] | null>("pick_white_balance", { id, edit, at }),
   startupPath: () => invoke<string | null>("startup_path"),
   startupImport: () => invoke<string | null>("startup_import"),
   devSnapshotPath: () => invoke<string | null>("dev_snapshot_path"),

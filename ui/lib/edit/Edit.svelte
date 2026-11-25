@@ -10,6 +10,8 @@
   import { turn } from "./crop";
   import { library } from "$lib/library/state.svelte";
   import { session } from "./session.svelte";
+  import { wbPick } from "./wbpick.svelte";
+  import { untrack } from "svelte";
   import type { EditState } from "$lib/bindings/EditState";
   import type { Histogram } from "./renderer";
   import { onMount } from "svelte";
@@ -40,6 +42,11 @@
   $effect(() => {
     session.defaultEdit().then((d) => (beforeEdit = d));
   });
+  // The eyedropper ends when another photo opens or crop or mask mode starts.
+  $effect(() => {
+    void [session.image?.id, session.cropping, session.masking];
+    untrack(() => wbPick.stop());
+  });
 
   function onKeyDown(e: KeyboardEvent) {
     if (e.target instanceof HTMLInputElement) return;
@@ -67,6 +74,14 @@
       return;
     }
     const plain = !e.ctrlKey && !e.metaKey && !e.altKey;
+    if ((e.key === "w" || e.key === "W") && plain && !session.masking && !e.repeat) {
+      wbPick.toggle();
+      return;
+    }
+    if (e.key === "Escape" && wbPick.active) {
+      wbPick.stop();
+      return;
+    }
     if ((e.key === "m" || e.key === "M") && plain && session.edit) {
       if (session.masking) session.stopMasks();
       else session.startMasks();
@@ -211,6 +226,7 @@
           oncrop={(c) => session.edit && (session.edit.crop = c)}
           onlevel={() => (level = false)}
           onhistogram={(h) => (histogram = h)}
+          onpick={wbPick.active ? (at) => wbPick.pick(at) : null}
         />
         {#if session.masking && session.masks.length && !session.cropping}
           <MaskList />

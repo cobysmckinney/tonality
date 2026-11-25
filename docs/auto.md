@@ -1,8 +1,8 @@
 # Auto
 
 Two buttons in Edit give a starting point from the photo itself: **Auto** in the Light section
-header (exposure, contrast, highlights, shadows, whites, blacks) and **Auto** among the White
-Balance modes. Each is one undoable step. Both read the preview inside the crop
+header (exposure, contrast, highlights, shadows, whites, blacks) and **Auto** in the White
+Balance list. Each is one undoable step. Both read the preview inside the crop
 (`tonality_core::auto::sample`, a 192×192 grid), so cropping changes what they see. Code:
 `crates/tonality-core/src/auto.rs`; commands `auto_tone`, `auto_white_balance` in
 `src-tauri/src/lib.rs`.
@@ -52,6 +52,16 @@ and cameras seldom get tint far wrong. With no neutral-looking pixels, Auto give
 Known limit: when the camera's estimate is far off (hundreds of kelvin) **and** much of the frame
 is one colour, some of that colour can look greyer than the real greys. The tests cover guesses
 about 10% off.
+
+## White balance picker
+
+The eyedropper beside the White Balance list (W) is the manual counterpart: click something that
+should be neutral and its colour is taken as the light's. `auto::sample_around` maps the click
+(a position in the framed photo) through the crop, turns, flip, straighten and lens correction to
+the preview, as `sample` does, and reads a 5 × 5 pixel patch of camera RGB there (the preview's
+pixels, about 2–4 source pixels each). `auto::white_balance_at` averages the patch, leaving out
+pixels clipped in any channel or black, and names the mean with temperature and tint the way As
+Shot is named. No tint limit: the user chose the spot. Command: `pick_white_balance`.
 
 ## Checked
 
