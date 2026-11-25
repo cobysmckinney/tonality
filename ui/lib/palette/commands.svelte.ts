@@ -30,7 +30,8 @@ class Palette {
   open = $state(false);
   view = $state<"commands" | "shortcuts">("commands");
   recent = $state<string[]>(storedRecent());
-  provided = $state<Record<string, Provided>>({});
+  // Raw: the cleanup finds its own entries by identity, which a deep proxy would break.
+  provided = $state.raw<Record<string, Provided>>({});
   query = $state("");
 
   show(view: "commands" | "shortcuts" = "commands") {
@@ -114,7 +115,7 @@ export const COMMANDS: Command[] = [
     group: "Library",
     keys: ["Mod+O"],
     keywords: "open files raw add",
-    when: () => !library.importing,
+    when: () => !library.importing && !session.cropping,
     run: () => library.importFiles({ open: inEdit() }),
   },
   {
@@ -210,7 +211,7 @@ export const COMMANDS: Command[] = [
   }),
   {
     id: "library.removeFromAlbum",
-    title: "Remove from album",
+    title: "Remove from this album",
     group: "Library",
     keys: ["Delete"],
     when: () => targets() && inAlbum(),
@@ -242,7 +243,7 @@ export const COMMANDS: Command[] = [
     title: "Previous photo",
     group: "Edit",
     keys: ["Left"],
-    when: () => inEdit() && library.images.length > 1,
+    when: () => inEdit() && !session.cropping && library.images.length > 1,
     run: () => library.step(-1),
   },
   {
@@ -250,7 +251,7 @@ export const COMMANDS: Command[] = [
     title: "Next photo",
     group: "Edit",
     keys: ["Right"],
-    when: () => inEdit() && library.images.length > 1,
+    when: () => inEdit() && !session.cropping && library.images.length > 1,
     run: () => library.step(1),
   },
   {
