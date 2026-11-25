@@ -784,10 +784,13 @@ mod tests {
             assert!((got - t).abs() <= 0.02 * t + 25.0, "{t} K → {got} K");
             assert!(tint.abs() <= 1.0, "{t} K → tint {tint}");
         }
-        // Brightness doesn't matter, only colour.
+        // Brightness doesn't matter, only colour. Scale by the brightest channel so the bright
+        // patch stays under the clip (at 4000 K red is above green).
         let l = light(4000.0);
-        let dim = vec![l.map(|c| c * 0.05 / l[1]); 25];
-        let bright = vec![l.map(|c| c * 0.8 / l[1]); 25];
+        let top = l.iter().copied().fold(0.0f32, f32::max);
+        let dim = vec![l.map(|c| c * 0.05 / top); 25];
+        let bright = vec![l.map(|c| c * 0.8 / top); 25];
+        assert!(white_balance_at(&bright, &camera()).is_some());
         assert_eq!(
             white_balance_at(&dim, &camera()),
             white_balance_at(&bright, &camera())
