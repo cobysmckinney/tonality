@@ -62,15 +62,21 @@ What's left after #58–#62.
 
 ### 0.3 A whole shoot
 
-Today nothing works across photos: settings copy only between versions of one photo.
+Today nothing works across photos: settings copy only between versions of one photo. This is
+what most stands between tonality and someone using it for a real shoot, so it runs alongside
+what's left of 0.2 rather than after it.
 
+- [ ] Type a value into a slider.
+- [ ] White balance eyedropper.
 - [ ] Copy and paste settings between photos, and sync them to a selection, choosing which
-      panels. Open question: build it as "apply this step, or this version, to other photos"
-      (a cherry-pick), which would make presets the same feature.
+      panels. Build it as "apply this step, or this version, to other photos" (a cherry-pick):
+      the Copy Settings dialog already applies chosen panels from a version as one step, so
+      the source becomes another photo's step or version, and a preset is a saved one.
 - [ ] Presets: save, apply, and apply on import.
 - [ ] Auto (Light and white balance) for a selection.
-- [ ] White balance eyedropper.
-- [ ] Type a value into a slider.
+- [ ] Culling: full screen, embedded previews, pick and reject at speed, compare several
+      photos (from 0.5: culling comes before editing).
+- [ ] Filters for camera, lens, ISO and date range (from 0.5: the metadata is stored already).
 - [ ] Clipping shown on the photo, not only as the histogram's corner marks.
 - [ ] A true before and after: "before" currently also undoes the crop. Add a split view.
 - [ ] Full screen, and hide the right-hand panel.
@@ -104,14 +110,11 @@ What a raw editor is expected to have.
 ### 0.5 Library
 
 - [ ] Keywords, colour labels, captions.
-- [ ] Search, and filters for camera, lens, ISO and date range (the metadata is stored, but
-      nothing queries it).
+- [ ] Search (camera, lens, ISO and date filters moved to 0.3).
 - [ ] Saved searches as smart albums.
 - [ ] Open and switch libraries from the app (`TONALITY_LIBRARY` only, today).
 - [ ] Import JPEG, TIFF and HEIC. Open question: how far the raw pipeline's assumptions go for
       photos that are already rendered.
-- [ ] Culling: full screen, embedded previews, pick and reject at speed, compare several
-      photos.
 - [ ] Group raw + JPEG pairs and bursts.
 - [ ] A full metadata panel.
 - [ ] Hold up with 50,000 photos: page `library_images`, don't lay out every row on every
