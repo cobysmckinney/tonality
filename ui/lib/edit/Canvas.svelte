@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount, untrack } from "svelte";
   import { api } from "$lib/api";
+  import { toasts } from "$lib/toasts/toasts.svelte";
   import type { EditState } from "$lib/bindings/EditState";
   import type { ImageInfo } from "$lib/bindings/ImageInfo";
   import { MAX_ZOOM, MIN_ZOOM, PreviewRenderer, type Histogram } from "./renderer";
@@ -63,7 +64,8 @@
 
   let canvas: HTMLCanvasElement;
   let renderer = $state<PreviewRenderer | null>(null);
-  let error = $state<string | null>(null);
+  /** The toast for a preview that failed to render, taken down once one renders again. */
+  let renderError: number | null = null;
   let scale = $state(1);
   let fit = $state(true);
   let loadingDetail = $state(false);
@@ -116,7 +118,7 @@
       };
       renderer = r;
     }
-    init().catch((e) => (error = String(e)));
+    init().catch((e) => toasts.error("Couldn’t start the preview", e));
 
     // The GPU can drop the context (driver reset, suspend/resume): build a new renderer once
     // it's back; the effects below re-upload the photo and its params.
@@ -126,7 +128,7 @@
       renderer = null;
     };
     const restored = () => {
-      if (!disposed) init().catch((e) => (error = String(e)));
+      if (!disposed) init().catch((e) => toasts.error("Couldn’t start the preview", e));
     };
     canvas.addEventListener("webglcontextlost", lost);
     canvas.addEventListener("webglcontextrestored", restored);
@@ -272,10 +274,11 @@
           brushK = bk;
           if (maps) r.setPresence(id, maps);
           apply(r, params, curve, brush);
-          error = null;
+          if (renderError !== null) toasts.dismiss(renderError);
+          renderError = null;
         }
       } catch (e) {
-        error = String(e);
+        renderError = toasts.error("Couldn’t draw the preview", e);
       } finally {
         inflight = false;
         // A failed request leaves a newer one queued: run it.
@@ -467,7 +470,6 @@
         </button>{/if}
     </div>
   {:else if before}<div class="badge">Before</div>{/if}
-  {#if error}<div class="error">{error}</div>{/if}
 </div>
 
 <style>
@@ -553,15 +555,5 @@
     font-size: var(--fs-xs);
     color: var(--text-1);
     letter-spacing: 0.04em;
-  }
-  .error {
-    position: absolute;
-    bottom: var(--space-3);
-    left: var(--space-3);
-    right: var(--space-3);
-    color: var(--danger);
-    font-family: var(--font-num);
-    font-size: var(--fs-xs);
-    white-space: pre-wrap;
   }
 </style>

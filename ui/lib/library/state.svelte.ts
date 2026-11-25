@@ -81,6 +81,7 @@ class LibraryState {
   scrollTop = 0;
 
   constructor() {
+    session.nameOf = (id) => this.images.find((i) => i.id === id)?.name;
     listen<{ done: number; total: number }>("import-progress", (e) => {
       if (this.importing) this.importing = e.payload;
       else if (this.restoring) this.restoring = e.payload;
