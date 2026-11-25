@@ -586,7 +586,8 @@ export class PreviewRenderer {
     return this.comparing && cssX >= p ? cssX - p : cssX;
   }
 
-  private fitScale() {
+  /** The scale at which the frame fits the pane. */
+  fitScale() {
     const dpr = window.devicePixelRatio || 1;
     const availW = Math.max(1, this.paneW - 2 * MARGIN_CSS_PX) * dpr;
     const availH = Math.max(1, this.canvas.clientHeight - 2 * MARGIN_CSS_PX) * dpr;

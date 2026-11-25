@@ -215,10 +215,6 @@
         {#if session.masking && session.masks.length && !session.cropping}
           <MaskList />
         {/if}
-        <div class="caption">
-          <span>{session.image.name}</span>
-          <span class="dim">{session.image.make} {session.image.model}</span>
-        </div>
       {:else if !session.loading}
         <div class="empty">
           <button class="btn primary" onclick={() => library.importFiles({ open: true })}>
@@ -252,7 +248,12 @@
       {#if stripOpen}
         <Filmstrip />
       {:else}
-        <span class="strip-label">Filmstrip</span>
+        <span class="strip-label">
+          {#if session.image}
+            <span class="name">{session.image.name}</span>
+            <span class="dim">{session.image.make} {session.image.model}</span>
+          {:else}Filmstrip{/if}
+        </span>
       {/if}
       <button
         class="icon-btn strip-toggle"
@@ -334,10 +335,20 @@
     height: 30px;
   }
   .strip-label {
-    display: block;
-    padding: 7px var(--space-3);
+    display: flex;
+    gap: var(--space-2);
+    padding: 7px 36px 7px var(--space-3);
     font-size: var(--fs-xs);
     color: var(--text-2);
+    white-space: nowrap;
+  }
+  .strip-label .name {
+    color: var(--text-1);
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .strip-label .dim {
+    flex: none;
   }
   .strip-toggle {
     position: absolute;
@@ -345,9 +356,6 @@
     right: 4px;
     width: 24px;
     height: 24px;
-  }
-  .filmstrip :global(.keys) {
-    margin-right: 28px;
   }
   .canvas-area {
     position: relative;
@@ -360,28 +368,9 @@
     min-width: 0;
     overflow: hidden;
   }
-  .caption {
-    position: absolute;
-    bottom: var(--space-3);
-    left: 50%;
-    transform: translateX(-50%);
-    display: flex;
-    gap: var(--space-3);
-    padding: 3px 12px;
-    border-radius: var(--radius-pill);
-    background: color-mix(in srgb, var(--bg-1) 80%, transparent);
-    font-size: var(--fs-xs);
-    color: var(--text-1);
-    white-space: nowrap;
-    pointer-events: none;
-  }
-  .dim,
   .hint {
     color: var(--text-2);
     font-size: var(--fs-s);
-  }
-  .caption .dim {
-    font-size: var(--fs-xs);
   }
   .hint {
     padding: 0 var(--space-4);

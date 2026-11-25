@@ -224,6 +224,37 @@
 
   const zoomLabel = $derived(fit ? "Fit" : `${Math.round(scale * 100)}%`);
 
+  // The zoom menu: Fit and a few fixed levels. A level at or below Fit would only fit, so it's off.
+  const ZOOMS: { label: string; zoom: number | null; keys?: string }[] = [
+    { label: "Fit", zoom: null, keys: "Ctrl+0" },
+    { label: "50%", zoom: 0.5 },
+    { label: "100%", zoom: 1, keys: "Ctrl+1" },
+    { label: "200%", zoom: 2 },
+  ];
+  let zoomOpen = $state(false);
+  let zoomMenu = $state<HTMLDivElement>();
+  let fitZoom = $state(1);
+  function toggleZoomMenu() {
+    if (!zoomOpen && renderer) fitZoom = renderer.fitScale();
+    zoomOpen = !zoomOpen;
+  }
+  function pickZoom(z: number | null) {
+    zoomOpen = false;
+    setZoom(z);
+  }
+  function onWindowDown(e: PointerEvent) {
+    if (zoomOpen && zoomMenu && !zoomMenu.contains(e.target as Node)) zoomOpen = false;
+  }
+  function onMenuKey(e: KeyboardEvent) {
+    if (zoomOpen && e.key === "Escape") {
+      e.stopPropagation();
+      zoomOpen = false;
+    }
+  }
+  $effect(() => {
+    if (cropping) zoomOpen = false;
+  });
+
   // Latest-wins parameter pipelines (the main view, and the compare pane): at most one request
   // in flight each, always ending on the newest state. The curve LUT is only refetched when the
   // curve itself changes.
@@ -407,7 +438,13 @@
   });
 </script>
 
-<svelte:window onkeydown={onKey} onkeyup={onKey} onblur={() => (spaceHeld = false)} />
+<svelte:window
+  onkeydown={onKey}
+  onkeyup={onKey}
+  onblur={() => (spaceHeld = false)}
+  onpointerdown={onWindowDown}
+  onkeydowncapture={onMenuKey}
+/>
 
 <div class="wrap" onwheel={onWheel}>
   <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -458,8 +495,36 @@
     />
   {/if}
   <div class="zoom" class:hidden={cropping}>
-    <button onclick={() => toggleZoom()} title="Toggle fit / 100% (Z)">{zoomLabel}</button>
     {#if loadingDetail}<span class="loading">Loading detail…</span>{/if}
+    <div class="zoom-menu" bind:this={zoomMenu}>
+      <button
+        class="trigger"
+        class:open={zoomOpen}
+        onclick={toggleZoomMenu}
+        title="Zoom (Z toggles Fit / 100%)"
+        aria-haspopup="menu"
+        aria-expanded={zoomOpen}
+      >
+        {zoomLabel}<span class="caret">▾</span>
+      </button>
+      {#if zoomOpen}
+        <div class="pop" role="menu">
+          {#each ZOOMS as z (z.label)}
+            {@const current = z.zoom === null ? fit : !fit && Math.abs(scale - z.zoom) < 1e-3}
+            <button
+              role="menuitemradio"
+              aria-checked={current}
+              class:current
+              disabled={z.zoom !== null && z.zoom <= fitZoom + 1e-6}
+              onclick={() => pickZoom(z.zoom)}
+            >
+              <span>{z.label}</span>
+              {#if z.keys}<kbd>{z.keys}</kbd>{/if}
+            </button>
+          {/each}
+        </div>
+      {/if}
+    </div>
   </div>
   {#if compare}
     <div class="pane-label left">{before ? "Before" : compare.current}</div>
@@ -530,16 +595,63 @@
   .zoom.hidden {
     display: none;
   }
-  .zoom button {
-    min-width: 44px;
+  .zoom-menu {
+    position: relative;
+  }
+  .trigger {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    min-width: 52px;
     padding: 2px 8px;
     border-radius: 999px;
     background: rgba(0, 0, 0, 0.45);
     color: var(--text-1);
     font-family: var(--font-num);
   }
-  .zoom button:hover {
+  .trigger:hover,
+  .trigger.open {
     color: var(--text-0);
+  }
+  .caret {
+    font-size: 8px;
+    color: var(--text-2);
+  }
+  .pop {
+    position: absolute;
+    top: calc(100% + 4px);
+    right: 0;
+    z-index: 40;
+    min-width: 132px;
+    padding: var(--space-1);
+    border-radius: var(--radius-m);
+    background: var(--bg-1);
+    box-shadow: var(--shadow-pop);
+  }
+  .pop button {
+    display: flex;
+    justify-content: space-between;
+    gap: var(--space-3);
+    width: 100%;
+    padding: 4px var(--space-2);
+    border-radius: var(--radius-s);
+    color: var(--text-1);
+    font-family: var(--font-num);
+    text-align: left;
+  }
+  .pop button:hover:not(:disabled),
+  .pop button.current {
+    background: var(--bg-2);
+    color: var(--text-0);
+  }
+  .pop button:disabled {
+    color: var(--text-2);
+    opacity: 0.5;
+  }
+  .pop kbd {
+    font-family: inherit;
+    color: var(--text-2);
   }
   .loading {
     color: var(--text-2);
