@@ -2,6 +2,7 @@
 // downloaded to installed. Installing only happens when the user chooses to restart.
 import { listen } from "@tauri-apps/api/event";
 import { api } from "$lib/api";
+import { toasts } from "$lib/toasts/toasts.svelte";
 import type { ReleaseChannel } from "$lib/bindings/ReleaseChannel";
 import type { Settings } from "$lib/bindings/Settings";
 import type { UpdateInfo } from "$lib/bindings/UpdateInfo";
@@ -22,7 +23,6 @@ class Updates {
   status = $state<UpdateStatus>("idle");
   update = $state<UpdateInfo | null>(null);
   progress = $state<UpdateProgress | null>(null);
-  error = $state<string | null>(null);
   /** Bumped by each check, so a check that's overtaken (by a channel switch) is ignored. */
   #run = 0;
   #timer: ReturnType<typeof setInterval> | null = null;
@@ -45,7 +45,7 @@ class Updates {
         api.updates.version(),
       ]);
     } catch (e) {
-      this.fail(e);
+      this.fail("Couldn’t read the settings", e);
       return;
     }
     // Development builds aren't installed, so there's nothing for an update to replace.
@@ -65,7 +65,6 @@ class Updates {
     if (this.status === "downloading" || this.status === "installing") return;
     const run = ++this.#run;
     this.status = "checking";
-    this.error = null;
     try {
       const update = await api.updates.check();
       if (run !== this.#run) return;
@@ -76,7 +75,7 @@ class Updates {
       if (run !== this.#run) return;
       // A failed background check (offline, say) isn't worth interrupting anyone for.
       if (quiet) this.status = "idle";
-      else this.fail(e);
+      else this.fail("Couldn’t check for updates", e);
     }
   }
 
@@ -84,12 +83,11 @@ class Updates {
     if (!this.update || this.status === "downloading") return;
     this.status = "downloading";
     this.progress = null;
-    this.error = null;
     try {
       await api.updates.download();
       if (run === this.#run) this.status = "ready";
     } catch (e) {
-      if (run === this.#run) this.fail(e);
+      if (run === this.#run) this.fail("Couldn’t download the update", e);
     }
   }
 
@@ -99,7 +97,7 @@ class Updates {
     try {
       await api.updates.install(); // restarts the app
     } catch (e) {
-      this.fail(e);
+      this.fail("Couldn’t install the update", e);
     }
   }
 
@@ -128,14 +126,14 @@ class Updates {
       return true;
     } catch (e) {
       this.settings = prev;
-      this.fail(e);
+      this.fail("Couldn’t save the settings", e);
       return false;
     }
   }
 
-  private fail(e: unknown) {
+  private fail(what: string, e: unknown) {
     this.status = "error";
-    this.error = String(e);
+    toasts.error(what, e);
   }
 }
 

@@ -189,7 +189,7 @@
                 {:else if st?.state === "empty"}
                   <span class="state warn">Nothing found</span>
                 {:else if st?.state === "error"}
-                  <span class="state warn" title={st.message}>Detection failed</span>
+                  <span class="state warn">Detection failed</span>
                 {:else if m.enabled && !drawn}
                   <span class="state warn">Not drawn: over {MAX_MASKS}</span>
                 {:else if m.invert}

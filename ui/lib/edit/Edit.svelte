@@ -12,6 +12,8 @@
   import { session } from "./session.svelte";
   import type { EditState } from "$lib/bindings/EditState";
   import type { Histogram } from "./renderer";
+  import { onMount } from "svelte";
+  import { palette, shortcut } from "$lib/palette/commands.svelte";
 
   let historyOpen = $state(true);
   let before = $state(false);
@@ -134,6 +136,33 @@
   function onKeyUp(e: KeyboardEvent) {
     if (e.key === "\\") before = false;
   }
+
+  // The command palette's actions that live in this component's state.
+  onMount(() =>
+    palette.provide({
+      "view.zoomFit": () => canvas?.setZoom(null),
+      "view.zoom100": () => canvas?.setZoom(1),
+      "view.zoomIn": () => canvas?.zoomBy(Math.SQRT2),
+      "view.zoomOut": () => canvas?.zoomBy(Math.SQRT1_2),
+      "view.zoomToggle": () => canvas?.toggleZoom(),
+      "crop.apply": () => {
+        level = false;
+        session.finishCrop();
+      },
+      "crop.cancel": () => {
+        level = false;
+        session.cancelCrop();
+      },
+      "view.filmstrip": {
+        run: toggleStrip,
+        title: () => (stripOpen ? "Hide filmstrip" : "Show filmstrip"),
+      },
+      "view.versions": {
+        run: () => (historyOpen = !historyOpen),
+        title: () => (historyOpen ? "Hide versions panel" : "Show versions panel"),
+      },
+    }),
+  );
 </script>
 
 <svelte:window onkeydown={onKeyDown} onkeyup={onKeyUp} onblur={() => (before = false)} />
@@ -192,14 +221,14 @@
             Import Photos…
           </button>
           <p class="hint">Ctrl+O, or drop RAW files here. They’re copied into your library.</p>
+          <p class="hint">
+            {shortcut("Mod+K")} finds any command; ? lists the keyboard shortcuts.
+          </p>
         </div>
       {/if}
 
       {#if session.loading}
         <div class="status">{session.loading}</div>
-      {/if}
-      {#if session.error}
-        <div class="status error">{session.error}</div>
       {/if}
 
       {#if !historyOpen}
@@ -364,10 +393,6 @@
     background: var(--bg-1);
     color: var(--text-1);
     font-size: var(--fs-s);
-  }
-  .status.error {
-    bottom: var(--space-6);
-    color: var(--danger);
   }
   .adjust {
     min-height: 0;
