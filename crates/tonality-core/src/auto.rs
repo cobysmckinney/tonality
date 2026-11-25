@@ -340,6 +340,70 @@ pub fn white_balance(cam: &[Vec3], color: &CameraColor) -> Option<(f32, f32)> {
     } else {
         (shot_t, shot_tint)
     };
+    on_slider_scale(t, tint)
+}
+
+/// Camera RGB of the `size × size` preview pixels centred on frame position `at` (0..1 across
+/// the framed output, as the editor shows it: crop, turns, flip, straighten and lens correction
+/// mapped as [`sample`] maps them), for the white balance picker. Empty when `at` falls outside
+/// the photo. The patch is square in preview pixels and clipped to the preview's edges.
+#[allow(clippy::too_many_arguments)]
+pub fn sample_around(
+    width: u32,
+    height: u32,
+    pixel: impl Fn(u32, u32) -> Vec3,
+    crop: &Crop,
+    lens: &LensTable,
+    full_w: u32,
+    full_h: u32,
+    at: [f32; 2],
+    size: u32,
+) -> Vec<Vec3> {
+    let inside = |p: [f32; 2]| (0.0..=1.0).contains(&p[0]) && (0.0..=1.0).contains(&p[1]);
+    if width == 0 || height == 0 || !inside(at) {
+        return Vec::new();
+    }
+    let uv = Geometry::new(crop, full_w as f32, full_h as f32).apply(at);
+    if !inside(uv) {
+        return Vec::new();
+    }
+    let ([u, v], gain) = UvToSource::new(lens, full_w, full_h).map_with_gain(uv);
+    let cx = ((u * width as f32) as i64).min(width as i64 - 1);
+    let cy = ((v * height as f32) as i64).min(height as i64 - 1);
+    let r = (size / 2) as i64;
+    let mut out = Vec::with_capacity((size * size) as usize);
+    for y in (cy - r).max(0)..=(cy + r).min(height as i64 - 1) {
+        for x in (cx - r).max(0)..=(cx + r).min(width as i64 - 1) {
+            out.push(pixel(x as u32, y as u32).map(|c| c * gain));
+        }
+    }
+    out
+}
+
+/// White balance that makes the picked patch `cam` (camera RGB, see [`sample_around`]) neutral
+/// grey: `(temperature, tint)` on the sliders' scales, rounded as they show them. The patch's
+/// mean colour is taken as the light's colour; pixels clipped in any channel (their colour is
+/// wrong) and black ones are left out. `None` when no pixel is usable.
+pub fn white_balance_at(cam: &[Vec3], color: &CameraColor) -> Option<(f32, f32)> {
+    let mut sum = [0.0f64; 3];
+    let mut n = 0;
+    for c in cam {
+        if c.iter().all(|&v| v > 1e-4 && v < 0.98) {
+            for k in 0..3 {
+                sum[k] += c[k] as f64;
+            }
+            n += 1;
+        }
+    }
+    if n == 0 {
+        return None;
+    }
+    let (t, tint) = color.temperature_tint_of(sum.map(|v| (v / n as f64) as f32));
+    on_slider_scale(t, tint)
+}
+
+/// `(temperature, tint)` rounded and clamped as the sliders show them; `None` if not finite.
+fn on_slider_scale(t: f32, tint: f32) -> Option<(f32, f32)> {
     if !(t.is_finite() && tint.is_finite()) {
         return None;
     }
@@ -708,5 +772,112 @@ mod tests {
         if let Some((t, tint)) = white_balance(&greys, &c) {
             assert!(t.is_finite() && tint.is_finite());
         }
+    }
+
+    #[test]
+    fn picking_a_grey_makes_it_neutral() {
+        // A grey card under 2850–9000 K, picked from a patch: its light comes back.
+        for t in [2850.0, 4000.0, 5500.0, 6500.0, 9000.0] {
+            let l = light(t);
+            let patch = vec![l.map(|c| c * 0.4 / l[1]); 25];
+            let (got, tint) = white_balance_at(&patch, &camera()).unwrap();
+            assert!((got - t).abs() <= 0.02 * t + 25.0, "{t} K → {got} K");
+            assert!(tint.abs() <= 1.0, "{t} K → tint {tint}");
+        }
+        // Brightness doesn't matter, only colour.
+        let l = light(4000.0);
+        let dim = vec![l.map(|c| c * 0.05 / l[1]); 25];
+        let bright = vec![l.map(|c| c * 0.8 / l[1]); 25];
+        assert_eq!(
+            white_balance_at(&dim, &camera()),
+            white_balance_at(&bright, &camera())
+        );
+    }
+
+    #[test]
+    fn picking_leaves_out_clipped_and_black_pixels() {
+        let l = light(3500.0);
+        let grey = l.map(|c| c * 0.3 / l[1]);
+        let clean = white_balance_at(&[grey; 9], &camera());
+        assert!(clean.is_some());
+        // A blown pixel (green clipped, so it looks magenta) and a black one don't count.
+        let mut patch = vec![grey; 7];
+        patch.push([0.9, 1.0, 0.7]);
+        patch.push([0.0; 3]);
+        assert_eq!(white_balance_at(&patch, &camera()), clean);
+        assert_eq!(white_balance_at(&[[1.0; 3]; 25], &camera()), None);
+        assert_eq!(white_balance_at(&[[0.0; 3]; 25], &camera()), None);
+        assert_eq!(white_balance_at(&[], &camera()), None);
+    }
+
+    /// Mean source position of a patch read from a preview whose pixels encode their position.
+    fn centre(s: &[Vec3]) -> (f32, f32) {
+        let n = s.len() as f32;
+        (
+            s.iter().map(|c| c[0]).sum::<f32>() / n,
+            s.iter().map(|c| c[1]).sum::<f32>() / n,
+        )
+    }
+
+    #[test]
+    fn sample_around_reads_the_spot_under_the_cursor() {
+        let px = |x: u32, y: u32| [x as f32, y as f32, 1.0];
+        let id = LensTable::identity();
+        let at = |crop: &Crop, f: [f32; 2]| sample_around(100, 50, px, crop, &id, 1000, 500, f, 5);
+        // Uncropped: frame position = source position; 5 × 5 pixels around it.
+        let s = at(&Crop::default(), [0.25, 0.5]);
+        assert_eq!(s.len(), 25);
+        assert_eq!(centre(&s), (25.0, 25.0));
+        // Cropped to the right half: the frame's left edge is the middle of the source.
+        let right = Crop {
+            rect: [0.5, 0.0, 0.5, 1.0],
+            ..Crop::default()
+        };
+        assert_eq!(centre(&at(&right, [0.1, 0.5])), (55.0, 25.0));
+        // A quarter turn clockwise: the frame's top-left corner is the source's bottom-left.
+        let turned = Crop {
+            turns: 1,
+            ..Crop::default()
+        };
+        let (x, y) = centre(&at(&turned, [0.1, 0.1]));
+        assert!(x < 15.0 && y > 40.0, "({x}, {y})");
+        // Flipped: left and right swap.
+        let flipped = Crop {
+            flip: true,
+            ..Crop::default()
+        };
+        let (x, _) = centre(&at(&flipped, [0.1, 0.5]));
+        assert!(x > 85.0, "{x}");
+        // At a corner the patch is clipped to the preview; outside the frame, nothing.
+        assert_eq!(at(&Crop::default(), [0.0, 0.0]).len(), 9);
+        assert!(at(&Crop::default(), [1.2, 0.5]).is_empty());
+    }
+
+    #[test]
+    fn sample_around_follows_a_straightened_crop() {
+        // Straightened by 10°: each frame position reads the source pixel the shader shows there.
+        let px = |x: u32, y: u32| [x as f32, y as f32, 1.0];
+        let id = LensTable::identity();
+        let crop = Crop {
+            angle: 10.0,
+            rect: [0.2, 0.2, 0.6, 0.6],
+            ..Crop::default()
+        };
+        let g = Geometry::new(&crop, 1000.0, 500.0);
+        for f in [[0.5, 0.5], [0.1, 0.2], [0.9, 0.8]] {
+            let s = sample_around(100, 50, px, &crop, &id, 1000, 500, f, 1);
+            assert_eq!(s.len(), 1);
+            let [u, v] = g.apply(f);
+            assert_eq!(s[0][0], (u * 100.0).floor(), "{f:?}");
+            assert_eq!(s[0][1], (v * 50.0).floor(), "{f:?}");
+        }
+        // Off centre, straightening moves where a frame position reads from.
+        let level = Crop {
+            rect: crop.rect,
+            ..Crop::default()
+        };
+        let a = sample_around(100, 50, px, &crop, &id, 1000, 500, [0.1, 0.1], 1);
+        let b = sample_around(100, 50, px, &level, &id, 1000, 500, [0.1, 0.1], 1);
+        assert_ne!(a, b);
     }
 }
