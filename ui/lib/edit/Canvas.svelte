@@ -11,6 +11,7 @@
   import { FULL, turnedSize } from "./crop";
   import MaskOverlay from "./MaskOverlay.svelte";
   import LassoOverlay from "./LassoOverlay.svelte";
+  import Navigator from "./Navigator.svelte";
   import {
     MASK_THUMB_EDGE,
     brushKey,
@@ -102,7 +103,10 @@
         };
       }
       r.onHistogram = (h) => onhistogram?.(h);
-      r.onLayout = (rect) => (frameRect = rect);
+      r.onLayout = (rect) => {
+        frameRect = rect;
+        probe(); // the photo moved under the pointer
+      };
       r.onView = (s, f) => {
         scale = s;
         fit = f;
@@ -268,6 +272,34 @@
     if (cropping) zoomOpen = false;
   });
 
+  // ---- pixel readout ----
+  // The displayed RGB under the pointer: one pixel rendered and read back, at most once a frame.
+  // Hidden while a button is down (panning, cropping, painting a mask) and off the photo.
+  let pixel = $state<[number, number, number] | null>(null);
+  let hoverAt: readonly [number, number] | null = null;
+  let probeFrame = 0;
+  function probe() {
+    if (!hoverAt || probeFrame) return;
+    probeFrame = requestAnimationFrame(() => {
+      probeFrame = 0;
+      pixel = hoverAt && renderer ? renderer.readPixel(hoverAt[0], hoverAt[1]) : null;
+    });
+  }
+  function onHover(e: PointerEvent) {
+    const onChrome = e.target instanceof Element && e.target.closest(".zoom, .nav");
+    if (e.buttons !== 0 || onChrome) return endHover();
+    hoverAt = local(e);
+    probe();
+  }
+  function endHover() {
+    hoverAt = null;
+    pixel = null;
+  }
+  onMount(() => () => cancelAnimationFrame(probeFrame));
+
+  /** Bumped when the main view's picture changes, so the navigator redraws its overview. */
+  let drawEpoch = $state(0);
+
   // Latest-wins parameter pipelines (the main view, and the compare pane): at most one request
   // in flight each, always ending on the newest state. The curve LUT is only refetched when the
   // curve itself changes.
@@ -341,6 +373,8 @@
     r.setParams(params);
     session.framing = r.framing;
     refreshMaskThumbs();
+    drawEpoch++;
+    probe();
   });
   const side = pipeline((r, params, curve, brush) => {
     if (!comparing) return;
@@ -459,7 +493,14 @@
   onkeydowncapture={onMenuKey}
 />
 
-<div class="wrap" onwheel={onWheel}>
+<!-- svelte-ignore a11y_no_static_element_interactions -->
+<div
+  class="wrap"
+  onwheel={onWheel}
+  onpointermove={onHover}
+  onpointerdown={() => (pixel = null)}
+  onpointerleave={endHover}
+>
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <canvas
     bind:this={canvas}
@@ -540,6 +581,14 @@
       {/if}
     </div>
   </div>
+  {#if renderer && !fit && !cropping && frameRect.w > 0}
+    <Navigator {renderer} frame={frameRect} epoch={drawEpoch} />
+  {/if}
+  {#if pixel}
+    <div class="readout" aria-hidden="true">
+      <span>R</span>{pixel[0]} <span>G</span>{pixel[1]} <span>B</span>{pixel[2]}
+    </div>
+  {/if}
   {#if compare}
     <div class="pane-label left">{before ? "Before" : compare.current}</div>
     <div class="pane-label right">
@@ -672,6 +721,24 @@
   }
   .loading {
     color: var(--text-2);
+  }
+  .readout {
+    position: absolute;
+    left: var(--space-3);
+    bottom: var(--space-3);
+    padding: 1px 8px;
+    border-radius: 999px;
+    background: rgba(0, 0, 0, 0.45);
+    font-family: var(--font-num);
+    font-size: var(--fs-xs);
+    font-variant-numeric: tabular-nums;
+    color: var(--text-1);
+    white-space: pre;
+    pointer-events: none;
+  }
+  .readout span {
+    color: var(--text-2);
+    margin-right: 3px;
   }
   .badge {
     position: absolute;
