@@ -16,3 +16,18 @@ export function sameJson(a: unknown, b: unknown): boolean {
     keys.length === Object.keys(bo).length && keys.every((k) => k in bo && sameJson(ao[k], bo[k]))
   );
 }
+
+/** The rating a key gives: pressing the photos' current rating again clears it. */
+export function nextRating(current: (number | undefined)[], pressed: number): number {
+  return current.length && current.every((r) => r === pressed) ? 0 : pressed;
+}
+
+/** What the canvas briefly shows after a rating key: "★★★", or "No rating". */
+export function ratingNote(rating: number): string {
+  return rating > 0 ? "★".repeat(rating) : "No rating";
+}
+
+/** What the canvas briefly shows after a flag key. */
+export function flagNote(flag: number): string {
+  return flag > 0 ? "Picked" : flag < 0 ? "Rejected" : "Unflagged";
+}

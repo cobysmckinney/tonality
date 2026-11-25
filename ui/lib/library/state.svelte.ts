@@ -14,7 +14,7 @@ import type { ImportInfo } from "$lib/bindings/ImportInfo";
 import { session } from "$lib/edit/session.svelte";
 import { dropLibraryThumbs } from "$lib/edit/versions";
 import { invalidateThumb } from "$lib/library/thumbs";
-import { sameJson } from "./culling";
+import { nextRating, sameJson } from "./culling";
 import { arrowSelect, clickSelect, type Mods } from "./selection";
 
 const SIZE_KEY = "tonality.library.thumbSize";
@@ -295,21 +295,27 @@ class LibraryState {
     this.images = this.images.map((i) => (set.has(i.id) ? f(i) : i));
   }
 
-  async setRating(rating: number) {
-    const ids = this.targets();
-    if (!ids.length) return;
-    // Pressing the current rating again clears it.
-    const all = ids.every((id) => this.images.find((i) => i.id === id)?.rating === rating);
-    const r = all ? 0 : rating;
+  /**
+   * Rate `ids` (default: the selection, else the focused photo); pressing their current rating
+   * again clears it. Shown at once, saved behind. Returns the rating given, or null for no photos.
+   */
+  setRating(rating: number, ids = this.targets()): number | null {
+    if (!ids.length) return null;
+    const r = nextRating(
+      ids.map((id) => this.images.find((i) => i.id === id)?.rating),
+      rating,
+    );
     this.patch(ids, (i) => ({ ...i, rating: r }));
-    await api.library.setRating(ids, r).catch((e) => (this.message = String(e)));
+    api.library.setRating(ids, r).catch((e) => (this.message = String(e)));
+    return r;
   }
 
-  async setFlag(flag: number) {
-    const ids = this.targets();
-    if (!ids.length) return;
+  /** Flag `ids` (default: as for `setRating`): 1 pick, -1 reject, 0 none. */
+  setFlag(flag: number, ids = this.targets()): number | null {
+    if (!ids.length) return null;
     this.patch(ids, (i) => ({ ...i, flag }));
-    await api.library.setFlag(ids, flag).catch((e) => (this.message = String(e)));
+    api.library.setFlag(ids, flag).catch((e) => (this.message = String(e)));
+    return flag;
   }
 
   /** Newest `noteHead` per photo, so a late answer can't overwrite a newer one. */
