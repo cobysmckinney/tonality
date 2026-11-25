@@ -18,6 +18,7 @@
 </script>
 
 <script lang="ts">
+  import { tick } from "svelte";
   import { moveTo, typeahead, TYPEAHEAD_MS } from "./listbox";
 
   interface Props {
@@ -54,7 +55,7 @@
     active = selectedIndex;
     typed = "";
     // Focus the list once it's in the DOM, so the keys below reach it.
-    queueMicrotask(() => list?.focus());
+    tick().then(() => list?.focus());
   }
 
   function close(chosen: string | null) {
