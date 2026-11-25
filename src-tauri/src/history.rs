@@ -3,6 +3,7 @@
 use std::sync::{Arc, Mutex, OnceLock};
 
 use tauri::{Manager, State};
+use tonality_core::edit::Change;
 use tonality_core::{Catalog, Checkout, CommitId, EditState, ImageId, Panel};
 
 use crate::sidecar::Sidecars;
@@ -216,6 +217,15 @@ pub async fn history_state(
     catalog: State<'_, CatalogState>,
 ) -> CmdResult<EditState> {
     catalog.read(move |c| c.state_at(commit)).await
+}
+
+/// What `commit` changed from its parent, setting by setting (the history panel's step details).
+#[tauri::command]
+pub async fn history_changes(
+    commit: CommitId,
+    catalog: State<'_, CatalogState>,
+) -> CmdResult<Vec<Change>> {
+    catalog.read(move |c| c.changes_at(commit)).await
 }
 
 /// Take photos back to as-shot and delete all their history (see
