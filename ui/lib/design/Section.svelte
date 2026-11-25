@@ -137,14 +137,23 @@
     gap: 2px;
     margin-right: var(--space-1);
   }
+  /* Small buttons, like `.btn` at header size: they must look clickable at a glance. */
   .actions :global(button) {
-    padding: 2px 8px;
+    min-width: 40px;
+    height: 22px;
+    padding: 0 8px;
     border-radius: var(--radius-s);
+    background: var(--bg-2);
+    border: 1px solid var(--line-strong);
     font-size: var(--fs-xs);
+    font-weight: 500;
     color: var(--text-1);
+    transition:
+      background 120ms var(--ease),
+      color 120ms var(--ease);
   }
   .actions :global(button:hover:not(:disabled)) {
-    background: var(--bg-3);
+    background: var(--bg-4);
     color: var(--text-0);
   }
   .actions :global(button:disabled) {
