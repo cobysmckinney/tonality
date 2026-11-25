@@ -111,16 +111,18 @@
     }
   }
 
-  // A click anywhere else closes it without choosing.
+  // A press anywhere else closes it without choosing, and goes no further: dismissing the list
+  // over the photo must not also zoom it, nor start dragging a slider.
   function onWindowDown(e: PointerEvent) {
     if (!open) return;
     const t = e.target as Node;
     if (list?.contains(t) || trigger.contains(t)) return;
+    e.stopPropagation();
     close(null);
   }
 </script>
 
-<svelte:window onpointerdown={onWindowDown} />
+<svelte:window onpointerdowncapture={onWindowDown} />
 
 <div class="select">
   <button
