@@ -11,6 +11,7 @@
   import { targetOwnsKey } from "$lib/keys";
   import SettingsDialog from "$lib/settings/SettingsDialog.svelte";
   import { updates } from "$lib/settings/updates.svelte";
+  import Palette from "$lib/palette/Palette.svelte";
 
   updates.init();
 
@@ -89,6 +90,7 @@
 </div>
 <ExportDialog />
 <SettingsDialog />
+<Palette />
 {#if app.splash}<Splash />{/if}
 
 <style>
