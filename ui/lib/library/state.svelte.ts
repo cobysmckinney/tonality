@@ -13,6 +13,7 @@ import type { ImportInfo } from "$lib/bindings/ImportInfo";
 import { session } from "$lib/edit/session.svelte";
 import { dropLibraryThumbs } from "$lib/edit/versions";
 import { invalidateThumb } from "$lib/library/thumbs";
+import { toasts } from "$lib/toasts/toasts.svelte";
 import { arrowSelect, clickSelect, type Mods } from "./selection";
 
 const SIZE_KEY = "tonality.library.thumbSize";
@@ -76,11 +77,11 @@ class LibraryState {
   restoring = $state<{ done: number; total: number } | null>(null);
   /** Files are being dragged over the window. */
   dropping = $state(false);
-  message = $state<string | null>(null);
   loaded = $state(false);
   scrollTop = 0;
 
   constructor() {
+    session.nameOf = (id) => this.images.find((i) => i.id === id)?.name;
     listen<{ done: number; total: number }>("import-progress", (e) => {
       if (this.importing) this.importing = e.payload;
       else if (this.restoring) this.restoring = e.payload;
@@ -159,7 +160,7 @@ class LibraryState {
       if (this.focus !== null && !ids.has(this.focus)) this.focus = null;
       if (this.anchor !== null && !ids.has(this.anchor)) this.anchor = null;
     } catch (e) {
-      if (seq === this.refreshSeq) this.message = String(e);
+      if (seq === this.refreshSeq) toasts.error("Couldn’t load the library", e);
     } finally {
       if (seq === this.refreshSeq) this.loaded = true;
     }
@@ -190,17 +191,20 @@ class LibraryState {
   async importPaths(paths: string[], opts: { open?: boolean } = {}) {
     if (this.importing) return;
     this.importing = { done: 0, total: 0 };
-    this.message = null;
     try {
       const s = await api.library.import(paths);
       const parts: string[] = [];
       if (s.added) parts.push(`${s.added} imported`);
       if (s.duplicates) parts.push(`${s.duplicates} already in library`);
       if (s.restored) parts.push(`edits restored for ${s.restored}`);
-      if (s.failed) parts.push(`${s.failed} failed${s.error ? ` (${s.error})` : ""}`);
       if (s.skipped) parts.unshift("Import stopped", `${s.skipped} left out`);
-      this.message = parts.length ? parts.join(" · ") : (s.error ?? "Nothing to import");
-      if (s.failed && s.error) console.warn("[import]", s.error);
+      if (s.failed) {
+        const what = `Couldn’t import ${s.failed} file${s.failed === 1 ? "" : "s"}`;
+        toasts.error(what, s.error ?? undefined);
+      }
+      // "No RAW files found" comes as an error with nothing failed: it's news, not a fault.
+      if (parts.length) toasts.notice(parts.join(" · "));
+      else if (!s.failed) toasts.notice(s.error ?? "Nothing to import");
       // Show what just arrived.
       if (s.import) this.query = { ...this.query, import: s.import.id, album: null };
       this.scrollTop = 0;
@@ -212,7 +216,7 @@ class LibraryState {
         if (opts.open) this.open(s.images[0]);
       }
     } catch (e) {
-      this.message = String(e);
+      toasts.error("Couldn’t import", e);
     } finally {
       this.importing = null;
       this.stoppingImport = false;
@@ -223,7 +227,7 @@ class LibraryState {
   async stopImport() {
     if (!this.importing || this.stoppingImport) return;
     this.stoppingImport = true;
-    await api.library.cancelImport().catch((e) => (this.message = String(e)));
+    await api.library.cancelImport().catch((e) => toasts.error("Couldn’t stop the import", e));
   }
 
   #recovered = false;
@@ -239,12 +243,13 @@ class LibraryState {
     try {
       const s = await api.library.recover();
       if (!s.added) return;
-      this.message =
+      toasts.notice(
         `Restored ${s.added} photo${s.added === 1 ? "" : "s"} from the library folder` +
-        (s.restored ? `, ${s.restored} with edits` : "");
+          (s.restored ? `, ${s.restored} with edits` : ""),
+      );
       await this.refresh();
     } catch (e) {
-      this.message = String(e);
+      toasts.error("Couldn’t look for photos in the library folder", e);
     } finally {
       this.restoring = null;
     }
@@ -298,14 +303,14 @@ class LibraryState {
     const all = ids.every((id) => this.images.find((i) => i.id === id)?.rating === rating);
     const r = all ? 0 : rating;
     this.patch(ids, (i) => ({ ...i, rating: r }));
-    await api.library.setRating(ids, r).catch((e) => (this.message = String(e)));
+    await api.library.setRating(ids, r).catch((e) => toasts.error("Couldn’t save the rating", e));
   }
 
   async setFlag(flag: number) {
     const ids = this.targets();
     if (!ids.length) return;
     this.patch(ids, (i) => ({ ...i, flag }));
-    await api.library.setFlag(ids, flag).catch((e) => (this.message = String(e)));
+    await api.library.setFlag(ids, flag).catch((e) => toasts.error("Couldn’t save the flag", e));
   }
 
   /** Take the selected photos back to as-shot, deleting all their versions and steps. */
@@ -313,7 +318,7 @@ class LibraryState {
     const ids = this.targets();
     const edited = ids.filter((id) => this.images.find((i) => i.id === id)?.head != null);
     if (!edited.length) {
-      this.message = ids.length === 1 ? "This photo has no edits" : "These photos have no edits";
+      toasts.notice(ids.length === 1 ? "This photo has no edits" : "These photos have no edits");
       return;
     }
     const what = edited.length === 1 ? "this photo" : `these ${edited.length} photos`;
@@ -325,9 +330,9 @@ class LibraryState {
     await dropLibraryThumbs(edited);
     try {
       await api.history.reset(edited);
-      this.message = `Reset ${edited.length} photo${edited.length === 1 ? "" : "s"} to as-shot`;
+      toasts.notice(`Reset ${edited.length} photo${edited.length === 1 ? "" : "s"} to as-shot`);
     } catch (e) {
-      this.message = String(e);
+      toasts.error("Couldn’t reset the history", e);
     }
     for (const id of edited) invalidateThumb(id);
     if (session.history && edited.includes(session.history.imageId)) await session.reloadHistory();
@@ -370,11 +375,13 @@ class LibraryState {
       for (const id of s.removed) invalidateThumb(id);
       session.forget(s.removed);
       const n = s.removed.length;
-      this.message = s.failed
-        ? `Couldn’t move ${s.failed} photo${s.failed === 1 ? "" : "s"} to the ${BIN}: ${s.error}`
-        : `Moved ${n} photo${n === 1 ? "" : "s"} to the ${BIN}`;
+      if (n) toasts.notice(`Moved ${n} photo${n === 1 ? "" : "s"} to the ${BIN}`);
+      if (s.failed) {
+        const what = `Couldn’t move ${s.failed} photo${s.failed === 1 ? "" : "s"} to the ${BIN}`;
+        toasts.error(what, s.error ?? undefined);
+      }
     } catch (e) {
-      this.message = String(e);
+      toasts.error(`Couldn’t move ${one ? "the photo" : "the photos"} to the ${BIN}`, e);
     }
     await this.refresh();
     if (!this.selected.size && this.images.length) {
@@ -384,11 +391,11 @@ class LibraryState {
 
   // ---- albums ----
 
-  private async albumOp<T>(op: () => Promise<T>): Promise<T | undefined> {
+  private async albumOp<T>(what: string, op: () => Promise<T>): Promise<T | undefined> {
     try {
       return await op();
     } catch (e) {
-      this.message = String(e);
+      toasts.error(what, e);
     } finally {
       await this.refresh();
     }
@@ -396,16 +403,18 @@ class LibraryState {
 
   /** Create an album, optionally holding `images`. Returns its id. */
   createAlbum(name: string, images: number[] = []) {
-    return this.albumOp(async () => {
+    return this.albumOp("Couldn’t create the album", async () => {
       const id = await api.albums.create(name, images);
       if (images.length)
-        this.message = `Added ${images.length} photo${images.length === 1 ? "" : "s"} to “${name.trim()}”`;
+        toasts.notice(
+          `Added ${images.length} photo${images.length === 1 ? "" : "s"} to “${name.trim()}”`,
+        );
       return id;
     });
   }
 
   renameAlbum(id: number, name: string) {
-    return this.albumOp(() => api.albums.rename(id, name));
+    return this.albumOp("Couldn’t rename the album", () => api.albums.rename(id, name));
   }
 
   async deleteAlbum(id: number) {
@@ -415,18 +424,22 @@ class LibraryState {
       kind: "warning",
       okLabel: "Delete",
     });
-    if (ok) await this.albumOp(() => api.albums.delete(id));
+    if (ok)
+      await this.albumOp(`Couldn’t delete “${a?.name ?? "the album"}”`, () =>
+        api.albums.delete(id),
+      );
   }
 
   addToAlbum(id: number, images = this.targets()) {
     if (!images.length) return;
     const name = this.albums.find((a) => a.id === id)?.name ?? "album";
-    return this.albumOp(async () => {
+    return this.albumOp(`Couldn’t add to “${name}”`, async () => {
       const n = await api.albums.add(id, images);
       const skipped = images.length - n;
-      this.message =
+      toasts.notice(
         `Added ${n} photo${n === 1 ? "" : "s"} to “${name}”` +
-        (skipped ? ` · ${skipped} already there` : "");
+          (skipped ? ` · ${skipped} already there` : ""),
+      );
     });
   }
 
@@ -435,7 +448,7 @@ class LibraryState {
     const v = this.view;
     const ids = this.targets();
     if (v.kind !== "album" || !ids.length) return;
-    return this.albumOp(async () => {
+    return this.albumOp("Couldn’t take the photos out of the album", async () => {
       await api.albums.remove(v.id, ids);
       this.selected.clear();
     });

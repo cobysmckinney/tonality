@@ -231,7 +231,6 @@
             </span>
           </div>
         {/if}
-        {#if exporter.error}<p class="error">{exporter.error}</p>{/if}
 
         <div class="actions">
           {#if exporter.running}
@@ -391,8 +390,7 @@
     color: var(--text-1);
     font-size: var(--fs-s);
   }
-  .failed,
-  .error {
+  .failed {
     margin: 0;
     color: var(--danger);
     font-size: var(--fs-xs);
