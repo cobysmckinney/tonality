@@ -17,6 +17,9 @@
   import Select, { type SelectOption } from "$lib/design/Select.svelte";
   import type { WhiteBalance } from "$lib/bindings/WhiteBalance";
   import { wbPick } from "./wbpick.svelte";
+  import ToolStrip from "./ToolStrip.svelte";
+  import { shootingInfo } from "./shooting";
+  import { library } from "$lib/library/state.svelte";
   import ColorGradingPanel from "./ColorGrading.svelte";
   import CurveEditor from "./CurveEditor.svelte";
   import { GRADING_DEFAULT } from "./grading";
@@ -35,6 +38,12 @@
     oncommit?: (key: string | null) => void;
   }
   let { edit = $bindable(), image, histogram, oncommit }: Props = $props();
+
+  // ISO, shutter, aperture, focal length: from the catalog row (ImageInfo has no capture data).
+  const shooting = $derived.by(() => {
+    const meta = library.images.find((i) => i.id === image.id)?.meta;
+    return meta ? shootingInfo(meta) : [];
+  });
 
   type LightKey = keyof EditState["light"];
   const lightControls: {
@@ -290,32 +299,8 @@
 <div class="panel">
   <div class="top">
     <HistogramView {histogram} />
-    <div class="tools">
-      <button
-        class="tool"
-        onclick={() => session.startCrop()}
-        title="Crop, rotate and straighten (R)"
-      >
-        <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true">
-          <path d="M4 1v11h11M1 4h11v11" />
-        </svg>
-        <span>Crop</span>
-        <kbd>R</kbd>
-      </button>
-      <button
-        class="tool"
-        onclick={() => session.startMasks()}
-        title="Local adjustments: gradients and brush (M)"
-      >
-        <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true">
-          <circle cx="8" cy="8" r="6" /><path d="M8 2a6 6 0 0 0 0 12Z" />
-        </svg>
-        <span>Masks</span>
-        {#if edit.masks?.length}<span class="count">{edit.masks.length}</span>{:else}<kbd>
-            M
-          </kbd>{/if}
-      </button>
-    </div>
+    {#if shooting.length}<p class="shooting">{shooting.join(" · ")}</p>{/if}
+    <ToolStrip masks={edit.masks?.length ?? 0} />
   </div>
 
   <div class="scroll">
@@ -697,57 +682,16 @@
   .end {
     height: var(--space-5);
   }
-  .tools {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: var(--space-2);
+  .shooting {
+    margin: calc(-1 * var(--space-1)) 0 var(--space-2);
     padding: 0 var(--space-4);
-  }
-  .tool {
-    display: flex;
-    align-items: center;
-    gap: var(--space-2);
-    height: 34px;
-    padding: 0 var(--space-3);
-    border-radius: var(--radius-m);
-    background: var(--bg-2);
-    color: var(--text-1);
-    font-size: var(--fs-s);
-    transition:
-      background 120ms var(--ease),
-      color 120ms var(--ease);
-  }
-  .tool:hover {
-    background: var(--bg-3);
-    color: var(--text-0);
-  }
-  .tool svg {
-    flex: none;
-    fill: none;
-    stroke: currentColor;
-    stroke-width: 1.5;
-  }
-  kbd,
-  .count {
-    margin-left: auto;
     font-family: var(--font-num);
     font-size: 10px;
     color: var(--text-2);
-  }
-  kbd {
-    padding: 0 5px;
-    border-radius: 4px;
-    border: 1px solid var(--line-strong);
-    line-height: 16px;
-  }
-  .count {
-    min-width: 18px;
-    padding: 0 5px;
-    border-radius: var(--radius-pill);
-    background: var(--bg-4);
-    color: var(--text-0);
     text-align: center;
-    line-height: 18px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
   .wb-row {
     display: grid;

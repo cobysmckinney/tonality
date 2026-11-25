@@ -1,11 +1,13 @@
 <!--
-  Collapsible panel section. Open/closed is remembered per title.
+  Collapsible panel section. Open/closed is remembered per title (across photos and restarts);
+  with "Open one section at a time" (Settings), opening one closes the others.
   - `edited` shows a dot next to the title; with `onreset`, a reset button appears on hover.
   - `storeKey` remembers open/closed under its own name (two panels with a "Light" section).
   - `actions`: small buttons in the header (Light's Auto).
 -->
 <script lang="ts">
-  import type { Snippet } from "svelte";
+  import { untrack, type Snippet } from "svelte";
+  import { rememberOpen, sections, wasOpen } from "./sections.svelte";
 
   interface Props {
     title: string;
@@ -26,22 +28,27 @@
     children,
   }: Props = $props();
 
-  const key = () => `tonality.section.${storeKey ?? title}`;
-  try {
-    const v = localStorage.getItem(key());
-    if (v !== null) open = v === "1";
-  } catch {
-    /* per-viewer convenience only */
-  }
+  const key = () => storeKey ?? title;
+  open = wasOpen(key(), open);
 
   function toggle() {
     open = !open;
-    try {
-      localStorage.setItem(key(), open ? "1" : "0");
-    } catch {
-      /* ignore */
-    }
+    rememberOpen(key(), open);
+    if (open) sections.open(key());
   }
+
+  // One at a time: another section opening (while this one is shown) closes this one. Openings
+  // from before it was shown (in another panel) don't count.
+  const shownAt = untrack(() => sections.opened?.n ?? 0);
+  $effect(() => {
+    const o = sections.opened;
+    if (!o || o.n <= shownAt || !sections.oneAtATime || o.key === key()) return;
+    untrack(() => {
+      if (!open) return;
+      open = false;
+      rememberOpen(key(), false);
+    });
+  });
 </script>
 
 <section class:open>
@@ -137,14 +144,23 @@
     gap: 2px;
     margin-right: var(--space-1);
   }
+  /* Small buttons, like `.btn` at header size: they must look clickable at a glance. */
   .actions :global(button) {
-    padding: 2px 8px;
+    min-width: 40px;
+    height: 22px;
+    padding: 0 8px;
     border-radius: var(--radius-s);
+    background: var(--bg-2);
+    border: 1px solid var(--line-strong);
     font-size: var(--fs-xs);
+    font-weight: 500;
     color: var(--text-1);
+    transition:
+      background 120ms var(--ease),
+      color 120ms var(--ease);
   }
   .actions :global(button:hover:not(:disabled)) {
-    background: var(--bg-3);
+    background: var(--bg-4);
     color: var(--text-0);
   }
   .actions :global(button:disabled) {
