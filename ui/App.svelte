@@ -12,6 +12,7 @@
   import SettingsDialog from "$lib/settings/SettingsDialog.svelte";
   import { updates } from "$lib/settings/updates.svelte";
   import Palette from "$lib/palette/Palette.svelte";
+  import ToastStack from "$lib/toasts/ToastStack.svelte";
 
   updates.init();
 
@@ -88,6 +89,8 @@
     {/if}
   </main>
 </div>
+<!-- Before the dialogs: Esc on a toast goes to the toast. -->
+<ToastStack />
 <ExportDialog />
 <SettingsDialog />
 <Palette />

@@ -406,10 +406,6 @@
         </div>
       {/if}
     </nav>
-
-    {#if library.message}
-      <p class="message">{library.message}</p>
-    {/if}
   </aside>
 
   <!-- ============================ grid ============================ -->
@@ -878,15 +874,6 @@
     display: block;
     font-size: var(--fs-xs);
     color: var(--text-2);
-  }
-  .message {
-    margin: auto 0 0;
-    padding: var(--space-2) var(--space-3);
-    border-radius: var(--radius-m);
-    background: var(--bg-2);
-    font-size: var(--fs-xs);
-    line-height: 1.45;
-    color: var(--text-1);
   }
 
   /* ---- main ---- */

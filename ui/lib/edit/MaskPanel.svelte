@@ -230,7 +230,7 @@
                 hand.
               </p>
             {:else if st?.state === "error"}
-              <p class="ai-note warn">Detection failed: {st.message}</p>
+              <p class="ai-note warn">Detection failed.</p>
               <button class="ghost" onclick={() => session.detect(mask)}>Try again</button>
             {/if}
             {#if target === "object"}

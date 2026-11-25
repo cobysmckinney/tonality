@@ -234,9 +234,6 @@
       {#if session.loading}
         <div class="status">{session.loading}</div>
       {/if}
-      {#if session.error}
-        <div class="status error">{session.error}</div>
-      {/if}
 
       {#if !historyOpen}
         <button
@@ -407,10 +404,6 @@
     background: var(--bg-1);
     color: var(--text-1);
     font-size: var(--fs-s);
-  }
-  .status.error {
-    bottom: var(--space-6);
-    color: var(--danger);
   }
   .adjust {
     min-height: 0;
