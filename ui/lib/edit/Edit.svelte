@@ -13,7 +13,7 @@
   import type { EditState } from "$lib/bindings/EditState";
   import type { Histogram } from "./renderer";
   import { onMount } from "svelte";
-  import { palette } from "$lib/palette/commands.svelte";
+  import { palette, shortcut } from "$lib/palette/commands.svelte";
 
   let historyOpen = $state(true);
   let before = $state(false);
@@ -225,6 +225,9 @@
             Import Photos…
           </button>
           <p class="hint">Ctrl+O, or drop RAW files here. They’re copied into your library.</p>
+          <p class="hint">
+            {shortcut("Mod+K")} finds any command; ? lists the keyboard shortcuts.
+          </p>
         </div>
       {/if}
 
