@@ -11,6 +11,7 @@
   import { targetOwnsKey } from "$lib/keys";
   import SettingsDialog from "$lib/settings/SettingsDialog.svelte";
   import { updates } from "$lib/settings/updates.svelte";
+  import Palette from "$lib/palette/Palette.svelte";
   import ToastStack from "$lib/toasts/ToastStack.svelte";
 
   updates.init();
@@ -92,6 +93,7 @@
 <ToastStack />
 <ExportDialog />
 <SettingsDialog />
+<Palette />
 {#if app.splash}<Splash />{/if}
 
 <style>

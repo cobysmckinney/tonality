@@ -7,6 +7,7 @@
   import { BIN as bin, library, type View } from "./state.svelte";
   import { thumbKey, thumbnail } from "./thumbs";
   import { targetOwnsKey } from "$lib/keys";
+  import { palette } from "$lib/palette/commands.svelte";
 
   let grid = $state<ReturnType<typeof Grid> | null>(null);
 
@@ -125,6 +126,13 @@
     draft = "";
     naming = "new";
   }
+  // The command palette's actions that live in this component's state.
+  onMount(() =>
+    palette.provide({
+      "library.newAlbum": () => newAlbum(),
+      "library.newAlbumWith": () => newAlbum(library.targets()),
+    }),
+  );
   function startRename(id: number, name: string) {
     draft = name;
     naming = id;
