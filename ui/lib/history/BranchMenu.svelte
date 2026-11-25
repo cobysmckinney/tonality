@@ -117,9 +117,9 @@
                     open = false;
                     session.applying = b.name;
                   }}
-                  title="Copy some or all of its settings onto {current}"
+                  title="Merge some or all of its settings into {current}"
                 >
-                  Copy settings…
+                  Merge from {b.name}…
                 </button>
               </div>
             {/if}

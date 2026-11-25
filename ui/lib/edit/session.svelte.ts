@@ -50,7 +50,7 @@ class EditSession {
   error = $state<string | null>(null);
   /** Side-by-side compare with another branch (its tip). */
   compare = $state<{ branch: string; state: EditState } | null>(null);
-  /** Branch whose settings the "Copy settings" dialog is offering. */
+  /** Version the Merge dialog is merging from. */
   applying = $state<string | null>(null);
   /** Shown on the canvas instead of `edit` (hovering a version); never committed. */
   preview = $state.raw<{ label: string; state: EditState } | null>(null);
