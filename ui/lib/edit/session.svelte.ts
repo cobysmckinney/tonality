@@ -27,10 +27,7 @@ import {
 
 /** Where an AI mask's detection stands (keyed by `aiKey`). */
 export type AiStatus =
-  | { state: "working" }
-  | { state: "found" }
-  | { state: "empty" }
-  | { state: "error"; message: string };
+  { state: "working" } | { state: "found" } | { state: "empty" } | { state: "error" };
 
 /** The latest `ai-progress` event: a model download, or a detection running. */
 export interface AiProgress {
@@ -127,7 +124,13 @@ class EditSession {
   /** Ask before a model's first download. Resolves false if declined. */
   private async confirmModel(model: string): Promise<boolean> {
     if (this.approved.has(model)) return true;
-    const info = (await api.ai.models()).find((m) => m.id === model);
+    let info;
+    try {
+      info = (await api.ai.models()).find((m) => m.id === model);
+    } catch (e) {
+      toasts.error("Couldn’t look up the AI models", e);
+      return false;
+    }
     if (!info || info.installed) {
       this.approved.add(model);
       return true;
@@ -222,7 +225,11 @@ class EditSession {
         if (!this.aiStatus.has(k)) this.aiStatus.set(k, { state: "found" });
       }
     } catch (e) {
-      if (here()) this.aiStatus.set(key, { state: "error", message: String(e) });
+      // Kept as a state too: a failed mask isn't retried by itself, and offers Try Again.
+      if (here()) {
+        this.aiStatus.set(key, { state: "error" });
+        toasts.error(`Couldn’t make the “${m.name}” mask`, e);
+      }
     } finally {
       if (here()) {
         this.aiProgress = null;
