@@ -52,6 +52,8 @@ class EditSession {
   compare = $state<{ branch: string; state: EditState } | null>(null);
   /** Branch whose settings the "Copy settings" dialog is offering. */
   applying = $state<string | null>(null);
+  /** Shown on the canvas instead of `edit` (hovering a version); never committed. */
+  preview = $state.raw<{ label: string; state: EditState } | null>(null);
   /** Crop mode: the crop as it was on entering (for Cancel). Changes commit on Done. */
   cropEntry = $state<Crop | null>(null);
   /** Locked crop aspect (pixel w/h), or null for free. */
@@ -321,6 +323,7 @@ class EditSession {
           this.pixels = pixels;
           this.compare = null;
           this.applying = null;
+          this.preview = null;
           this.cropEntry = null;
           this.cropAspect = null;
           this.masking = false;
@@ -359,6 +362,7 @@ class EditSession {
     this.history = null;
     this.compare = null;
     this.applying = null;
+    this.preview = null;
     this.cropEntry = null;
     this.cropAspect = null;
     this.masking = false;

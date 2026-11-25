@@ -9,6 +9,7 @@
   import { api } from "$lib/api";
   import type { Change } from "$lib/bindings/Change";
   import type { CommitInfo } from "$lib/bindings/CommitInfo";
+  import type { EditState } from "$lib/bindings/EditState";
   import type { HistoryView } from "$lib/bindings/HistoryView";
   import { session } from "$lib/edit/session.svelte";
   import { branchThumbs, requestBranchThumb } from "$lib/edit/versions";
@@ -36,6 +37,51 @@
 
   // ---- sessions: one time label where a pause of over half an hour ends ----
   const sessionStart = $derived(sessionLabels(groups.flatMap((g) => g.steps.map((s) => s.commit))));
+
+  // ---- hover a version: show it on the canvas, until the pointer leaves the list ----
+  const PREVIEW_DELAY = 120;
+  let hovered: string | null = null;
+  let hoverTimer: ReturnType<typeof setTimeout> | undefined;
+  let previewSeq = 0;
+  /** Tip states, by commit and its last change (a tip can be updated in place). */
+  const tipStates = new Map<string, EditState>();
+
+  function hoverVersion(name: string | null) {
+    if (name === hovered) return;
+    hovered = name;
+    clearTimeout(hoverTimer);
+    if (name === null || name === current) {
+      previewSeq++;
+      session.preview = null;
+      return;
+    }
+    hoverTimer = setTimeout(() => showPreview(name), PREVIEW_DELAY);
+  }
+
+  async function showPreview(name: string) {
+    const seq = ++previewSeq;
+    const tip = view.branches.find((b) => b.name === name)?.tip;
+    if (tip === undefined) return;
+    const key = `${tip}:${view.commits.find((c) => c.id === tip)?.time}`;
+    let state = tipStates.get(key);
+    if (!state) {
+      state = await api.history.state(tip).catch(() => undefined);
+      if (!state) return;
+      tipStates.set(key, state);
+    }
+    if (seq === previewSeq && hovered === name) session.preview = { label: name, state };
+  }
+
+  function leaveVersions(e: FocusEvent | PointerEvent) {
+    const to = e.relatedTarget as Node | null;
+    if (!to || !(e.currentTarget as HTMLElement).contains(to)) hoverVersion(null);
+  }
+
+  // Never leave a preview behind (hiding the panel, leaving Edit).
+  $effect(() => () => {
+    clearTimeout(hoverTimer);
+    session.preview = null;
+  });
 
   // ---- step details: what a step changed, on hover or focus ----
   let tip = $state<{ commit: CommitInfo; top: number; bottom: number; left: number } | null>(null);
@@ -139,11 +185,18 @@
       </div>
     </header>
 
-    <ul>
+    <!-- Hovering (or focusing) a version shows it on the canvas until the pointer leaves the list. -->
+    <ul onpointerleave={leaveVersions} onfocusout={leaveVersions}>
       {#each all as v (v.name)}
         {@const isCurrent = v.name === current}
         {@const src = thumb(v.name, v.tip)}
-        <li class:current={isCurrent} style:--c="var(--branch-{v.color})">
+        <li
+          class:current={isCurrent}
+          style:--c="var(--branch-{v.color})"
+          onpointerenter={() => hoverVersion(v.name)}
+          onfocusin={() => hoverVersion(v.name)}
+          onclickcapture={() => hoverVersion(null)}
+        >
           <button
             class="card"
             onclick={() => !isCurrent && session.switchBranch(v.name)}

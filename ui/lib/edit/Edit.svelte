@@ -165,7 +165,7 @@
           bind:this={canvas}
           image={session.image}
           pixels={session.pixels}
-          edit={session.edit}
+          edit={session.preview?.state ?? session.edit}
           {before}
           {beforeEdit}
           compare={session.compare && session.history
@@ -183,6 +183,9 @@
           onlevel={() => (level = false)}
           onhistogram={(h) => (histogram = h)}
         />
+        {#if session.preview && !before}
+          <div class="preview-badge">Preview · {session.preview.label}</div>
+        {/if}
         {#if session.masking && session.masks.length && !session.cropping}
           <MaskList />
         {/if}
@@ -259,6 +262,19 @@
     grid-template-columns: 268px 1fr var(--panel-w);
     height: 100%;
     transition: grid-template-columns 180ms var(--ease);
+  }
+  .preview-badge {
+    position: absolute;
+    top: var(--space-3);
+    left: 50%;
+    transform: translateX(-50%);
+    padding: 2px 10px;
+    border-radius: var(--radius-pill);
+    background: rgba(0, 0, 0, 0.6);
+    font-size: var(--fs-xs);
+    color: var(--text-1);
+    pointer-events: none;
+    z-index: 2;
   }
   .edit.history-closed {
     grid-template-columns: 0 1fr var(--panel-w);
