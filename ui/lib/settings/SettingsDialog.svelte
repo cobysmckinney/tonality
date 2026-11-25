@@ -3,6 +3,7 @@
   import { api } from "$lib/api";
   import type { ReleaseChannel } from "$lib/bindings/ReleaseChannel";
   import { updates } from "./updates.svelte";
+  import { sections } from "$lib/design/sections.svelte";
 
   const channels: { id: ReleaseChannel; label: string; hint: string }[] = [
     { id: "stable", label: "Stable", hint: "Tested releases." },
@@ -98,6 +99,34 @@
           : "Check for updates yourself, below."}
       </p>
 
+      <h3>Edit</h3>
+      <div class="row">
+        <span class="label">Sections</span>
+        <div class="seg" role="radiogroup" aria-label="Open one section at a time">
+          <button
+            role="radio"
+            aria-checked={!sections.oneAtATime}
+            class:active={!sections.oneAtATime}
+            onclick={() => sections.setOneAtATime(false)}
+          >
+            Any Number Open
+          </button>
+          <button
+            role="radio"
+            aria-checked={sections.oneAtATime}
+            class:active={sections.oneAtATime}
+            onclick={() => sections.setOneAtATime(true)}
+          >
+            One at a Time
+          </button>
+        </div>
+      </div>
+      <p class="hint">
+        {sections.oneAtATime
+          ? "Opening a section of the adjustments closes the others."
+          : "Sections stay open until you close them."}
+      </p>
+
       <div class="status">
         <div class="version">
           <span>tonality {updates.version}</span>
@@ -123,9 +152,6 @@
         {/if}
         {#if updates.update?.notes && (updates.status === "available" || updates.status === "ready")}
           <pre class="notes">{updates.update.notes}</pre>
-        {/if}
-        {#if updates.status === "error" && updates.error}
-          <p class="error">{updates.error}</p>
         {/if}
       </div>
 
@@ -263,12 +289,6 @@
     font: inherit;
     font-size: var(--fs-xs);
     color: var(--text-1);
-  }
-  .error {
-    margin: 0;
-    color: var(--danger);
-    font-size: var(--fs-xs);
-    overflow-wrap: anywhere;
   }
   .actions {
     display: flex;

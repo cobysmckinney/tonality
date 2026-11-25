@@ -4,6 +4,7 @@ import type { GlslProgram } from "$lib/bindings/GlslProgram";
 import type { Stroke } from "$lib/bindings/Stroke";
 import { paint, stampSegment } from "./brush";
 import type { BrushLayers } from "./masks";
+import { visibleRect, type Box as NavBox } from "./navigator";
 
 const PARAMS_BINDING = 0;
 const VIEW_BINDING = 1;
@@ -289,14 +290,34 @@ export class PreviewRenderer {
   private lastParams: Float32Array | null = null;
   private lastCompare: Float32Array | null = null;
 
-  /** Whether `imageId`'s maps are loaded. */
+  /** Whether `imageId`'s maps are loaded (this photo's, or the other photo's). */
   hasPresence(imageId: number) {
-    return this.presenceFor === imageId;
+    return this.presenceFor === imageId || this.other?.presenceFor === imageId;
   }
 
-  /** Load `imageId`'s Clarity / Dehaze maps (after its `setImage`). */
+  /** Load `imageId`'s Clarity / Dehaze maps (after its `setImage` or `setCompareImage`). */
   setPresence(imageId: number, maps: PresenceMaps) {
     const gl = this.gl;
+    const o = this.other;
+    if (o && o.id === imageId && this.imageId !== imageId) {
+      // On unit 0, which every draw binds anew: unit 3 keeps this photo's maps.
+      gl.bindTexture(gl.TEXTURE_2D, o.presence);
+      gl.pixelStorei(gl.UNPACK_ALIGNMENT, 2);
+      gl.texImage2D(
+        gl.TEXTURE_2D,
+        0,
+        gl.RGBA16F,
+        maps.width,
+        maps.height,
+        0,
+        gl.RGBA,
+        gl.HALF_FLOAT,
+        maps.data,
+      );
+      o.presenceFor = imageId;
+      if (this.lastCompare) this.setCompare(this.lastCompare);
+      return;
+    }
     gl.activeTexture(gl.TEXTURE3);
     gl.bindTexture(gl.TEXTURE_2D, this.presence);
     gl.pixelStorei(gl.UNPACK_ALIGNMENT, 2);
@@ -320,8 +341,9 @@ export class PreviewRenderer {
 
   /** `params` with the maps switched off if they aren't loaded (the placeholder would read as
    * "all haze" for a frame). */
-  private gated(params: Float32Array): Float32Array {
-    if (MAPS_FLAG < 0 || this.presenceFor !== null || !(params[MAPS_FLAG] > 0.5)) return params;
+  private gated(params: Float32Array, other = false): Float32Array {
+    const loaded = other ? this.other?.presenceFor : this.presenceFor;
+    if (MAPS_FLAG < 0 || loaded != null || !(params[MAPS_FLAG] > 0.5)) return params;
     const p = params.slice();
     p[MAPS_FLAG] = 0;
     return p;
@@ -333,7 +355,8 @@ export class PreviewRenderer {
     this.comparing = params !== null;
     this.lastCompare = params;
     if (params) {
-      params = this.gated(params);
+      params = this.gated(params, this.other !== null);
+      if (this.other) this.other.ready = true;
       this.compareOut = framingOf(params);
       gl.bindBuffer(gl.UNIFORM_BUFFER, this.compareUbo);
       gl.bufferData(gl.UNIFORM_BUFFER, params, gl.DYNAMIC_DRAW);
@@ -345,6 +368,89 @@ export class PreviewRenderer {
 
   get isComparing() {
     return this.comparing;
+  }
+
+  /**
+   * Another photo for the compare pane (null: the pane shows this photo, as for versions).
+   * With one, the compare pane is on the left and this photo on the right. Its params come
+   * through `setCompare`, its maps through `setPresence`; it's drawn from its preview only.
+   */
+  private other: {
+    id: number;
+    pixels: Uint16Array;
+    texture: WebGLTexture;
+    presence: WebGLTexture;
+    presenceFor: number | null;
+    fullW: number;
+    fullH: number;
+    /** Its params have arrived (until then the pane stays empty, not in the last one's look). */
+    ready: boolean;
+  } | null = null;
+
+  setCompareImage(
+    img: {
+      id: number;
+      width: number;
+      height: number;
+      fullW: number;
+      fullH: number;
+      pixels: Uint16Array;
+    } | null,
+  ) {
+    const gl = this.gl;
+    if (img && this.other?.id === img.id && this.other.pixels === img.pixels) return;
+    if (!img && !this.other) return;
+    if (this.other) {
+      gl.deleteTexture(this.other.texture);
+      gl.deleteTexture(this.other.presence);
+      this.other = null;
+    }
+    this.lastCompare = null;
+    if (img) {
+      const texture = gl.createTexture()!;
+      gl.bindTexture(gl.TEXTURE_2D, texture);
+      gl.pixelStorei(gl.UNPACK_ALIGNMENT, 2);
+      gl.texImage2D(
+        gl.TEXTURE_2D,
+        0,
+        gl.RGB16F,
+        img.width,
+        img.height,
+        0,
+        gl.RGB,
+        gl.HALF_FLOAT,
+        img.pixels,
+      );
+      setLinearClamp(gl);
+      const presence = gl.createTexture()!;
+      gl.bindTexture(gl.TEXTURE_2D, presence);
+      gl.texImage2D(
+        gl.TEXTURE_2D,
+        0,
+        gl.RGBA16F,
+        1,
+        1,
+        0,
+        gl.RGBA,
+        gl.HALF_FLOAT,
+        new Uint16Array(4),
+      );
+      setLinearClamp(gl);
+      this.other = {
+        id: img.id,
+        pixels: img.pixels,
+        texture,
+        presence,
+        presenceFor: null,
+        fullW: img.fullW,
+        fullH: img.fullH,
+        ready: false,
+      };
+      this.compareOut = { w: img.fullW, h: img.fullH, m: [1, 0, 0, 0, 1, 0] };
+    } else {
+      this.compareOut = this.out;
+    }
+    this.requestDraw();
   }
 
   // ---- stills (thumbnails) ----
@@ -468,6 +574,154 @@ export class PreviewRenderer {
     return out;
   }
 
+  /**
+   * The main view's whole frame as shown (current params, curve and brush layers, no mask tint)
+   * at `edge` px on the long side. For the navigator.
+   */
+  renderOverview(edge: number): ImageData | null {
+    const gl = this.gl;
+    if (!this.texture || !this.hasParams || gl.isContextLost()) return null;
+    const o = this.out;
+    const s = edge / Math.max(o.w, o.h, 1);
+    const w = Math.max(1, Math.round(o.w * s));
+    const h = Math.max(1, Math.round(o.h * s));
+    const tex = gl.createTexture()!;
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.texStorage2D(gl.TEXTURE_2D, 1, gl.RGBA8, w, h);
+    const fbo = gl.createFramebuffer()!;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+    gl.viewport(0, 0, w, h);
+    const whole = { x: 0, y: 0, w: 1, h: 1 };
+    this.bindPane(0);
+    gl.bindBuffer(gl.UNIFORM_BUFFER, this.viewUbo);
+    gl.bufferData(gl.UNIFORM_BUFFER, this.viewBlock(1, 1, whole, whole, whole), gl.DYNAMIC_DRAW);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, this.texture);
+    gl.drawArrays(gl.TRIANGLES, 0, 6);
+    const px = new Uint8Array(w * h * 4);
+    gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, px);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.deleteFramebuffer(fbo);
+    gl.deleteTexture(tex);
+    // GL rows run bottom-up.
+    const img = new ImageData(w, h);
+    const row = w * 4;
+    for (let y = 0; y < h; y++)
+      img.data.set(px.subarray((h - 1 - y) * row, (h - y) * row), y * row);
+    this.requestDraw();
+    return img;
+  }
+
+  /** A 1×1 target for reading back the pixel under the pointer. */
+  private probe: { tex: WebGLTexture; fbo: WebGLFramebuffer } | null = null;
+  private probePixel = new Uint8Array(4);
+
+  /**
+   * The displayed colour (0–255 RGB) at canvas point (cssX, cssY), or null off the photo. Renders
+   * just that one pixel offscreen, the same way `draw` does, and reads it back.
+   */
+  readPixel(cssX: number, cssY: number): [number, number, number] | null {
+    const gl = this.gl;
+    if (!this.texture || !this.hasParams || gl.isContextLost()) return null;
+    const dpr = window.devicePixelRatio || 1;
+    const w = Math.max(1, Math.round(this.canvas.clientWidth * dpr));
+    const h = Math.max(1, Math.round(this.canvas.clientHeight * dpr));
+    const panes = this.comparing ? 2 : 1;
+    const gap = this.comparing ? Math.round(dpr) : 0;
+    const pw = Math.floor((w - gap) / panes);
+    let px = cssX * dpr;
+    const py = cssY * dpr;
+    let right = false;
+    if (this.comparing && px >= w - pw) {
+      right = true;
+      px -= w - pw;
+    } else if (px >= pw) return null;
+    // As in `draw`: another photo is on the left, and this one on the right.
+    const pane = right !== (this.comparing && this.other !== null) ? 1 : 0;
+    const o = pane ? this.other : null;
+    if (o && !o.ready) return null;
+    const img = this.layout(pw, h, pane ? this.compareOut : this.out);
+    if (px < img.x || py < img.y || px >= img.x + img.w || py >= img.y + img.h) return null;
+    if (!this.probe) {
+      const tex = gl.createTexture()!;
+      gl.bindTexture(gl.TEXTURE_2D, tex);
+      gl.texStorage2D(gl.TEXTURE_2D, 1, gl.RGBA8, 1, 1);
+      const fbo = gl.createFramebuffer()!;
+      gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+      this.probe = { tex, fbo };
+    }
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.probe.fbo);
+    gl.viewport(0, 0, 1, 1);
+    // Shift the frame so the device pixel under the pointer is the target's only pixel.
+    const at = { x: img.x - Math.floor(px), y: img.y - Math.floor(py), w: img.w, h: img.h };
+    const whole = { x: 0, y: 0, w: 1, h: 1 };
+    this.bindPane(pane);
+    if (o) {
+      gl.activeTexture(gl.TEXTURE3);
+      gl.bindTexture(gl.TEXTURE_2D, o.presence);
+    }
+    gl.bindBuffer(gl.UNIFORM_BUFFER, this.viewUbo);
+    gl.bufferData(
+      gl.UNIFORM_BUFFER,
+      this.viewBlock(1, 1, at, whole, whole, 0, false, o ? [o.fullW, o.fullH] : undefined),
+      gl.DYNAMIC_DRAW,
+    );
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, o ? o.texture : this.texture);
+    gl.drawArrays(gl.TRIANGLES, 0, 6);
+    if (o) {
+      // Unit 3 holds this photo's maps between draws.
+      gl.activeTexture(gl.TEXTURE3);
+      gl.bindTexture(gl.TEXTURE_2D, this.presence);
+      gl.activeTexture(gl.TEXTURE0);
+    } else if (this.detail && this.scale > this.imageW / this.fullW) {
+      gl.bufferData(
+        gl.UNIFORM_BUFFER,
+        this.viewBlock(1, 1, at, whole, this.detail.rect),
+        gl.DYNAMIC_DRAW,
+      );
+      gl.bindTexture(gl.TEXTURE_2D, this.detail.texture);
+      gl.drawArrays(gl.TRIANGLES, 0, 6);
+    }
+    gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, this.probePixel);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.viewport(0, 0, w, h);
+    const p = this.probePixel;
+    return [p[0], p[1], p[2]];
+  }
+
+  /** Program, params, curve and brush layers for the main pane (0) or the compare pane (1). */
+  private bindPane(pane: number) {
+    const gl = this.gl;
+    gl.useProgram(this.program);
+    gl.bindBufferBase(gl.UNIFORM_BUFFER, PARAMS_BINDING, pane ? this.compareUbo : this.paramsUbo);
+    gl.bindBufferBase(gl.UNIFORM_BUFFER, VIEW_BINDING, this.viewUbo);
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, pane ? this.compareCurve : this.curve);
+    gl.activeTexture(gl.TEXTURE2);
+    gl.bindTexture(gl.TEXTURE_2D_ARRAY, (pane ? this.brush.compare : this.brush.main).texture);
+    gl.bindVertexArray(this.vao);
+  }
+
+  /** The part of the frame the main pane shows (uv of the frame). */
+  visible(): NavBox {
+    const dpr = window.devicePixelRatio || 1;
+    const cw = this.paneW * dpr;
+    const ch = this.canvas.clientHeight * dpr;
+    return visibleRect(this.layout(cw, ch), cw, ch);
+  }
+
+  /** Pan so the frame point (u, v) sits at the centre of the view (while zoomed). */
+  panTo(u: number, v: number) {
+    if (this.zoom === null) return;
+    this.center = { x: u, y: v };
+    const dpr = window.devicePixelRatio || 1;
+    this.clampCenter(this.paneW * dpr, this.canvas.clientHeight * dpr);
+    this.requestDraw();
+  }
+
   /** The photo whose pixels are uploaded (as given to `setImage`). */
   imageId: number | null = null;
 
@@ -487,10 +741,15 @@ export class PreviewRenderer {
     // flashes the wrong edit for a frame.
     this.hasParams = false;
     this.presenceFor = null;
-    this.lastParams = this.lastCompare = null;
+    this.lastParams = null;
     this.fullW = fullW;
     this.fullH = fullH;
-    this.out = this.compareOut = { w: fullW, h: fullH, m: [1, 0, 0, 0, 1, 0] };
+    this.out = { w: fullW, h: fullH, m: [1, 0, 0, 0, 1, 0] };
+    // Another photo in the compare pane stays, with its params.
+    if (!this.other) {
+      this.lastCompare = null;
+      this.compareOut = this.out;
+    }
     this.zoom = null;
     this.center = { x: 0.5, y: 0.5 };
     this.texture = gl.createTexture();
@@ -580,13 +839,19 @@ export class PreviewRenderer {
     return this.comparing ? this.canvas.clientWidth / 2 : this.canvas.clientWidth;
   }
 
+  /** CSS x of the pane showing this photo: the right one while another photo is beside it. */
+  get mainPaneX() {
+    return this.comparing && this.other !== null ? this.canvas.clientWidth - this.paneW : 0;
+  }
+
   /** Map a canvas x coordinate into its pane. */
   private paneX(cssX: number) {
     const p = this.paneW;
     return this.comparing && cssX >= p ? cssX - p : cssX;
   }
 
-  private fitScale() {
+  /** The scale at which the frame fits the pane. */
+  fitScale() {
     const dpr = window.devicePixelRatio || 1;
     const availW = Math.max(1, this.paneW - 2 * MARGIN_CSS_PX) * dpr;
     const availH = Math.max(1, this.canvas.clientHeight - 2 * MARGIN_CSS_PX) * dpr;
@@ -674,6 +939,7 @@ export class PreviewRenderer {
     tex: Rect,
     overlay = 0,
     maskOnly = false,
+    full: readonly [number, number] = [this.fullW, this.fullH],
   ) {
     const x = img.x + quad.x * img.w;
     const y = img.y + quad.y * img.h;
@@ -692,8 +958,8 @@ export class PreviewRenderer {
       tex.y,
       tex.w,
       tex.h,
-      this.fullW,
-      this.fullH,
+      full[0],
+      full[1],
       overlay,
       maskOnly ? 1 : 0,
     ]);
@@ -789,8 +1055,14 @@ export class PreviewRenderer {
     gl.useProgram(this.program);
     gl.bindBufferBase(gl.UNIFORM_BUFFER, VIEW_BINDING, this.viewUbo);
     gl.bindVertexArray(this.vao);
+    // Another photo goes on the left, this one (being edited) on the right.
+    const otherLeft = this.comparing && this.other !== null;
     for (let i = 0; i < panes; i++) {
-      gl.viewport(i ? w - pw : 0, 0, pw, h);
+      const o = i ? this.other : null;
+      if (o && !o.ready) continue;
+      gl.viewport(!!i === otherLeft ? 0 : w - pw, 0, pw, h);
+      gl.activeTexture(gl.TEXTURE3);
+      gl.bindTexture(gl.TEXTURE_2D, o ? o.presence : this.presence);
       gl.bindBufferBase(gl.UNIFORM_BUFFER, PARAMS_BINDING, i ? this.compareUbo : this.paramsUbo);
       gl.activeTexture(gl.TEXTURE1);
       gl.bindTexture(gl.TEXTURE_2D, i ? this.compareCurve : this.curve);
@@ -804,14 +1076,24 @@ export class PreviewRenderer {
       gl.bindBuffer(gl.UNIFORM_BUFFER, this.viewUbo);
       gl.bufferData(
         gl.UNIFORM_BUFFER,
-        this.viewBlock(pw, h, pane, whole, whole, overlay),
+        this.viewBlock(
+          pw,
+          h,
+          pane,
+          whole,
+          whole,
+          overlay,
+          false,
+          o ? [o.fullW, o.fullH] : undefined,
+        ),
         gl.DYNAMIC_DRAW,
       );
       gl.activeTexture(gl.TEXTURE0);
-      gl.bindTexture(gl.TEXTURE_2D, this.texture);
+      gl.bindTexture(gl.TEXTURE_2D, o ? o.texture : this.texture);
       gl.drawArrays(gl.TRIANGLES, 0, 6);
 
-      if (this.detail && this.scale > this.imageW / this.fullW) {
+      // (Full-res pixels are this photo's: another photo stays at preview resolution.)
+      if (!o && this.detail && this.scale > this.imageW / this.fullW) {
         gl.bufferData(
           gl.UNIFORM_BUFFER,
           this.viewBlock(pw, h, pane, whole, this.detail.rect, overlay),
@@ -820,6 +1102,12 @@ export class PreviewRenderer {
         gl.bindTexture(gl.TEXTURE_2D, this.detail.texture);
         gl.drawArrays(gl.TRIANGLES, 0, 6);
       }
+    }
+    if (otherLeft) {
+      // Unit 3 holds this photo's maps between draws (stills, histogram, mask thumbnails).
+      gl.activeTexture(gl.TEXTURE3);
+      gl.bindTexture(gl.TEXTURE_2D, this.presence);
+      gl.activeTexture(gl.TEXTURE0);
     }
     gl.viewport(0, 0, w, h);
     this.wantDetail(pw, h, img);
@@ -917,6 +1205,11 @@ export class PreviewRenderer {
     this.dropDetail();
     const gl = this.gl;
     if (this.texture) gl.deleteTexture(this.texture);
+    if (this.other) {
+      gl.deleteTexture(this.other.texture);
+      gl.deleteTexture(this.other.presence);
+      this.other = null;
+    }
     gl.deleteTexture(this.curve);
     gl.deleteTexture(this.compareCurve);
     gl.deleteTexture(this.stillCurve);
@@ -926,6 +1219,7 @@ export class PreviewRenderer {
     gl.deleteBuffer(this.stillUbo);
     if (this.histTex) gl.deleteTexture(this.histTex);
     if (this.histFbo) gl.deleteFramebuffer(this.histFbo);
+    if (this.probe) (gl.deleteTexture(this.probe.tex), gl.deleteFramebuffer(this.probe.fbo));
     gl.deleteBuffer(this.paramsUbo);
     gl.deleteBuffer(this.viewUbo);
     gl.deleteVertexArray(this.vao);

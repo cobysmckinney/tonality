@@ -16,6 +16,6 @@ pub mod sidecar;
 
 pub use catalog::{Catalog, CatalogError, ImageId};
 pub use edit::{EditState, Panel, WbPreset};
-pub use history::{Checkout, CommitId, HistoryView};
+pub use history::{Checkout, CommitId, Head, HistoryView};
 pub use mask::{Mask, MaskShape};
 pub use sidecar::{MergeSummary, Sidecar};

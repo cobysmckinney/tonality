@@ -4,6 +4,7 @@
   import BranchMenu from "$lib/history/BranchMenu.svelte";
   import Logo from "$lib/design/Logo.svelte";
   import { updates } from "$lib/settings/updates.svelte";
+  import { palette, shortcut } from "$lib/palette/commands.svelte";
 
   const modes: { id: Mode; label: string; key: string }[] = [
     { id: "library", label: "Library", key: "G" },
@@ -42,6 +43,19 @@
         Restart to Update
       </button>
     {/if}
+    <button
+      class="icon-btn"
+      class:on={palette.open}
+      onclick={() => palette.show()}
+      title="Commands ({shortcut('Mod+K')}) · Keyboard shortcuts (?)"
+      aria-label="Commands"
+    >
+      <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true">
+        <rect x="2" y="3.5" width="12" height="9" rx="1.5" /><path
+          d="M5 7h1M7.5 7h1M10 7h1M5.5 10h5"
+        />
+      </svg>
+    </button>
     <button
       class="icon-btn"
       class:on={updates.open}

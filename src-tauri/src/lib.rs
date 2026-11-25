@@ -114,6 +114,44 @@ async fn auto_white_balance(
     .await
 }
 
+/// White balance that makes the spot at frame position `at` (0..1 across the photo as `edit`
+/// frames it) neutral grey: `[temperature, tint]`, read from the camera data of a 5 × 5 pixel
+/// patch of the preview. `None` when the spot is outside the photo, clipped or black.
+#[tauri::command]
+async fn pick_white_balance(
+    id: ImageId,
+    edit: EditState,
+    at: [f32; 2],
+    images: State<'_, Images>,
+) -> CmdResult<Option<[f32; 2]>> {
+    let p = images.get(id).ok_or("image not open")?;
+    blocking(move || {
+        let lens = tonality_core::lens::lens_table(
+            p.lens.as_ref(),
+            &edit.lens,
+            p.full_width as f32,
+            p.full_height as f32,
+        );
+        let px = |x: u32, y: u32| {
+            let i = ((y * p.width + x) * 3) as usize;
+            [0, 1, 2].map(|k| half::f16::from_bits(p.pixels[i + k]).to_f32())
+        };
+        let cam = tonality_core::auto::sample_around(
+            p.width,
+            p.height,
+            px,
+            &edit.crop,
+            &lens,
+            p.full_width,
+            p.full_height,
+            at,
+            5,
+        );
+        Ok(tonality_core::auto::white_balance_at(&cam, &p.color).map(|(t, tint)| [t, tint]))
+    })
+    .await
+}
+
 /// Dev convenience: `TONALITY_OPEN=/path/to/file.ARW npm run tauri dev` imports a file and opens it.
 #[tauri::command]
 fn startup_path() -> Option<String> {
@@ -206,6 +244,29 @@ async fn open_image(
     tauri::async_runtime::spawn_blocking(move || images.open(id, &path, name, PREVIEW_EDGE))
         .await
         .map_err(|e| e.to_string())?
+}
+
+/// Decode a library photo to show next to the one being edited (see `Images::open_reference`).
+#[tauri::command]
+async fn open_reference(
+    id: ImageId,
+    images: State<'_, Images>,
+    store: State<'_, Store>,
+    catalog: State<'_, history::CatalogState>,
+) -> CmdResult<ImageInfo> {
+    let (rel, _, name) = catalog.read(move |c| c.image_file(id)).await?;
+    let path = store.abs(&rel);
+    let images = images.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        images.open_reference(id, &path, name, PREVIEW_EDGE)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+fn close_reference(id: ImageId, images: State<'_, Images>) {
+    images.close_reference(id);
 }
 
 /// Raw preview pixels: RGB16F little-endian, `width * height * 3` halves.
@@ -380,6 +441,7 @@ pub fn run() {
             wb_presets,
             auto_tone,
             auto_white_balance,
+            pick_white_balance,
             startup_path,
             startup_import,
             logging::ui_log,
@@ -390,6 +452,8 @@ pub fn run() {
             dev_script,
             preview_shaders,
             open_image,
+            open_reference,
+            close_reference,
             preview_pixels,
             detail_region,
             export::export_images,
@@ -411,7 +475,10 @@ pub fn run() {
             history::history_rename,
             history::history_delete,
             history::history_apply_from,
+            history::history_merge_preview,
             history::history_state,
+            history::history_head,
+            history::history_changes,
             history::history_reset,
             thumbs::library_save_edited,
             library::library_overview,

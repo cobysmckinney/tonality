@@ -2,6 +2,7 @@
 import { listen } from "@tauri-apps/api/event";
 import { pictureDir, join } from "@tauri-apps/api/path";
 import { api } from "$lib/api";
+import { toasts } from "$lib/toasts/toasts.svelte";
 import type { ExportSettings } from "$lib/bindings/ExportSettings";
 import type { ExportSummary } from "$lib/bindings/ExportSummary";
 
@@ -34,7 +35,6 @@ class Exporter {
   stopping = $state(false);
   progress = $state<{ done: number; total: number; name: string } | null>(null);
   result = $state<ExportSummary | null>(null);
-  error = $state<string | null>(null);
 
   constructor() {
     listen<{ done: number; total: number; name: string }>("export-progress", (e) => {
@@ -52,7 +52,6 @@ class Exporter {
       }
     }
     this.result = null;
-    this.error = null;
     this.ids = ids;
   }
 
@@ -71,11 +70,11 @@ class Exporter {
     this.stopping = false;
     this.progress = null;
     this.result = null;
-    this.error = null;
     try {
       this.result = await api.exportImages(this.ids, $state.snapshot(this.settings));
     } catch (e) {
-      this.error = String(e);
+      const n = this.ids.length;
+      toasts.error(`Couldn’t export ${n === 1 ? "the photo" : `${n} photos`}`, e);
     } finally {
       this.running = false;
       this.stopping = false;
@@ -86,7 +85,7 @@ class Exporter {
   async stop() {
     if (!this.running || this.stopping) return;
     this.stopping = true;
-    await api.exportCancel().catch((e) => (this.error = String(e)));
+    await api.exportCancel().catch((e) => toasts.error("Couldn’t stop the export", e));
   }
 }
 

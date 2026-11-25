@@ -14,6 +14,12 @@
   import type { ImageInfo } from "$lib/bindings/ImageInfo";
   import Section from "$lib/design/Section.svelte";
   import Slider from "$lib/design/Slider.svelte";
+  import Select, { type SelectOption } from "$lib/design/Select.svelte";
+  import type { WhiteBalance } from "$lib/bindings/WhiteBalance";
+  import { wbPick } from "./wbpick.svelte";
+  import ToolStrip from "./ToolStrip.svelte";
+  import { shootingInfo } from "./shooting";
+  import { library } from "$lib/library/state.svelte";
   import ColorGradingPanel from "./ColorGrading.svelte";
   import CurveEditor from "./CurveEditor.svelte";
   import { GRADING_DEFAULT } from "./grading";
@@ -32,6 +38,12 @@
     oncommit?: (key: string | null) => void;
   }
   let { edit = $bindable(), image, histogram, oncommit }: Props = $props();
+
+  // ISO, shutter, aperture, focal length: from the catalog row (ImageInfo has no capture data).
+  const shooting = $derived.by(() => {
+    const meta = library.images.find((i) => i.id === image.id)?.meta;
+    return meta ? shootingInfo(meta) : [];
+  });
 
   type LightKey = keyof EditState["light"];
   const lightControls: {
@@ -53,7 +65,8 @@
   const wb = $derived(edit.whiteBalance);
   const isAsShot = $derived(wb.temperature === null && wb.tint === null);
 
-  // ---- white balance: As Shot, a preset, or Custom (the only mode with sliders) ----
+  // ---- white balance: a mode from the list (As Shot, Auto, a preset, Custom), the sliders,
+  // and the eyedropper. Moving a slider makes it Custom. ----
   type WbMode = "asShot" | WbPreset | "custom";
   const wbMode = $derived<WbMode>(wb.preset ?? (isAsShot ? "asShot" : "custom"));
   let presets = $state<WbPresetInfo[]>(cachedPresets ?? []);
@@ -63,13 +76,96 @@
       .then((p) => (presets = cachedPresets = p))
       .catch((e) => console.warn("[wb] presets:", e));
   }
+  const kelvin = (t: number) => `${Math.round(t)} K`;
+  const wbOptions = $derived<SelectOption[]>([
+    { id: "asShot", label: "As Shot", detail: kelvin(image.asShotTemperature) },
+    { id: "auto", label: "Auto", title: "Measure the light from this photo" },
+    ...presets.map((p) => ({
+      id: p.preset,
+      label: p.label,
+      detail: kelvin(p.temperature),
+      title: `${p.label}: ${p.temperature} K, tint ${p.tint > 0 ? "+" : ""}${p.tint}`,
+    })),
+    { id: "custom", label: "Custom", title: "Set temperature and tint yourself" },
+  ]);
 
   function resetWb() {
     edit.whiteBalance = { temperature: null, tint: null };
     oncommit?.(null);
   }
-  // ---- auto (tone, white balance): computed from the preview by the backend ----
-  let autoBusy = $state<"tone" | "wb" | null>(null);
+
+  /** The sliders' values, as Custom (no preset). */
+  function setWb(patch: { temperature?: number | null; tint?: number | null }) {
+    edit.whiteBalance = {
+      temperature: wb.temperature ?? image.asShotTemperature,
+      tint: wb.tint ?? image.asShotTint,
+      ...patch,
+    };
+  }
+
+  // Auto's result for this photo and framing (it reads inside the crop, through the lens),
+  // kept so hovering Auto in the list again doesn't measure again.
+  let autoCache: { key: string; result: Promise<[number, number] | null> } | null = null;
+  function autoWbValues(): Promise<[number, number] | null> {
+    const key = JSON.stringify([image.id, edit.crop, edit.lens ?? null]);
+    if (autoCache?.key !== key) {
+      const result = api.autoWhiteBalance(image.id, $state.snapshot(edit) as EditState);
+      result.catch((e) => {
+        console.warn("[auto] white balance:", e);
+        autoCache = null;
+      });
+      autoCache = { key, result };
+    }
+    return autoCache.result.catch(() => null);
+  }
+
+  /** The white balance `mode` sets, starting from `from` (Custom keeps its values). */
+  async function wbOf(mode: string, from: WhiteBalance): Promise<WhiteBalance | null> {
+    if (mode === "asShot") return { temperature: null, tint: null };
+    if (mode === "custom")
+      return {
+        temperature: from.temperature ?? image.asShotTemperature,
+        tint: from.tint ?? image.asShotTint,
+      };
+    if (mode === "auto") {
+      const r = await autoWbValues();
+      return r && { temperature: r[0], tint: r[1], preset: "auto" };
+    }
+    const p = presets.find((x) => x.preset === mode);
+    return p ? { temperature: p.temperature, tint: p.tint, preset: p.preset } : null;
+  }
+
+  // Hovering (or arrowing onto) a mode in the open list shows it on the photo; closing the list
+  // without choosing puts back what was there. Only choosing commits.
+  // `mode`: what the list shows as chosen meanwhile.
+  let wbBefore = $state.raw<{ id: number; wb: WhiteBalance; mode: WbMode } | null>(null);
+  let previewSeq = 0;
+  function previewWb(mode: string | null) {
+    const seq = ++previewSeq;
+    if (wbBefore && wbBefore.id !== image.id) wbBefore = null; // another photo opened meanwhile
+    if (mode === null) {
+      if (wbBefore) edit.whiteBalance = wbBefore.wb;
+      wbBefore = null;
+      return;
+    }
+    wbBefore ??= { id: image.id, wb: $state.snapshot(edit.whiteBalance), mode: wbMode };
+    const id = image.id;
+    wbOf(mode, wbBefore.wb).then((w) => {
+      if (w && seq === previewSeq && wbBefore && image.id === id) edit.whiteBalance = w;
+    });
+  }
+  async function chooseWb(mode: string) {
+    const seq = ++previewSeq;
+    const id = image.id;
+    const from = wbBefore && wbBefore.id === id ? wbBefore.wb : $state.snapshot(edit.whiteBalance);
+    wbBefore = null;
+    const w = await wbOf(mode, from);
+    if (seq !== previewSeq || image.id !== id) return;
+    edit.whiteBalance = w ?? from;
+    if (w && !same(w, from)) oncommit?.(null);
+  }
+  // ---- auto tone: computed from the preview by the backend ----
+  let autoBusy = $state<"tone" | null>(null);
   async function autoTone() {
     if (autoBusy) return;
     const id = image.id;
@@ -85,40 +181,6 @@
       autoBusy = null;
     }
   }
-  async function autoWb() {
-    if (autoBusy) return;
-    const id = image.id;
-    autoBusy = "wb";
-    try {
-      const r = await api.autoWhiteBalance(id, $state.snapshot(edit));
-      if (!r || image.id !== id) return;
-      edit.whiteBalance = { temperature: r[0], tint: r[1], preset: "auto" };
-      oncommit?.(null);
-    } catch (e) {
-      console.warn("[auto] white balance:", e);
-    } finally {
-      autoBusy = null;
-    }
-  }
-
-  function chooseWb(mode: WbMode) {
-    if (mode === wbMode) return;
-    if (mode === "asShot") return resetWb();
-    if (mode === "auto") return void autoWb();
-    if (mode === "custom") {
-      // Start the sliders where the current balance is.
-      edit.whiteBalance = {
-        temperature: wb.temperature ?? image.asShotTemperature,
-        tint: wb.tint ?? image.asShotTint,
-      };
-    } else {
-      const p = presets.find((x) => x.preset === mode);
-      if (!p) return;
-      edit.whiteBalance = { temperature: p.temperature, tint: p.tint, preset: p.preset };
-    }
-    oncommit?.(null);
-  }
-
   // ---- colour mixer ----
   type Band = keyof ColorMixer;
   type BandProp = keyof HueBand;
@@ -237,113 +299,71 @@
 <div class="panel">
   <div class="top">
     <HistogramView {histogram} />
-    <div class="tools">
-      <button
-        class="tool"
-        onclick={() => session.startCrop()}
-        title="Crop, rotate and straighten (R)"
-      >
-        <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true">
-          <path d="M4 1v11h11M1 4h11v11" />
-        </svg>
-        <span>Crop</span>
-        <kbd>R</kbd>
-      </button>
-      <button
-        class="tool"
-        onclick={() => session.startMasks()}
-        title="Local adjustments: gradients and brush (M)"
-      >
-        <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true">
-          <circle cx="8" cy="8" r="6" /><path d="M8 2a6 6 0 0 0 0 12Z" />
-        </svg>
-        <span>Masks</span>
-        {#if edit.masks?.length}<span class="count">{edit.masks.length}</span>{:else}<kbd>
-            M
-          </kbd>{/if}
-      </button>
-    </div>
+    {#if shooting.length}<p class="shooting">{shooting.join(" · ")}</p>{/if}
+    <ToolStrip masks={edit.masks?.length ?? 0} />
   </div>
 
   <div class="scroll">
     <Section title="White Balance" edited={edited.wb} onreset={resetWb}>
-      <div class="wb-modes" role="radiogroup" aria-label="White balance">
+      <div class="wb-row">
+        <Select
+          label="White balance"
+          options={wbOptions}
+          value={wbBefore && wbBefore.id === image.id ? wbBefore.mode : wbMode}
+          onpreview={previewWb}
+          onchoose={chooseWb}
+        />
         <button
-          role="radio"
-          aria-checked={wbMode === "asShot"}
-          class:active={wbMode === "asShot"}
-          onclick={() => chooseWb("asShot")}
+          class="icon-btn wb-pick"
+          class:on={wbPick.active}
+          aria-pressed={wbPick.active}
+          onclick={() => wbPick.toggle()}
+          title="White balance picker (W): click something in the photo that should be neutral grey"
         >
-          As Shot
-        </button>
-        <button
-          role="radio"
-          aria-checked={wbMode === "auto"}
-          class:active={wbMode === "auto"}
-          disabled={autoBusy !== null}
-          onclick={() => chooseWb("auto")}
-          title="Measure the light from this photo"
-        >
-          Auto
-        </button>
-        {#each presets as p (p.preset)}
-          <button
-            role="radio"
-            aria-checked={wbMode === p.preset}
-            class:active={wbMode === p.preset}
-            onclick={() => chooseWb(p.preset)}
-            title={`${p.label}: ${p.temperature} K, tint ${p.tint > 0 ? "+" : ""}${p.tint}`}
-          >
-            {p.label}
-          </button>
-        {/each}
-        <button
-          role="radio"
-          aria-checked={wbMode === "custom"}
-          class:active={wbMode === "custom"}
-          onclick={() => chooseWb("custom")}
-          title="Set temperature and tint yourself"
-        >
-          Custom
+          <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true">
+            <path
+              d="M9 3.5 12.5 7M10.8 1.7a1.6 1.6 0 0 1 2.3 0l1.2 1.2a1.6 1.6 0 0 1 0 2.3L12 7.5 8.5 4Z"
+            />
+            <path d="M10.3 5.7 4.5 11.5 3 14l-1-1 2.5-1.5" />
+          </svg>
         </button>
       </div>
-      {#if wbMode !== "custom"}
-        {@const t = wb.temperature ?? image.asShotTemperature}
-        {@const tint = wb.tint ?? image.asShotTint}
-        <p class="wb-readout">{Math.round(t)} K · Tint {tint > 0 ? "+" : ""}{Math.round(tint)}</p>
-      {:else}
-        <Slider
-          label="Temperature"
-          value={wb.temperature ?? image.asShotTemperature}
-          min={2000}
-          max={12000}
-          step={50}
-          defaultValue={image.asShotTemperature}
-          unit="K"
-          bipolar={false}
-          track="linear-gradient(90deg, #4f7fd9, #d8d8d8 40%, #e0a63c)"
-          oninput={(v) => (edit.whiteBalance.temperature = v)}
-          oncommit={() => oncommit?.("temperature")}
-          onreset={() => {
-            edit.whiteBalance.temperature = null;
-            oncommit?.(null);
-          }}
-        />
-        <Slider
-          label="Tint"
-          value={wb.tint ?? image.asShotTint}
-          min={-150}
-          max={150}
-          defaultValue={image.asShotTint}
-          track="linear-gradient(90deg, #4fb55a, #d8d8d8 50%, #c45bc4)"
-          oninput={(v) => (edit.whiteBalance.tint = v)}
-          oncommit={() => oncommit?.("tint")}
-          onreset={() => {
-            edit.whiteBalance.tint = null;
-            oncommit?.(null);
-          }}
-        />
+      {#if wbPick.active}
+        <p class="note">
+          {wbPick.miss ?? "Click something that should be neutral grey. Esc cancels."}
+        </p>
       {/if}
+      <Slider
+        label="Temperature"
+        value={wb.temperature ?? image.asShotTemperature}
+        min={2000}
+        max={12000}
+        step={50}
+        defaultValue={image.asShotTemperature}
+        unit="K"
+        bipolar={false}
+        track="linear-gradient(90deg, #4f7fd9, #d8d8d8 40%, #e0a63c)"
+        oninput={(v) => setWb({ temperature: v })}
+        oncommit={() => oncommit?.("temperature")}
+        onreset={() => {
+          edit.whiteBalance = { temperature: null, tint: wb.tint };
+          oncommit?.(null);
+        }}
+      />
+      <Slider
+        label="Tint"
+        value={wb.tint ?? image.asShotTint}
+        min={-150}
+        max={150}
+        defaultValue={image.asShotTint}
+        track="linear-gradient(90deg, #4fb55a, #d8d8d8 50%, #c45bc4)"
+        oninput={(v) => setWb({ tint: v })}
+        oncommit={() => oncommit?.("tint")}
+        onreset={() => {
+          edit.whiteBalance = { temperature: wb.temperature, tint: null };
+          oncommit?.(null);
+        }}
+      />
     </Section>
 
     <Section title="Light" edited={edited.light} onreset={() => reset("light")}>
@@ -662,87 +682,28 @@
   .end {
     height: var(--space-5);
   }
-  .tools {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: var(--space-2);
+  .shooting {
+    margin: calc(-1 * var(--space-1)) 0 var(--space-2);
     padding: 0 var(--space-4);
-  }
-  .tool {
-    display: flex;
-    align-items: center;
-    gap: var(--space-2);
-    height: 34px;
-    padding: 0 var(--space-3);
-    border-radius: var(--radius-m);
-    background: var(--bg-2);
-    color: var(--text-1);
-    font-size: var(--fs-s);
-    transition:
-      background 120ms var(--ease),
-      color 120ms var(--ease);
-  }
-  .tool:hover {
-    background: var(--bg-3);
-    color: var(--text-0);
-  }
-  .tool svg {
-    flex: none;
-    fill: none;
-    stroke: currentColor;
-    stroke-width: 1.5;
-  }
-  kbd,
-  .count {
-    margin-left: auto;
     font-family: var(--font-num);
     font-size: 10px;
     color: var(--text-2);
-  }
-  kbd {
-    padding: 0 5px;
-    border-radius: 4px;
-    border: 1px solid var(--line-strong);
-    line-height: 16px;
-  }
-  .count {
-    min-width: 18px;
-    padding: 0 5px;
-    border-radius: var(--radius-pill);
-    background: var(--bg-4);
-    color: var(--text-0);
     text-align: center;
-    line-height: 18px;
-  }
-  .wb-modes {
-    display: grid;
-    grid-template-columns: repeat(4, 1fr);
-    gap: 2px;
-    padding: 2px;
-    border-radius: var(--radius-m);
-    background: var(--bg-0);
-  }
-  .wb-modes button {
-    padding: 4px 0;
-    border-radius: var(--radius-s);
-    font-size: var(--fs-xs);
-    color: var(--text-2);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
   }
-  .wb-modes button:hover {
-    color: var(--text-0);
+  .wb-row {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: var(--space-1);
+    align-items: center;
   }
-  .wb-modes button.active {
-    background: var(--bg-3);
-    color: var(--text-0);
-  }
-  .wb-readout {
-    margin: 0;
-    font-size: var(--fs-xs);
-    color: var(--text-2);
-    font-variant-numeric: tabular-nums;
+  .wb-pick {
+    width: 28px;
+    height: 28px;
+    background: var(--bg-2);
+    color: var(--text-1);
   }
   .spacer {
     height: var(--space-1);

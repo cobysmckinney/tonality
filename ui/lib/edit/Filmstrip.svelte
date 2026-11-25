@@ -2,6 +2,7 @@
   Filmstrip: the Library's current view (All Photos, an album, an import, with its filters) as a
   strip under the canvas, so photos can be switched without leaving Edit.
   Click a photo, or ← / → for the previous / next one. Horizontally virtualised.
+  The header also names the open photo and its camera.
 -->
 <script lang="ts">
   import { library } from "$lib/library/state.svelte";
@@ -45,6 +46,33 @@
     session.open(id);
   }
 
+  // Compare with another photo: right-click → "Compare with this photo", or Alt+click.
+  const referenceId = $derived(session.compare?.kind === "photo" ? session.compare.image.id : null);
+  let menu = $state<{ id: number; x: number; y: number } | null>(null);
+  let menuEl = $state<HTMLDivElement>();
+
+  function onClick(e: MouseEvent, id: number) {
+    if (e.altKey) {
+      e.preventDefault();
+      if (id !== currentId) session.compareWith(id);
+    } else open(id);
+  }
+
+  function onContextMenu(e: MouseEvent, id: number) {
+    e.preventDefault();
+    menu = { id, x: e.clientX, y: e.clientY };
+  }
+
+  function onWindowDown(e: PointerEvent) {
+    if (menu && !menuEl?.contains(e.target as Node)) menu = null;
+  }
+  function onWindowKey(e: KeyboardEvent) {
+    if (menu && e.key === "Escape") {
+      e.stopPropagation(); // closes the menu, not the compare
+      menu = null;
+    }
+  }
+
   // Vertical wheel scrolls the strip sideways.
   function onWheel(e: WheelEvent) {
     if (!el || Math.abs(e.deltaX) > Math.abs(e.deltaY)) return;
@@ -52,6 +80,12 @@
     el.scrollLeft += e.deltaY;
   }
 </script>
+
+<svelte:window
+  onpointerdown={onWindowDown}
+  onkeydowncapture={onWindowKey}
+  onblur={() => (menu = null)}
+/>
 
 <div class="strip">
   <div class="bar">
@@ -61,13 +95,22 @@
         {index >= 0 ? `${index + 1} of ${images.length}` : `${images.length} photos`}
       </span>
     {/if}
-    <span class="keys">← → to switch photos</span>
+    {#if session.image}
+      {@const camera = `${session.image.make} ${session.image.model}`.trim()}
+      <span class="photo" title="{session.image.name} · {camera}">
+        <span class="name">{session.image.name}</span>
+        <span class="camera">{camera}</span>
+      </span>
+    {/if}
   </div>
   <div
     class="scroller"
     bind:this={el}
     bind:clientWidth={width}
-    onscroll={() => el && (scroll = el.scrollLeft)}
+    onscroll={() => {
+      if (el) scroll = el.scrollLeft;
+      menu = null;
+    }}
     onwheel={onWheel}
   >
     <div class="track" style:width="{PAD * 2 + images.length * STEP - GAP}px">
@@ -76,12 +119,14 @@
         <button
           class="cell"
           class:current={img.id === currentId}
+          class:reference={img.id === referenceId}
           class:rejected={img.flag < 0}
           style:transform="translateX({PAD + i * STEP}px)"
           style:width="{CELL}px"
           style:height="{CELL}px"
-          onclick={() => open(img.id)}
-          title={img.name}
+          onclick={(e) => onClick(e, img.id)}
+          oncontextmenu={(e) => onContextMenu(e, img.id)}
+          title={img.id === referenceId ? `${img.name} (comparing with it)` : img.name}
         >
           <img
             use:thumbnail={thumbKey(img.id, img.head)}
@@ -100,6 +145,40 @@
     {/if}
   </div>
 </div>
+
+{#if menu}
+  {@const id = menu.id}
+  <div
+    class="menu"
+    role="menu"
+    bind:this={menuEl}
+    style:left="{Math.min(menu.x, window.innerWidth - 220)}px"
+    style:bottom="{window.innerHeight - menu.y}px"
+  >
+    {#if id === referenceId}
+      <button
+        role="menuitem"
+        onclick={() => {
+          menu = null;
+          session.stopCompare();
+        }}
+      >
+        Stop comparing
+      </button>
+    {:else}
+      <button
+        role="menuitem"
+        disabled={id === currentId || !session.image}
+        onclick={() => {
+          session.compareWith(id); // (before closing: `id` reads the menu)
+          menu = null;
+        }}
+      >
+        Compare with this photo <span class="key">Alt+click</span>
+      </button>
+    {/if}
+  </div>
+{/if}
 
 <style>
   .strip {
@@ -126,8 +205,22 @@
   .pos {
     font-variant-numeric: tabular-nums;
   }
-  .keys {
+  /* The open photo's file and camera, at the right (clear of Edit's hide button). */
+  .photo {
+    display: flex;
+    gap: var(--space-2);
+    min-width: 0;
     margin-left: auto;
+    margin-right: 28px;
+    overflow: hidden;
+  }
+  .photo .name {
+    color: var(--text-1);
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .photo .camera {
+    flex: none;
   }
   .scroller {
     position: relative;
@@ -171,6 +264,39 @@
   }
   img:not([src]) {
     display: none;
+  }
+  .cell.reference {
+    box-shadow: inset 0 0 0 2px var(--text-2);
+  }
+  .menu {
+    position: fixed;
+    z-index: 40;
+    min-width: 200px;
+    padding: var(--space-1);
+    border-radius: var(--radius-m);
+    background: var(--bg-1);
+    box-shadow: var(--shadow-pop);
+  }
+  .menu button {
+    display: flex;
+    justify-content: space-between;
+    gap: var(--space-4);
+    width: 100%;
+    padding: 6px var(--space-2);
+    border-radius: var(--radius-s);
+    text-align: left;
+    font-size: var(--fs-s);
+    color: var(--text-0);
+  }
+  .menu button:hover:not(:disabled) {
+    background: var(--bg-3);
+  }
+  .menu button:disabled {
+    color: var(--text-2);
+  }
+  .key {
+    color: var(--text-2);
+    font-size: var(--fs-xs);
   }
   .rejected img:global(.loaded) {
     opacity: 0.35;

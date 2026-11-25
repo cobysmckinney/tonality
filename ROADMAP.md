@@ -21,11 +21,24 @@ commit.
 
 In review. Move each to **Done** when its pull request merges.
 
-- [ ] A bad raw file can't take the app down; log file with panics in it; `.x3f` dropped (#58).
-- [ ] Remove photos from the library, to the system's Trash; read-only files import (#59).
-- [ ] Stop a running import or export (#60).
-- [ ] GPU tests run in CI, on a macOS runner (#61).
-- [ ] macOS build signed and notarised once the Apple secrets exist (#62).
+From a review of the interface (2026-11-24), built in parallel:
+
+- [ ] Rate, pick and reject in Edit; an edited mark on grid and filmstrip thumbnails
+      (#75).
+- [ ] White balance as a dropdown with Temperature and Tint always shown, hover to preview a
+      preset, and an eyedropper (#68). Also 0.3's eyedropper item.
+- [ ] Right panel: a tool strip under the histogram, the shooting info (ISO, shutter, aperture,
+      focal length), Auto as a real button, sections that remember being open, and an option to
+      keep one open at a time (#69).
+- [ ] History: what a step changed, on hover; hover a version to preview it; times by session
+      instead of "now" on every step; Reset all history moved into the version menu; a
+      resizable panel (#73).
+- [ ] Merge from another version, panel by panel, with a live preview (#74).
+- [ ] Canvas: file name and camera moved to the filmstrip, a zoom menu, no "← →" hint
+      (#70); a pixel readout and a navigator when zoomed in (#72).
+- [ ] Errors and notices as toasts (#66). Also 0.2's toast item.
+- [ ] Command palette (Ctrl+K), with every shortcut listed under `?` (#67).
+- [ ] Compare with another photo, side by side, to match a look (#71).
 
 ---
 
@@ -39,7 +52,7 @@ Each milestone is a release. The order inside one is a suggestion.
 
 ### 0.2 Trust
 
-What's left after the five fixes in **Now**.
+What's left after #58–#62.
 
 - [ ] Say so when the library is already open in another window. Today the app exits with
       nothing on screen (the reason is in the log).
@@ -51,6 +64,8 @@ What's left after the five fixes in **Now**.
       photos frees their ids for the next import; #59 clears the caches kept by id, and a
       catalog migration would end the hazard. Changes the catalog: do it before the format
       freezes.
+- [ ] `export::tests::writes_ultra_hdr` is flaky: it compares two ICC profiles that record
+      their creation time to the second, so it fails when they're made a second apart.
 - [ ] Answer a thumbnail request whose job panicked, so the grid cell doesn't wait for ever.
 - [ ] Sign the Windows installer. Open question: the route (SignPath Foundation, Azure
       Artifact Signing, or stay unsigned); see "Signing" in the README.
@@ -66,15 +81,21 @@ What's left after the five fixes in **Now**.
 
 ### 0.3 A whole shoot
 
-Today nothing works across photos: settings copy only between versions of one photo.
+Today nothing works across photos: settings copy only between versions of one photo. This is
+what most stands between tonality and someone using it for a real shoot, so it runs alongside
+what's left of 0.2 rather than after it.
 
+- [ ] Type a value into a slider.
+- [ ] White balance eyedropper.
 - [ ] Copy and paste settings between photos, and sync them to a selection, choosing which
-      panels. Open question: build it as "apply this step, or this version, to other photos"
-      (a cherry-pick), which would make presets the same feature.
+      panels. Build it as "apply this step, or this version, to other photos" (a cherry-pick):
+      the Copy Settings dialog already applies chosen panels from a version as one step, so
+      the source becomes another photo's step or version, and a preset is a saved one.
 - [ ] Presets: save, apply, and apply on import.
 - [ ] Auto (Light and white balance) for a selection.
-- [ ] White balance eyedropper.
-- [ ] Type a value into a slider.
+- [ ] Culling: full screen, embedded previews, pick and reject at speed, compare several
+      photos (from 0.5: culling comes before editing).
+- [ ] Filters for camera, lens, ISO and date range (from 0.5: the metadata is stored already).
 - [ ] Clipping shown on the photo, not only as the histogram's corner marks.
 - [ ] A true before and after: "before" currently also undoes the crop. Add a split view.
 - [ ] Full screen, and hide the right-hand panel.
@@ -91,7 +112,7 @@ What a raw editor is expected to have.
 - [ ] Highlight reconstruction. Blown highlights currently clip to neutral after white balance.
 - [ ] Spot healing and clone.
 - [ ] Perspective: keystone sliders, then guided or automatic upright.
-- [ ] Colour grading: shadows, midtones and highlights.
+- [x] Colour grading: shadows, midtones and highlights (#64).
 - [ ] Black and white with a mixer.
 - [ ] Hot and dead pixel removal.
 - [ ] Lens corrections the camera wrote into the file for Fujifilm, OM/Olympus and Panasonic
@@ -108,14 +129,11 @@ What a raw editor is expected to have.
 ### 0.5 Library
 
 - [ ] Keywords, colour labels, captions.
-- [ ] Search, and filters for camera, lens, ISO and date range (the metadata is stored, but
-      nothing queries it).
+- [ ] Search (camera, lens, ISO and date filters moved to 0.3).
 - [ ] Saved searches as smart albums.
 - [ ] Open and switch libraries from the app (`TONALITY_LIBRARY` only, today).
 - [ ] Import JPEG, TIFF and HEIC. Open question: how far the raw pipeline's assumptions go for
       photos that are already rendered.
-- [ ] Culling: full screen, embedded previews, pick and reject at speed, compare several
-      photos.
 - [ ] Group raw + JPEG pairs and bursts.
 - [ ] A full metadata panel.
 - [ ] Hold up with 50,000 photos: page `library_images`, don't lay out every row on every
@@ -183,7 +201,12 @@ _(new ideas go here)_
 - Tethered shooting; printing.
 
 ## Done
-- 2026-11-23 — Colour grading: one wheel with a dot each for shadows, midtones and highlights, plus Blending and Balance; the dots can be linked in a shape (analogous, complementary, triadic, split-complementary) so dragging one turns and grows all three (`feat/colour-grading`; `docs/colour-grading.md`).
+- 2026-11-23 — macOS build signed and notarised once the Apple secrets exist (#62).
+- 2026-11-23 — GPU tests run in CI, on a macOS runner (#61).
+- 2026-11-23 — Stop a running import or export (#60).
+- 2026-11-23 — Remove photos from the library, to the system's Trash; read-only files import (#59).
+- 2026-11-23 — A bad raw file can't take the app down; log file with panics in it; `.x3f` dropped (#58).
+- 2026-11-23 — Colour grading (#64): one wheel with a dot each for shadows, midtones and highlights, plus Blending and Balance; the dots can be linked in a shape (analogous, complementary, triadic, split-complementary) so dragging one turns and grows all three (`feat/colour-grading`; `docs/colour-grading.md`).
 - 2026-11-17 — Auto: Light (exposure, then range sliders, from a model of tone + AgX checked against the shader) and white balance (grey pixels from As Shot), in Edit, one undo step each (`auto-settings`; `docs/auto.md`).
 - 2026-11-17 — Camera metadata in exports: EXIF (camera, lens, exposure, capture time, artist, copyright), star rating as EXIF + XMP, GPS behind an Export toggle (off by default); every format incl. Ultra HDR (`export-metadata`; `docs/export-metadata.md`).
 - 2026-11-17 — Ultra HDR files without JFIF (MPF must follow SOI), one ICC profile per space (fixed a flaky test); repo formatted with rustfmt and Prettier, format checks added to the checklist (`leftovers-2`).
