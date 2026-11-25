@@ -308,6 +308,11 @@ impl Catalog {
         self.checkout_result(image)
     }
 
+    /// The version and commit an image shows, without creating a history (None: never opened).
+    pub fn history_head(&self, image: ImageId) -> Result<Option<Head>> {
+        head(&self.conn, image)
+    }
+
     pub fn history_view(&self, image: ImageId) -> Result<HistoryView> {
         let c = &self.conn;
         let head = head(c, image)?.ok_or_else(|| CatalogError::NotFound("history".into()))?;
@@ -675,6 +680,23 @@ mod tests {
 
     fn summaries(c: &Checkout) -> Vec<&str> {
         c.view.commits.iter().map(|c| c.summary.as_str()).collect()
+    }
+
+    #[test]
+    fn head_is_read_without_creating_a_history() {
+        let (mut cat, _, img) = catalog();
+        assert_eq!(cat.history_head(img).unwrap(), None);
+        assert_eq!(
+            cat.history_head(img).unwrap(),
+            None,
+            "reading it created nothing"
+        );
+        let root = cat.history_open(img).unwrap().view.head.commit;
+        cat.create_branch(img, root, Some("bw")).unwrap();
+        let tip = cat.commit(img, &exp(1.0), None).unwrap().view.head.commit;
+        let h = cat.history_head(img).unwrap().unwrap();
+        assert_eq!((h.branch.as_str(), h.commit), ("bw", tip));
+        assert_eq!(cat.state_at(h.commit).unwrap().light.exposure, 1.0);
     }
 
     #[test]

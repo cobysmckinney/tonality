@@ -3,7 +3,7 @@
 use std::sync::{Arc, Mutex, OnceLock};
 
 use tauri::{Manager, State};
-use tonality_core::{Catalog, Checkout, CommitId, EditState, ImageId, Panel};
+use tonality_core::{Catalog, Checkout, CommitId, EditState, Head, ImageId, Panel};
 
 use crate::sidecar::Sidecars;
 use crate::store::Store;
@@ -216,6 +216,16 @@ pub async fn history_state(
     catalog: State<'_, CatalogState>,
 ) -> CmdResult<EditState> {
     catalog.read(move |c| c.state_at(commit)).await
+}
+
+/// The version an image shows (None: never edited), read without creating its history: for a
+/// photo shown next to the one being edited.
+#[tauri::command]
+pub async fn history_head(
+    image_id: ImageId,
+    catalog: State<'_, CatalogState>,
+) -> CmdResult<Option<Head>> {
+    catalog.read(move |c| c.history_head(image_id)).await
 }
 
 /// Take photos back to as-shot and delete all their history (see
