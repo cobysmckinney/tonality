@@ -190,6 +190,8 @@
                   <span class="state warn">Nothing found</span>
                 {:else if st?.state === "error"}
                   <span class="state warn">Detection failed</span>
+                {:else if st?.state === "declined"}
+                  <span class="state warn">Not downloaded</span>
                 {:else if m.enabled && !drawn}
                   <span class="state warn">Not drawn: over {MAX_MASKS}</span>
                 {:else if m.invert}

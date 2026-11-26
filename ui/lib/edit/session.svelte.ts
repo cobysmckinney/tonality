@@ -26,9 +26,14 @@ import {
   type MaskKind,
 } from "./masks";
 
-/** Where an AI mask's detection stands (keyed by `aiKey`). */
+/** Where an AI mask's detection stands (keyed by `aiKey`). `declined`: its model isn't
+ *  installed and the download was turned down, for this photo. */
 export type AiStatus =
-  { state: "working" } | { state: "found" } | { state: "empty" } | { state: "error" };
+  | { state: "working" }
+  | { state: "found" }
+  | { state: "empty" }
+  | { state: "error" }
+  | { state: "declined" };
 
 /** The latest `ai-progress` event: a model download, or a detection running. */
 export interface AiProgress {
@@ -124,8 +129,20 @@ class EditSession {
     return this.commit(null);
   }
 
+  /** The download prompt that is open for each model, so two masks waiting on one model
+   *  (Sky and People, Subject and Background) share one prompt, not one each. */
+  #asking = new Map<string, Promise<boolean>>();
+
   /** Ask before a model's first download. Resolves false if declined. */
-  private async confirmModel(model: string): Promise<boolean> {
+  private confirmModel(model: string): Promise<boolean> {
+    const open = this.#asking.get(model);
+    if (open) return open;
+    const asked = this.askForModel(model).finally(() => this.#asking.delete(model));
+    this.#asking.set(model, asked);
+    return asked;
+  }
+
+  private async askForModel(model: string): Promise<boolean> {
     if (this.approved.has(model)) return true;
     let info;
     try {
@@ -202,8 +219,11 @@ class EditSession {
     }
   }
 
-  /** Run the model for an AI mask, unless it's already running. */
-  async detect(m: Mask) {
+  /**
+   * Run the model for an AI mask, unless it's already running. `lens`: the lens settings of
+   * the state the mask is in, when that isn't the current edit (a previewed version).
+   */
+  async detect(m: Mask, lens = this.edit?.lens ?? null) {
     const key = aiKey(m);
     const id = this.image?.id;
     if (
@@ -218,7 +238,7 @@ class EditSession {
     // Statuses are per photo (cleared on open): a result for one we've left is dropped.
     const here = () => this.image?.id === id;
     try {
-      const found = await api.ai.detect(id, target, model, this.edit?.lens ?? null);
+      const found = await api.ai.detect(id, target, model, lens);
       if (!here()) return;
       this.aiStatus.set(key, { state: found ? "found" : "empty" });
       // A scene pass also caches its sibling (sky ↔ people).
@@ -241,19 +261,41 @@ class EditSession {
     }
   }
 
-  /** The layers came back without some AI rasters (new library, cleared cache): detect them. */
-  detectMissing(indices: number[]) {
-    for (const i of indices) {
-      const m = this.masks[i];
-      const key = m && aiKey(m);
-      const st = key ? this.aiStatus.get(key)?.state : undefined;
-      // Don't retry failures automatically, or loop on a model that found nothing.
-      if (m && st !== "working" && st !== "error" && st !== "empty") {
-        if (st === "found") this.aiStatus.delete(key!); // cache was cleared under us
-        this.confirmModel((m.shape as { model: string }).model).then((ok) => {
-          if (ok) this.detect(m);
-        });
-      }
+  /**
+   * The layers came back without some AI rasters (new library, cleared cache): detect them.
+   * `masks` are the masks themselves, from the state the layers were fetched for, with its
+   * `lens`. That state isn't always the current edit (a version being previewed, the compare
+   * pane), so they can't be looked up by position in `this.masks`.
+   */
+  detectMissing(masks: Mask[], lens: EditState["lens"] | null = this.edit?.lens ?? null) {
+    for (const m of masks) {
+      const key = aiKey(m);
+      if (!key || m.shape.kind !== "ai") continue;
+      const st = this.aiStatus.get(key)?.state;
+      // Don't retry failures automatically, loop on a model that found nothing, or ask again
+      // for a download that was just turned down.
+      if (st === "working" || st === "error" || st === "empty" || st === "declined") continue;
+      if (st === "found") this.aiStatus.delete(key); // cache was cleared under us
+      void this.downloadAndDetect(m, lens);
+    }
+  }
+
+  /**
+   * Detect an AI mask whose model may not be installed: ask about the download first (again,
+   * if it was declined before: this is also the mask panel's Download button).
+   */
+  async downloadAndDetect(m: Mask, lens = this.edit?.lens ?? null) {
+    const key = aiKey(m);
+    if (!key || m.shape.kind !== "ai") return;
+    const id = this.image?.id;
+    const ok = await this.confirmModel(m.shape.model);
+    // Statuses are per photo: an answer for one we've left says nothing about this one.
+    if (this.image?.id !== id) return;
+    if (ok) {
+      if (this.aiStatus.get(key)?.state === "declined") this.aiStatus.delete(key);
+      await this.detect(m, lens);
+    } else {
+      this.aiStatus.set(key, { state: "declined" });
     }
   }
 
