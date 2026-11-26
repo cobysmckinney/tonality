@@ -116,6 +116,11 @@ jobs:
 
       - run: npm ci
 
+      # `tauri build` refuses to run when an @tauri-apps package and its crate are on different
+      # minor versions, and only the release and nightly builds run it.
+      - name: Tauri npm packages match their crates
+        run: node scripts/check-tauri.mjs
+
       - name: Format
         run: npm run format:check
 
