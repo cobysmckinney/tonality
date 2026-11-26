@@ -19,7 +19,21 @@ use tonality_core::library::ImageMeta;
 /// The lens profile for the RAW at `path`, if one is known.
 pub fn lens_profile(path: &Path, meta: &ImageMeta) -> Option<LensProfile> {
     let name = || meta.lens.clone().unwrap_or_else(|| "Lens".into());
-    embedded(path, name).or_else(|| lensfun(meta))
+    embedded(path, name).or_else(|| lensfun(meta, focal_in_35mm(path)))
+}
+
+const EXIF_IFD: u16 = 0x8769;
+const FOCAL_LENGTH_IN_35MM_FILM: u16 = 0xa405;
+
+/// EXIF's FocalLengthIn35mmFilm, from files laid out as TIFF (most raw formats). With the
+/// focal length it gives the crop factor of this picture, which is not always the body's.
+fn focal_in_35mm(path: &Path) -> Option<f32> {
+    let mut f = BufReader::new(File::open(path).ok()?);
+    let tiff = GenericTiffReader::new(&mut f, 0, 0, None, &[SUB_IFDS, EXIF_IFD]).ok()?;
+    let e = tiff
+        .find_first_ifd_with_tag(FOCAL_LENGTH_IN_35MM_FILM)?
+        .get_entry(FOCAL_LENGTH_IN_35MM_FILM)?;
+    Some(e.value.force_u32(0) as f32).filter(|v| *v > 0.0)
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -448,32 +462,95 @@ fn camera(make: &str, model: &str) -> Option<&'static DbCamera> {
     })
 }
 
-fn lensfun(meta: &ImageMeta) -> Option<LensProfile> {
-    let lens_name = meta.lens.as_deref()?;
+/// The lensfun profile for a photo. `focal_35mm` is EXIF's FocalLengthIn35mmFilm, when the
+/// file has it.
+fn lensfun(meta: &ImageMeta, focal_35mm: Option<f32>) -> Option<LensProfile> {
     let focal = meta.focal_length?;
     let db = db();
     let cam = camera(&meta.make, &meta.model)?;
-    let mut mounts = vec![cam.mount.as_str()];
-    if let Some((_, compat)) = db.mounts.iter().find(|(n, _)| *n == cam.mount) {
-        mounts.extend(compat.iter().map(String::as_str));
-    }
-    let lens = db
+    let lens = match db.mounts.iter().find(|(n, _)| *n == cam.mount) {
+        Some((_, compat)) => {
+            let lens_name = meta.lens.as_deref()?;
+            let mut mounts = vec![cam.mount.as_str()];
+            mounts.extend(compat.iter().map(String::as_str));
+            db.lenses
+                .iter()
+                .filter(|l| {
+                    l.mounts.iter().any(|m| mounts.contains(&m.as_str()))
+                        && l.crop <= cam.crop * 1.02
+                })
+                .filter_map(|l| {
+                    let s = l
+                        .models
+                        .iter()
+                        .filter_map(|m| name_score(m, lens_name, &l.maker))
+                        .fold(f32::MIN, f32::max);
+                    (s > f32::MIN).then_some((s, l))
+                })
+                .max_by(|a, b| a.0.total_cmp(&b.0))?
+                .1
+        }
+        None => fixed_lens(db, &cam.mount, focal)?,
+    };
+    let crop = picture_crop(cam.crop, focal, focal_35mm);
+    profile_from_lensfun(lens, crop, focal, meta.f_number.unwrap_or(8.0))
+}
+
+/// More lens entries than any fixed-lens camera's mount has in lensfun (the lens, the lens
+/// with each of its converters, and for one Sony at each of eleven macro distances: 13). A
+/// mount with more isn't one camera's own.
+const MAX_FIXED_LENSES: usize = 16;
+
+/// The lens of a camera whose lens can't be changed. lensfun gives each such camera (or family
+/// of them) a mount of its own, one that no `<mount>` entry declares, and files the lens under
+/// it as "X100V & compatibles" / "fixed lens": a name no camera writes, and most compacts
+/// write no lens name at all. So the lens on that mount is the lens, by where it is, not by
+/// what it's called. Where there are several (the bare lens, the lens with a converter screwed
+/// on, the lens at a macro distance), the one calibrated at this focal length, then the plain
+/// one, which lensfun names without anything after "& compatibles".
+fn fixed_lens<'a>(db: &'a Db, mount: &str, focal: f32) -> Option<&'a DbLens> {
+    let on_mount: Vec<&DbLens> = db
         .lenses
         .iter()
-        .filter(|l| {
-            l.mounts.iter().any(|m| mounts.contains(&m.as_str())) && l.crop <= cam.crop * 1.02
-        })
-        .filter_map(|l| {
-            let s = l
-                .models
-                .iter()
-                .filter_map(|m| name_score(m, lens_name, &l.maker))
-                .fold(f32::MIN, f32::max);
-            (s > f32::MIN).then_some((s, l))
-        })
-        .max_by(|a, b| a.0.total_cmp(&b.0))?
-        .1;
-    profile_from_lensfun(lens, cam.crop, focal, meta.f_number.unwrap_or(8.0))
+        .filter(|l| l.mounts.iter().any(|m| m == mount))
+        .collect();
+    if on_mount.len() > MAX_FIXED_LENSES {
+        return None;
+    }
+    let covers = |l: &DbLens| {
+        let focals = (l.dist.iter().chain(&l.tca))
+            .filter_map(|e| e.as_array()?.first()?.as_f64())
+            .map(|f| f as f32)
+            .chain(l.vig.iter().map(|v| v[0]));
+        let (lo, hi) = focals.fold((f32::MAX, f32::MIN), |(lo, hi), f| (lo.min(f), hi.max(f)));
+        lo * 0.97 <= focal && focal <= hi * 1.03
+    };
+    let bare = |l: &DbLens| !l.models.iter().any(|m| m.contains("compatibles, "));
+    // `min_by_key` keeps the first of equals: the order lensfun lists them in.
+    on_mount.into_iter().min_by_key(|l| (!covers(l), !bare(l)))
+}
+
+/// The crop factor of this picture, given the body's (`cam_crop`, from lensfun).
+///
+/// They differ when the camera was in a crop mode: a full-frame body set to its DX or APS-C
+/// area writes only the middle of the sensor, and the corner of that picture is two thirds of
+/// the way to the sensor's corner. Scaling the profile by the body's crop factor would correct
+/// distortion and vignetting as if the picture reached all the way out: corners brightened
+/// several times too much. FocalLengthIn35mmFilm over the focal length is the picture's own
+/// crop factor. It's a whole number of millimetres, so it only overrides the body's when it
+/// says the picture is clearly smaller, and never by an amount no crop mode has.
+fn picture_crop(cam_crop: f32, focal: f32, focal_35mm: Option<f32>) -> f32 {
+    match focal_35mm {
+        Some(f35) if focal > 0.0 => {
+            let measured = f35 / focal;
+            if measured > cam_crop * 1.1 && measured < cam_crop * 3.0 {
+                measured
+            } else {
+                cam_crop
+            }
+        }
+        _ => cam_crop,
+    }
 }
 
 /// Entries' terms at `focal`: linear between the nearest calibrated focal lengths with the same
@@ -639,7 +716,7 @@ fn max_deviation(f: &Radial) -> f32 {
 /// Both sources for one photo (diagnostics): `(embedded, lensfun)`.
 pub fn lens_profiles(path: &Path, meta: &ImageMeta) -> (Option<LensProfile>, Option<LensProfile>) {
     let name = || meta.lens.clone().unwrap_or_else(|| "Lens".into());
-    (embedded(path, name), lensfun(meta))
+    (embedded(path, name), lensfun(meta, focal_in_35mm(path)))
 }
 
 #[cfg(test)]
@@ -649,7 +726,7 @@ mod tests {
 
     #[test]
     fn an_empty_make_matches_no_camera() {
-        assert!(lensfun(&meta("", "ILCE-7M3", "FE 28-70mm F3.5-5.6 OSS", 35.0, 5.6)).is_none());
+        assert!(lensfun_of(&meta("", "ILCE-7M3", "FE 28-70mm F3.5-5.6 OSS", 35.0, 5.6)).is_none());
     }
 
     #[test]
@@ -662,6 +739,11 @@ mod tests {
             tokens("E 18-135mm f/3.5-5.6 OSS"),
             tokens("E 18-135mm F3.5-5.6 OSS")
         );
+    }
+
+    /// As for a file that doesn't say its 35 mm equivalent focal length.
+    fn lensfun_of(meta: &ImageMeta) -> Option<LensProfile> {
+        lensfun(meta, None)
     }
 
     fn meta(make: &str, model: &str, lens: &str, focal: f32, f: f32) -> ImageMeta {
@@ -677,7 +759,7 @@ mod tests {
 
     #[test]
     fn finds_lenses_in_lensfun() {
-        let p = lensfun(&meta(
+        let p = lensfun_of(&meta(
             "Sony",
             "ILCE-6600",
             "E 18-135mm F3.5-5.6 OSS",
@@ -687,7 +769,7 @@ mod tests {
         .expect("in the database");
         assert_eq!(p.name, "Sony E 18-135mm f/3.5-5.6 OSS");
         assert!(p.distortion.is_some() && p.vignetting.is_some());
-        let p = lensfun(&meta(
+        let p = lensfun_of(&meta(
             "Canon",
             "EOS 5D Mark III",
             "EF24-105mm f/4L IS USM",
@@ -696,7 +778,7 @@ mod tests {
         ))
         .expect("Canon");
         assert!(p.name.contains("24-105"), "{}", p.name);
-        assert!(lensfun(&meta(
+        assert!(lensfun_of(&meta(
             "Sony",
             "ILCE-6600",
             "Some 12-34mm F9 Lens",
@@ -704,7 +786,7 @@ mod tests {
             9.0
         ))
         .is_none());
-        assert!(lensfun(&meta(
+        assert!(lensfun_of(&meta(
             "Nobody",
             "Camera 1",
             "E 18-135mm F3.5-5.6 OSS",
@@ -742,7 +824,7 @@ mod tests {
     #[test]
     fn needs_the_same_lens_version() {
         let name =
-            |make, model, lens| lensfun(&meta(make, model, lens, 100.0, 4.0)).map(|p| p.name);
+            |make, model, lens| lensfun_of(&meta(make, model, lens, 100.0, 4.0)).map(|p| p.name);
         // Only the Mark I is in the database.
         assert_eq!(
             name("Sony", "ILCE-6600", "FE 70-200mm F2.8 GM OSS").as_deref(),
@@ -770,7 +852,8 @@ mod tests {
 
     #[test]
     fn a_lens_that_is_not_in_the_database_gets_no_other_lens_profile() {
-        let name = |make, model, lens| lensfun(&meta(make, model, lens, 85.0, 4.0)).map(|p| p.name);
+        let name =
+            |make, model, lens| lensfun_of(&meta(make, model, lens, 85.0, 4.0)).map(|p| p.name);
         // Same focal length and aperture as another lens is not the same lens: each of these
         // used to get the profile named beside it.
         for (make, model, lens) in [
@@ -818,6 +901,134 @@ mod tests {
         }
     }
 
+    /// `TONALITY_TEST_RAW=<file> cargo test -p tonality-raw -- --ignored --nocapture
+    /// lens_of_a_real_file`: what a file on disk says, and the profile it gets. No raw file is
+    /// kept in the repository.
+    #[test]
+    #[ignore]
+    fn lens_of_a_real_file() {
+        let raw = std::env::var("TONALITY_TEST_RAW").expect("set TONALITY_TEST_RAW");
+        let path = Path::new(&raw);
+        let meta = crate::read_meta(path).unwrap();
+        let f35 = focal_in_35mm(path);
+        println!(
+            "{} {} + {:?} at {:?} mm (35 mm equivalent: {f35:?})",
+            meta.make, meta.model, meta.lens, meta.focal_length
+        );
+        let (embedded, lensfun) = lens_profiles(path, &meta);
+        println!("embedded: {:?}", embedded.map(|p| p.name));
+        println!("lensfun: {:?}", lensfun.map(|p| p.name));
+        let (cam, focal) = (
+            camera(&meta.make, &meta.model).unwrap(),
+            meta.focal_length.unwrap(),
+        );
+        println!(
+            "crop: body {}, picture {}",
+            cam.crop,
+            picture_crop(cam.crop, focal, f35)
+        );
+        assert!(f35.is_some(), "no FocalLengthIn35mmFilm read");
+    }
+
+    #[test]
+    fn fixed_lens_cameras_get_their_lens() {
+        // A compact writes no lens name, or one lensfun doesn't use for it.
+        let compact = |make: &str, model: &str, lens: Option<&str>, focal: f32| {
+            lensfun(
+                &ImageMeta {
+                    make: make.into(),
+                    model: model.into(),
+                    lens: lens.map(String::from),
+                    focal_length: Some(focal),
+                    f_number: Some(4.0),
+                    ..Default::default()
+                },
+                None,
+            )
+            .map(|p| p.name)
+        };
+        let x100v = compact("Fujifilm", "X100V", None, 23.0).expect("X100V");
+        assert!(x100v.contains("X100V"), "{x100v}");
+        assert_eq!(
+            compact("Fujifilm", "X100V", Some("23mm F2"), 23.0),
+            Some(x100v)
+        );
+        let g7x = compact("Canon", "PowerShot G7 X", None, 8.8).expect("G7 X");
+        assert!(g7x.contains("G7 X"), "{g7x}");
+
+        // Several entries on one mount: the bare lens, unless the focal length is one only a
+        // converter reaches.
+        let db = db();
+        let with_converter = db
+            .lenses
+            .iter()
+            .find(|l| {
+                l.models
+                    .iter()
+                    .any(|m| m.contains("X100 & compatibles, with TCL-X100"))
+            })
+            .expect("the X100 with its tele converter");
+        let mount = &with_converter.mounts[0];
+        let bare = fixed_lens(db, mount, 23.0).expect("the X100's own lens");
+        assert!(
+            !bare.models[0].contains("compatibles, "),
+            "{:?}",
+            bare.models
+        );
+        assert!(std::ptr::eq(
+            fixed_lens(db, mount, 33.0).unwrap(),
+            with_converter
+        ));
+
+        // The premise: a mount nothing declares belongs to one camera family, with a handful
+        // of entries at most. An interchangeable mount is never taken for one.
+        for cam in &db.cameras {
+            if db.mounts.iter().any(|(n, _)| *n == cam.mount) {
+                continue;
+            }
+            let n = db
+                .lenses
+                .iter()
+                .filter(|l| l.mounts.contains(&cam.mount))
+                .count();
+            assert!(n <= MAX_FIXED_LENSES, "{} has {n} lenses", cam.mount);
+        }
+        // And a system camera still needs its lens named.
+        assert_eq!(compact("Sony", "ILCE-6600", None, 35.0), None);
+    }
+
+    #[test]
+    fn a_crop_mode_photo_is_corrected_as_the_smaller_picture_it_is() {
+        // Body crop factors as lensfun has them; 35 mm equivalents as cameras write them.
+        assert_eq!(picture_crop(1.0, 24.0, None), 1.0);
+        assert_eq!(picture_crop(1.0, 24.0, Some(24.0)), 1.0);
+        assert_eq!(
+            picture_crop(1.0, 24.0, Some(36.0)),
+            1.5,
+            "DX area on a full-frame body"
+        );
+        assert_eq!(
+            picture_crop(1.0, 50.0, Some(60.0)),
+            1.2,
+            "Nikon's 1.2× area"
+        );
+        // An APS-C body always says 1.5×, give or take the rounding to whole millimetres.
+        assert_eq!(picture_crop(1.523, 18.0, Some(27.0)), 1.523);
+        assert_eq!(picture_crop(1.523, 10.0, Some(16.0)), 1.523);
+        // Nonsense (a manual lens reported as 0 mm, a phone-style equivalent) changes nothing.
+        assert_eq!(picture_crop(1.0, 0.0, Some(50.0)), 1.0);
+        assert_eq!(picture_crop(1.0, 5.0, Some(50.0)), 1.0);
+
+        // Nikon Z 7 in DX area with the 24-70mm f/4 S at 24 mm f/4: the corner of the picture
+        // is two thirds of the way out, where the lens darkens by about a stop less.
+        let z7 = meta("Nikon", "Z 7", "NIKKOR Z 24-70mm f/4 S", 24.0, 4.0);
+        let corner = |p: LensProfile| sample(&p.vignetting.unwrap(), 1.0);
+        let full = corner(lensfun(&z7, None).expect("in the database"));
+        let dx = corner(lensfun(&z7, Some(36.0)).unwrap());
+        assert!(full > 3.0, "full frame corner gain {full}");
+        assert!(dx > 1.2 && dx < 1.8, "DX corner gain {dx}, not {full}");
+    }
+
     #[test]
     fn vignetting_uses_each_focal_lengths_own_farthest_distance() {
         // 100 mm calibrated out to 80 m, 135 mm with one extra pair at 1000 m.
@@ -837,16 +1048,23 @@ mod tests {
         let sigma = db()
             .lenses
             .iter()
-            .find(|l| l.models.iter().any(|m| m.contains("100-400mm F5-6.3 DG OS HSM")))
+            .find(|l| {
+                l.models
+                    .iter()
+                    .any(|m| m.contains("100-400mm F5-6.3 DG OS HSM"))
+            })
             .expect("Sigma 100-400mm Contemporary");
         let k = vignetting_at(&sigma.vig, 100.0, 5.0).unwrap();
         let corner_gain = 1.0 / (1.0 + k[0] + k[1] + k[2]);
-        assert!(corner_gain > 2.0, "100 mm f/5 corners need {corner_gain}×, not 1.07×");
+        assert!(
+            corner_gain > 2.0,
+            "100 mm f/5 corners need {corner_gain}×, not 1.07×"
+        );
     }
 
     #[test]
     fn matches_short_micro_four_thirds_names() {
-        let p = lensfun(&meta(
+        let p = lensfun_of(&meta(
             "Olympus",
             "E-M1",
             "OLYMPUS M.12-40mm F2.8",
@@ -855,7 +1073,7 @@ mod tests {
         ))
         .expect("Olympus 12-40");
         assert_eq!(p.name, "Olympus M.Zuiko Digital ED 12-40mm f/2.8 Pro");
-        let p = lensfun(&meta(
+        let p = lensfun_of(&meta(
             "Panasonic",
             "DC-GX9",
             "LUMIX G VARIO 12-32/F3.5-5.6",
