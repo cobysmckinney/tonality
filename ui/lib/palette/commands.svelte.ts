@@ -5,6 +5,7 @@
 import { untrack } from "svelte";
 import { app } from "$lib/app.svelte";
 import { session } from "$lib/edit/session.svelte";
+import { wbPick } from "$lib/edit/wbpick.svelte";
 import { exportCount, exportCurrent } from "$lib/export/targets";
 import { BIN, library } from "$lib/library/state.svelte";
 import { updates } from "$lib/settings/updates.svelte";
@@ -255,6 +256,17 @@ export const COMMANDS: Command[] = [
     run: () => library.step(1),
   },
   {
+    id: "edit.wbPicker",
+    get title() {
+      return wbPick.active ? "Put the white balance picker away" : "White balance picker";
+    },
+    group: "Edit",
+    keys: ["W"],
+    keywords: "eyedropper neutral grey gray temperature tint",
+    when: () => editing() && !session.masking && !session.cropping,
+    run: () => wbPick.toggle(),
+  },
+  {
     id: "edit.crop",
     title: "Crop and straighten",
     group: "Edit",
@@ -322,6 +334,7 @@ export const COMMANDS: Command[] = [
     run: () => session.selected !== null && session.deleteMask(session.selected),
   },
   { id: "masks.brush", title: "Smaller / larger brush", group: "Masks", keys: ["[", "]"] },
+  { id: "masks.pan", title: "Pan the photo (hold)", group: "Masks", keys: ["Space"] },
 
   // ---- History ----
   {

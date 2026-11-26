@@ -140,7 +140,7 @@ class EditSession {
     }
     const mb = Math.round(info.size / 1e6);
     const ok = await ask(
-      `${info.label} masks need a one-time ${mb} MB download. The model runs on this computer: your photos never leave it.`,
+      `${info.label} masks need a one-time ${mb} MB download. The model runs on this computer: your photos never leave it.\n\nThe model’s licence: ${info.license}.`,
       { title: "Download AI model", okLabel: `Download ${mb} MB`, kind: "info" },
     );
     if (ok) this.approved.add(model);
