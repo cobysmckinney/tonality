@@ -1,5 +1,8 @@
 //! Colour grading tints the range it is set on and leaves the others alone.
-//! Skipped (passes with a note) on machines without a usable adapter.
+//! Skipped (passes with a note) on machines without a usable adapter, unless
+//! `TONALITY_REQUIRE_GPU` is set.
+
+mod common;
 
 use half::f16;
 use tonality_core::color::CameraColor;
@@ -100,14 +103,7 @@ const SEEN: f64 = 0.01;
 
 #[test]
 fn each_range_tints_its_own_tones() {
-    let gpu = match Gpu::new() {
-        Ok(g) => g,
-        Err(e) => {
-            eprintln!("skipped: {e}");
-            return;
-        }
-    };
-    eprintln!("adapter: {}", gpu.adapter);
+    let Some(gpu) = common::gpu() else { return };
     let plain = develop(&gpu, &EditState::default());
     assert!(
         plain.iter().all(|&p| warmth(p).abs() < 1e-3),
@@ -182,13 +178,7 @@ fn each_range_tints_its_own_tones() {
 
 #[test]
 fn balance_moves_the_split_and_luminance_moves_brightness() {
-    let gpu = match Gpu::new() {
-        Ok(g) => g,
-        Err(e) => {
-            eprintln!("skipped: {e}");
-            return;
-        }
-    };
+    let Some(gpu) = common::gpu() else { return };
     let plain = develop(&gpu, &EditState::default());
     let mid = steps_between(&plain, 0.42, 0.58);
     let dark = steps_between(&plain, 0.02, 0.15);

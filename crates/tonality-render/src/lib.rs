@@ -10,7 +10,7 @@ mod params;
 pub mod presence;
 
 pub use glsl::{preview_glsl, GlslProgram};
-pub use gpu::{Gpu, Rendered, Source};
+pub use gpu::{Gpu, GpuError, Rendered, Source};
 pub use params::{curve_lut_rgba16f, DevelopParams, CURVE_LUT_SIZE};
 
 /// The develop shader source.
