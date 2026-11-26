@@ -100,6 +100,20 @@ describe("toasts", () => {
     expect(t.list).toHaveLength(MAX_TOASTS);
   });
 
+  it("shows a notice that arrives among as many errors as fit", () => {
+    const t = new Toasts();
+    for (const e of ["e1", "e2", "e3", "e4"]) t.error(e);
+    expect(t.list).toHaveLength(MAX_TOASTS);
+    t.notice("12 imported");
+    // The oldest error made room; the notice is there to be read.
+    expect(texts(t)).toEqual(["e2", "e3", "e4", "12 imported"]);
+    // The next notice replaces that one, not another error.
+    t.notice("Moved 3 photos to the Trash");
+    expect(texts(t)).toEqual(["e2", "e3", "e4", "Moved 3 photos to the Trash"]);
+    vi.advanceTimersByTime(NOTICE_MS);
+    expect(texts(t)).toEqual(["e2", "e3", "e4"]);
+  });
+
   it("dismisses one, or the newest", () => {
     const t = new Toasts();
     const a = t.error("a");

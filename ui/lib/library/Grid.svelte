@@ -1,7 +1,7 @@
 <script lang="ts">
   // Virtualised thumbnail grid: only cells near the viewport are in the DOM.
   // With `grouped`, photos are laid out under a header per capture day.
-  import { onMount, untrack } from "svelte";
+  import { tick, untrack } from "svelte";
   import { thumbKey, thumbnail } from "./thumbs";
   import EditedMark from "./EditedMark.svelte";
   import type { ImageRow } from "$lib/bindings/ImageRow";
@@ -186,16 +186,27 @@
     return cells[j].img.id;
   }
 
-  onMount(() => {
-    el.scrollTop = scrollTop;
-    scroll = el.scrollTop;
+  // Put the grid back where it was left, once it has its real size. On the first pass the
+  // scroller's width is still 0, and the layout for that is a fraction of the real height: a
+  // scroll position set then is clamped to it, and the clamped value saved over the real one.
+  // So wait for a width, then for the canvas to have its height in the DOM.
+  let ready = $state(false);
+  $effect(() => {
+    if (ready || width <= 0) return;
+    tick().then(() => {
+      if (!el) return;
+      el.scrollTop = scrollTop;
+      scroll = el.scrollTop;
+      ready = true;
+    });
   });
 
   // Keep the focused cell in view during keyboard navigation: when focus moves, not whenever
   // the layout does (a rating change, a resize), which would yank the scroll back to it.
   $effect(() => {
     const f = focus;
-    if (f === null) return;
+    // (Also once the grid is ready: the photo just come back from is brought into view.)
+    if (f === null || !ready) return;
     untrack(() => {
       const i = layout.index.get(f);
       if (i === undefined || !el) return;
@@ -210,7 +221,9 @@
 
   function onScroll() {
     scroll = el.scrollTop;
-    onscroll?.(scroll);
+    // Before the saved position is put back, the scroller is wherever a too-short canvas left
+    // it: not something to remember.
+    if (ready) onscroll?.(scroll);
   }
 
   // ---- drag detection ----
@@ -218,9 +231,12 @@
   let dragged = false;
 
   function onDown(e: PointerEvent, id: number) {
+    // Every press starts clean. A drag that ended somewhere else (on an album, which is the
+    // point of dragging) produced no click here to clear this, and the next Ctrl- or
+    // Shift-click, which returns just below, was then swallowed as "the click after a drag".
+    dragged = false;
     if (e.button !== 0 || e.shiftKey || e.ctrlKey || e.metaKey) return;
     press = { id, x: e.clientX, y: e.clientY };
-    dragged = false;
   }
   function onMove(e: PointerEvent) {
     if (!press || !ondragstart) return;
