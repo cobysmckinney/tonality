@@ -156,23 +156,25 @@ pub async fn album_remove(
 fn hidden(entry: &std::fs::DirEntry) -> bool {
     let name = entry.file_name();
     let name = name.to_string_lossy();
-    if name.starts_with('.')
+    name.starts_with('.')
         || name.eq_ignore_ascii_case("$RECYCLE.BIN")
         || name.eq_ignore_ascii_case("System Volume Information")
-    {
-        return true;
-    }
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::MetadataExt;
-        const FILE_ATTRIBUTE_HIDDEN: u32 = 0x2;
-        const FILE_ATTRIBUTE_SYSTEM: u32 = 0x4;
-        if entry.metadata().is_ok_and(|m| {
-            m.file_attributes() & (FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_SYSTEM) != 0
-        }) {
-            return true;
-        }
-    }
+        || hidden_by_attributes(entry)
+}
+
+/// Whether Windows marks `entry` hidden or system (elsewhere there are no such attributes).
+#[cfg(windows)]
+fn hidden_by_attributes(entry: &std::fs::DirEntry) -> bool {
+    use std::os::windows::fs::MetadataExt;
+    const FILE_ATTRIBUTE_HIDDEN: u32 = 0x2;
+    const FILE_ATTRIBUTE_SYSTEM: u32 = 0x4;
+    entry
+        .metadata()
+        .is_ok_and(|m| m.file_attributes() & (FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_SYSTEM) != 0)
+}
+
+#[cfg(not(windows))]
+fn hidden_by_attributes(_: &std::fs::DirEntry) -> bool {
     false
 }
 
