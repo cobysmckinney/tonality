@@ -202,11 +202,18 @@ fn long(tag: u16, v: u32) -> Field {
     }
 }
 
+/// The most of one text value that is written. Far more than a make, model, lens, artist or
+/// copyright line needs; it is there because the text comes from the raw file, and the whole
+/// block has to fit a JPEG segment (65,533 bytes). A file with a 70,000 character Copyright
+/// would otherwise make an export that can't be opened.
+pub const MAX_TEXT: usize = 1024;
+
 fn text(s: &Option<String>) -> Option<String> {
     s.as_deref()
         .map(|s| s.trim_matches(|c: char| c == '\0' || c.is_whitespace()))
         .filter(|s| !s.is_empty() && s.is_ascii())
-        .map(str::to_string)
+        // ASCII, so any byte is a character boundary.
+        .map(|s| s[..s.len().min(MAX_TEXT)].trim_end().to_string())
 }
 
 fn valid(r: &Option<Ratio>) -> Option<Ratio> {
@@ -294,13 +301,18 @@ pub fn ifds(c: &Capture, e: &Export) -> Ifds {
         0x8822,
         c.exposure_program.map(|v| Val::Short(vec![v])),
     );
+    let iso = c.iso.filter(|&v| v > 0);
     push(
         &mut exif,
         0x8827,
-        c.iso
-            .filter(|&v| v > 0)
-            .map(|v| Val::Short(vec![v.min(65535) as u16])),
+        iso.map(|v| Val::Short(vec![v.min(65535) as u16])),
     );
+    // PhotographicSensitivity is 16 bits. Above that EXIF 2.3 puts 65535 there, and the real
+    // value in ISOSpeed, with SensitivityType saying which kind it is (3: ISO speed).
+    if let Some(v) = iso.filter(|&v| v > 65535) {
+        exif.push((0x8830, Val::Short(vec![3])));
+        exif.push((0x8833, Val::Long(vec![v])));
+    }
     let date = text(&c.date_time_original);
     push(&mut exif, 0x9003, date.clone().map(Val::Ascii));
     push(&mut exif, 0x9004, date.map(Val::Ascii));
@@ -510,6 +522,48 @@ mod tests {
         assert_eq!((rating(0x4746), rating(0x4749)), (Some(4), Some(75)));
         // No location unless asked.
         assert!(x.get_field(Tag::GPSLatitude, In::PRIMARY).is_none());
+    }
+
+    #[test]
+    fn iso_above_65535_is_written_where_it_fits() {
+        let field = |x: &exif::Exif, tag: u16| {
+            x.fields()
+                .find(|f| f.tag.number() == tag)
+                .map(|f| f.value.get_uint(0).unwrap())
+        };
+        let high = Capture {
+            iso: Some(102_400),
+            ..capture()
+        };
+        let x = read(&tiff_exif(&high, &export(false, None)));
+        assert_eq!(uint(&x, Tag::PhotographicSensitivity), 65535);
+        assert_eq!(field(&x, 0x8830), Some(3), "SensitivityType: ISO speed");
+        assert_eq!(field(&x, 0x8833), Some(102_400), "ISOSpeed");
+        // An ordinary ISO has only the one tag.
+        let x = read(&tiff_exif(&capture(), &export(false, None)));
+        assert_eq!((field(&x, 0x8830), field(&x, 0x8833)), (None, None));
+    }
+
+    #[test]
+    fn text_from_the_file_cannot_outgrow_a_jpeg_segment() {
+        // Every text field at 70,000 characters: a crafted file, or one a tool put a licence in.
+        let long = Some("x".repeat(70_000));
+        let c = Capture {
+            make: long.clone(),
+            model: long.clone(),
+            lens_make: long.clone(),
+            lens_model: long.clone(),
+            artist: long.clone(),
+            copyright: long.clone(),
+            ..capture()
+        };
+        let block = tiff_exif(&c, &export(true, Some(5)));
+        assert!(block.len() < 65_533 - 6, "{} bytes", block.len());
+        let x = read(&block);
+        assert_eq!(ascii(&x, Tag::Copyright).len(), MAX_TEXT);
+        assert_eq!(ascii(&x, Tag::Make).len(), MAX_TEXT);
+        // And what comes after it is still where a reader expects it.
+        assert_eq!(uint(&x, Tag::PhotographicSensitivity), 800);
     }
 
     #[test]

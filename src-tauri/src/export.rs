@@ -617,11 +617,7 @@ fn write(
     let bytes: Result<Vec<u8>, String> = match (s.format, gain) {
         (ExportFormat::Jpeg, Some(gain)) => {
             ultra_hdr(r, gain, quality, s.color_space).and_then(|f| {
-                crate::jpeg::ultra_hdr_with(
-                    &f,
-                    Some(crate::jpeg::exif_segment(&exif)),
-                    export.rating,
-                )
+                crate::jpeg::ultra_hdr_with(&f, crate::jpeg::exif_segment(&exif), export.rating)
             })
         }
         (ExportFormat::Jpeg, None) => {
@@ -635,7 +631,7 @@ fn write(
                 ExtendedColorType::Rgb8,
             )
             .map_err(|e| e.to_string())?;
-            let mut front = vec![crate::jpeg::exif_segment(&exif)];
+            let mut front: Vec<_> = crate::jpeg::exif_segment(&exif).into_iter().collect();
             front.extend(xmp.as_deref().map(crate::jpeg::xmp_segment));
             crate::jpeg::with_front(&buf, &front)
         }
