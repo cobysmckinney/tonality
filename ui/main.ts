@@ -1,13 +1,20 @@
 import { mount } from "svelte";
 import "./lib/design/tokens.css";
 import App from "./App.svelte";
+import StartupError from "./lib/StartupError.svelte";
 
-mount(App, { target: document.getElementById("app")! });
+const { invoke } = await import("@tauri-apps/api/core");
+
+// A library that couldn't be opened (it's open in another window, or was last used by a newer
+// version) leaves the app with nothing behind it: say why, and mount nothing else.
+const target = document.getElementById("app")!;
+const failed = await invoke<string | null>("startup_error").catch(() => null);
+if (failed) mount(StartupError, { target, props: { message: failed } });
+else mount(App, { target });
 
 // Errors nothing caught go to the log file (Settings shows where it is), so a bug report can
 // include them. In development the console's warnings, errors and `console.info` go there too,
 // which also puts them in the terminal running `tauri dev`.
-const { invoke } = await import("@tauri-apps/api/core");
 const send = (level: string, args: unknown[]) =>
   invoke("ui_log", {
     level,

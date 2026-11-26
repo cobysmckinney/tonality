@@ -37,6 +37,10 @@ pub struct Catalog {
     pub(crate) edited_states: RefCell<HashMap<String, bool>>,
 }
 
+/// The schema this build reads and writes: one more than the last for each migration below.
+/// An older build refuses a catalog with a higher one (see [`crate::format`]).
+pub const CATALOG_VERSION: u32 = MIGRATIONS.len() as u32;
+
 const MIGRATIONS: &[&str] = &[
     // v1
     r#"
@@ -271,7 +275,9 @@ impl Catalog {
             Ok(v) if v <= MIGRATIONS.len() => v,
             _ => {
                 return Err(CatalogError::Invalid(format!(
-                    "catalog schema v{version} is newer than this build of tonality supports"
+                    "this library was last opened by a newer version of tonality (its catalog \
+                     is v{version}, and this version reads up to v{CATALOG_VERSION}). Install \
+                     that version, or a newer one, to open it."
                 )));
             }
         };

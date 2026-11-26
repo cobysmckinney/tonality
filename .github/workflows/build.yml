@@ -65,6 +65,7 @@ jobs:
             files: |
               target/release/bundle/appimage/*.AppImage
               target/release/bundle/appimage/*.AppImage.sig
+              formats.json
           # `app` makes the .app.tar.gz the updater installs; the .dmg is for first installs.
           - name: macOS (Apple Silicon)
             os: macos-latest
@@ -155,6 +156,17 @@ jobs:
           fi
           npm run tauri build -- --bundles "$BUNDLES" --config src-tauri/tauri.ci.conf.json
 
+      # What this build reads and writes on disk (catalog, sidecars, edit states), asked of
+      # the binary itself. It goes into latest.json, where an installed app reads it before
+      # replacing itself with an older build: a nightly switching back to stable must not take
+      # a release that can't open its library. See tonality_core::format.
+      - name: Note the on-disk formats
+        if: runner.os == 'Linux'
+        run: |
+          target/release/tonality --formats > formats.json
+          cat formats.json
+          jq -e '.catalog > 0 and .sidecar > 0 and .edits > 0' formats.json
+
       - name: Keep the bundles for the release job
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -185,6 +197,9 @@ jobs:
           mkdir release
           find downloaded -type f -exec mv -t release {} +
           cd release
+          # From the Linux build; the same for every platform. Not one of the release's files.
+          formats=$(jq -c . formats.json)
+          rm formats.json
           platform() {
             case "$1" in
               *.AppImage) echo linux-x86_64 ;;
@@ -206,7 +221,8 @@ jobs:
           done
           jq -n --arg v "$VERSION" --arg notes "$NOTES" \
             --arg date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --argjson platforms "$platforms" \
-            '{version: $v, notes: $notes, pub_date: $date, platforms: $platforms}' > latest.json
+            --argjson formats "$formats" \
+            '{version: $v, notes: $notes, pub_date: $date, tonality: $formats, platforms: $platforms}' > latest.json
           cat latest.json
           ls -l
 

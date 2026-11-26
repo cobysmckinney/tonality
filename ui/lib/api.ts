@@ -158,6 +158,9 @@ export const api = {
 
   /** The app's log file, or null if it couldn't be opened. */
   logPath: () => invoke<string | null>("log_path"),
+  /** Why the library couldn't be opened at launch, when it couldn't. */
+  startupError: () => invoke<string | null>("startup_error"),
+  quit: () => invoke<void>("quit"),
 
   updates: {
     version: () => invoke<string>("app_version"),
