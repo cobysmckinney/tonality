@@ -12,7 +12,7 @@
   import type { EditState } from "$lib/bindings/EditState";
   import type { HistoryView } from "$lib/bindings/HistoryView";
   import { session } from "$lib/edit/session.svelte";
-  import { branchThumbs, requestBranchThumb } from "$lib/edit/versions";
+  import { branchThumbKey, branchThumbs, requestBranchThumb } from "$lib/edit/versions";
   import { branchSteps, versions } from "./graph";
   import { sessionLabel, sessionLabels, stepTime } from "./sessions";
   import { DEFAULT_WIDTH, MAX_WIDTH, MIN_WIDTH, historyWidth } from "./width.svelte";
@@ -150,11 +150,19 @@
 
   // ---- thumbnails (rendered with the live renderer, cached per commit) ----
   const thumbCommit = (name: string, tip: number) => (name === current ? view.head.commit : tip);
+  /** When `commit` last changed: part of its thumbnail's key, since a step that later nudges
+   *  are merged into keeps its id while its look changes. */
+  const thumbTime = (commit: number) => view.commits.find((c) => c.id === commit)?.time ?? 0;
   $effect(() => {
-    for (const v of all) requestBranchThumb(view.imageId, thumbCommit(v.name, v.tip));
+    for (const v of all) {
+      const commit = thumbCommit(v.name, v.tip);
+      requestBranchThumb(view.imageId, commit, thumbTime(commit));
+    }
   });
-  const thumb = (name: string, tip: number) =>
-    branchThumbs.get(`${view.imageId}:${thumbCommit(name, tip)}`) ?? "";
+  const thumb = (name: string, tip: number) => {
+    const commit = thumbCommit(name, tip);
+    return branchThumbs.get(branchThumbKey(view.imageId, commit, thumbTime(commit))) ?? "";
+  };
 
   // ---- rename ----
   let renaming = $state<string | null>(null);

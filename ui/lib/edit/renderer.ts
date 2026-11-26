@@ -318,6 +318,10 @@ export class PreviewRenderer {
       if (this.lastCompare) this.setCompare(this.lastCompare);
       return;
     }
+    // Maps for a photo that isn't shown any more (a comparison closed while its maps were on
+    // their way) are nobody's: loaded as this photo's, they'd be used for its Clarity and
+    // Dehaze until its next edit.
+    if (imageId !== this.imageId) return;
     gl.activeTexture(gl.TEXTURE3);
     gl.bindTexture(gl.TEXTURE_2D, this.presence);
     gl.pixelStorei(gl.UNPACK_ALIGNMENT, 2);
