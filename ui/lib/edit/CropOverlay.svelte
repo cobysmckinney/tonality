@@ -1,7 +1,8 @@
 <script lang="ts">
   // Crop box over the straightened (uncropped) frame.
   // Drag corners/edges to resize · inside to move · outside to rotate · Ctrl+drag (or Level) to
-  // draw a line that should be level.
+  // draw a line that should be level. Arrow keys move the box · Shift+arrows resize it.
+  import { targetOwnsKey } from "$lib/keys";
   import type { Crop } from "$lib/bindings/Crop";
   import { MIN, clampInFrame, fits, levelAngle, shrinkToFit, towards, type Rect } from "./crop";
 
@@ -113,15 +114,41 @@
     }
     const dx = (x - d.x) / frame.w,
       dy = (y - d.y) / frame.h;
-    const [sx, sy, sw, sh] = d.start;
     if (d.mode === "move") {
-      // Slide along each axis separately, so the box glides along an edge it touches.
-      const a = towards(d.start, clampInFrame([sx + dx, sy, sw, sh]), crop.angle, tw, th);
-      const b = towards(a, clampInFrame([a[0], sy + dy, sw, sh]), crop.angle, tw, th);
-      onchange({ ...crop, rect: b });
+      onchange({ ...crop, rect: move(d.start, dx, dy) });
       return;
     }
     onchange({ ...crop, rect: resize(d.mode, d.start, dx, dy) });
+  }
+
+  /** `start` moved by (dx, dy), as far as the frame lets it go. */
+  function move(start: Rect, dx: number, dy: number): Rect {
+    const [sx, sy, sw, sh] = start;
+    // Slide along each axis separately, so the box glides along an edge it touches.
+    const a = towards(start, clampInFrame([sx + dx, sy, sw, sh]), crop.angle, tw, th);
+    return towards(a, clampInFrame([a[0], sy + dy, sw, sh]), crop.angle, tw, th);
+  }
+
+  // ---- keyboard ----
+  // Arrows move the box and Shift+arrows resize it (its bottom-right corner moves), a hundredth
+  // of the frame at a time. A focused control that uses arrows itself (a slider, an open list)
+  // keeps them.
+  const STEP = 0.01;
+  const DIRS: Record<string, [number, number]> = {
+    ArrowLeft: [-1, 0],
+    ArrowRight: [1, 0],
+    ArrowUp: [0, -1],
+    ArrowDown: [0, 1],
+  };
+  function onKey(e: KeyboardEvent) {
+    const dir = DIRS[e.key];
+    if (!dir || drag || e.ctrlKey || e.metaKey || e.altKey) return;
+    if (e.defaultPrevented || targetOwnsKey(e.target, e.key)) return;
+    e.preventDefault();
+    const start = [...r] as Rect;
+    const dx = dir[0] * STEP,
+      dy = dir[1] * STEP;
+    onchange({ ...crop, rect: e.shiftKey ? resize("se", start, dx, dy) : move(start, dx, dy) });
   }
 
   /** Resize from a handle, keeping the opposite side (or corner) fixed. */
@@ -183,6 +210,8 @@
   const thirds = [1 / 3, 2 / 3];
   const showGrid = $derived(drag !== null && drag.mode !== "line");
 </script>
+
+<svelte:window onkeydown={onKey} />
 
 <svg
   bind:this={el}

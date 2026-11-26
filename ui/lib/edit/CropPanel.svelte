@@ -217,6 +217,7 @@
     <button
       class="tool"
       class:active={level}
+      aria-pressed={level}
       onclick={ontogglelevel}
       title="Draw along something that should be level or upright (or Ctrl+drag)"
     >
@@ -245,7 +246,10 @@
     </button>
   </div>
 
-  <p class="hint">Drag the corners or edges to crop, inside to move, outside to rotate.</p>
+  <p class="hint">
+    Drag the corners or edges to crop, inside to move, outside to rotate. The arrow keys move the
+    crop too, and resize it with Shift.
+  </p>
 
   <div class="actions">
     <button class="link" onclick={reset}>Reset</button>

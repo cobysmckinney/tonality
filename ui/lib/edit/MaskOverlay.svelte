@@ -18,6 +18,9 @@
     /** Let pointer events through (e.g. Space held to pan). */
     passthrough?: boolean;
     onchange: (m: Mask) => void;
+    /** The shape was nudged from the keyboard (after `onchange`): one of many, to be recorded
+     *  as one step. */
+    onnudge?: () => void;
     oncommit: () => void;
     /** A stroke grew from `a` to `b` (uv); `stroke` is the same object throughout. */
     onpaint: (stroke: Stroke, a: Vec2, b: Vec2) => void;
@@ -34,6 +37,7 @@
     brush,
     passthrough = false,
     onchange,
+    onnudge,
     oncommit,
     onpaint,
     onstroke,
@@ -258,6 +262,53 @@
     else if (JSON.stringify(d.start) !== JSON.stringify($state.snapshot(mask))) oncommit();
   }
 
+  // ---- keyboard ----
+  // Each handle is a tab stop. Arrows move the ones that move (4 px on screen, 20 with Shift:
+  // zoom in for finer); on a size or the angle, right and up are more, left and down less.
+  type Handle = Exclude<Drag["kind"], "paint">;
+  const DIRS: Record<string, Vec2> = {
+    ArrowLeft: [-1, 0],
+    ArrowRight: [1, 0],
+    ArrowUp: [0, -1],
+    ArrowDown: [0, 1],
+  };
+  function onHandleKey(e: KeyboardEvent, kind: Handle) {
+    const dir = DIRS[e.key];
+    if (!dir || drag || e.ctrlKey || e.metaKey || e.altKey) return;
+    e.preventDefault();
+    const start = $state.snapshot(mask) as Mask;
+    const s = start.shape;
+    const px = e.shiftKey ? 20 : 4;
+    const more = dir[0] - dir[1];
+    // The step in the photo's own coordinates: the view may be zoomed, turned or flipped.
+    const o = toSource(frame.x, frame.y),
+      p = toSource(frame.x + dir[0] * px, frame.y + dir[1] * px);
+    const shift = (q: Vec2) => round([q[0] + p[0] - o[0], q[1] + p[1] - o[1]]);
+    if (s.kind === "linear") {
+      const from = kind === "to" ? s.from : shift(s.from as Vec2);
+      const to = kind === "from" ? s.to : shift(s.to as Vec2);
+      onchange({ ...start, shape: { ...s, from, to } });
+    } else if (s.kind === "radial") {
+      const size = (v: number) => r4(Math.max(4 * unit, v + more * px * unit));
+      if (kind === "rx")
+        onchange({ ...start, shape: { ...s, radius: [size(s.radius[0]), s.radius[1]] } });
+      else if (kind === "ry")
+        onchange({ ...start, shape: { ...s, radius: [s.radius[0], size(s.radius[1])] } });
+      else if (kind === "rotate") {
+        const a = s.angle + more * (e.shiftKey ? 15 : 1);
+        const angle = Math.round((((((a + 180) % 360) + 360) % 360) - 180) * 10) / 10;
+        onchange({ ...start, shape: { ...s, angle } });
+      } else onchange({ ...start, shape: { ...s, center: shift(s.center as Vec2) } });
+    } else return;
+    onnudge?.();
+  }
+  /** Where a point on screen is in the photo as framed, in words. */
+  const where = (p: Vec2) =>
+    `${Math.round(((p[0] - frame.x) / frame.w) * 100)}% across, ${Math.round(((p[1] - frame.y) / frame.h) * 100)}% down`;
+  const across = (p: Vec2) => Math.round(((p[0] - frame.x) / frame.w) * 100);
+  /** A radius (long-edge units) as a percentage of the photo's long edge. */
+  const ofEdge = (v: number) => Math.round(v * 100);
+
   const brushR = $derived(brush.size / unit);
   const erasing = $derived(brush.erase || altHeld || (drag?.kind === "paint" && drag.stroke.erase));
 </script>
@@ -291,9 +342,42 @@
         <line class="guide-dark" class:mid={i === 1} {...l} />
       {/each}
     </g>
-    <circle class="handle" cx={linear.a[0]} cy={linear.a[1]} r="5" />
-    <circle class="handle" cx={linear.b[0]} cy={linear.b[1]} r="5" />
-    <circle class="pin" cx={linear.m[0]} cy={linear.m[1]} r="7" />
+    <circle
+      class="handle"
+      cx={linear.a[0]}
+      cy={linear.a[1]}
+      r="5"
+      tabindex="0"
+      role="slider"
+      aria-label="Start of the gradient"
+      aria-valuenow={across(linear.a)}
+      aria-valuetext={where(linear.a)}
+      onkeydown={(e) => onHandleKey(e, "from")}
+    />
+    <circle
+      class="handle"
+      cx={linear.b[0]}
+      cy={linear.b[1]}
+      r="5"
+      tabindex="0"
+      role="slider"
+      aria-label="End of the gradient"
+      aria-valuenow={across(linear.b)}
+      aria-valuetext={where(linear.b)}
+      onkeydown={(e) => onHandleKey(e, "to")}
+    />
+    <circle
+      class="pin"
+      cx={linear.m[0]}
+      cy={linear.m[1]}
+      r="7"
+      tabindex="0"
+      role="slider"
+      aria-label="Position of the gradient"
+      aria-valuenow={across(linear.m)}
+      aria-valuetext={where(linear.m)}
+      onkeydown={(e) => onHandleKey(e, "move-linear")}
+    />
   {:else if radial}
     <path class="area" d={radial.outer} />
     <path class="guide-dark" d={radial.outer} />
@@ -306,11 +390,53 @@
       x2={radial.knob[0]}
       y2={radial.knob[1]}
     />
+    {@const s = mask.shape as Extract<Mask["shape"], { kind: "radial" }>}
     {#each radial.handles as h, i (i)}
-      <circle class="handle" cx={h.p[0]} cy={h.p[1]} r="5" />
+      <!-- Two handles for each size: one of each pair is a tab stop. -->
+      {#if i % 2 === 0}
+        {@const v = s.radius[h.id === "rx" ? 0 : 1]}
+        <circle
+          class="handle"
+          cx={h.p[0]}
+          cy={h.p[1]}
+          r="5"
+          tabindex="0"
+          role="slider"
+          aria-label={h.id === "rx" ? "Width" : "Height"}
+          aria-valuenow={ofEdge(v)}
+          aria-valuetext="{ofEdge(v)}% of the photo’s long edge"
+          onkeydown={(e) => onHandleKey(e, h.id as "rx" | "ry")}
+        />
+      {:else}
+        <circle class="handle" cx={h.p[0]} cy={h.p[1]} r="5" />
+      {/if}
     {/each}
-    <circle class="knob" cx={radial.knob[0]} cy={radial.knob[1]} r="5" />
-    <circle class="pin" cx={radial.centre[0]} cy={radial.centre[1]} r="7" />
+    <circle
+      class="knob"
+      cx={radial.knob[0]}
+      cy={radial.knob[1]}
+      r="5"
+      tabindex="0"
+      role="slider"
+      aria-label="Angle"
+      aria-valuemin={-180}
+      aria-valuemax={180}
+      aria-valuenow={s.angle}
+      aria-valuetext="{s.angle}°"
+      onkeydown={(e) => onHandleKey(e, "rotate")}
+    />
+    <circle
+      class="pin"
+      cx={radial.centre[0]}
+      cy={radial.centre[1]}
+      r="7"
+      tabindex="0"
+      role="slider"
+      aria-label="Position"
+      aria-valuenow={across(radial.centre)}
+      aria-valuetext={where(radial.centre)}
+      onkeydown={(e) => onHandleKey(e, "move-radial")}
+    />
   {:else if pointer && !passthrough}
     <circle class="brush-dark" cx={pointer[0]} cy={pointer[1]} r={brushR} />
     <circle class="brush" cx={pointer[0]} cy={pointer[1]} r={brushR} />
@@ -412,5 +538,19 @@
     fill: var(--focus, #6aa0ff);
     stroke: #fff;
     stroke-width: 2;
+  }
+  /* The handle that has the keyboard: a heavy ring (an outline isn't drawn around an SVG
+     shape everywhere). */
+  .handle:focus-visible,
+  .knob:focus-visible,
+  .pin:focus-visible {
+    outline: none;
+    stroke: var(--focus, #6aa0ff);
+    stroke-width: 4;
+    paint-order: stroke;
+  }
+  .knob:focus-visible,
+  .pin:focus-visible {
+    stroke: #fff;
   }
 </style>
