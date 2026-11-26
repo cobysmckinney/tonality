@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { enterConfirms, targetOwnsKey } from "./keys";
+import { enterConfirms, focusedControlOwnsKey, targetOwnsKey } from "./keys";
 
 // No DOM in the test environment: a minimal element answering `closest`/`matches` for a
 // comma-separated selector by tag name or by the selectors listed in `is`.
@@ -23,6 +23,35 @@ class Fake {
 }
 const el = (tag: string, opts: Fake["opts"] = {}) => new Fake(tag, opts) as unknown as EventTarget;
 const owns = (t: EventTarget | null, ...keys: string[]) => keys.map((k) => targetOwnsKey(t, k));
+
+describe("focusedControlOwnsKey", () => {
+  const keeps = (t: EventTarget, ...keys: string[]) => keys.map((k) => focusedControlOwnsKey(t, k));
+
+  it("a button reached with the keyboard keeps Enter and Space", () => {
+    const tabbedTo = el("BUTTON", { is: [":focus-visible"] });
+    expect(keeps(tabbedTo, "Enter", " ", "m", "Escape")).toEqual([true, true, false, false]);
+  });
+
+  it("a button that only kept focus from a mouse click doesn't", () => {
+    expect(keeps(el("BUTTON"), "Enter", " ")).toEqual([false, false]);
+    // The icon inside it is the same button.
+    expect(focusedControlOwnsKey(el("svg", { parent: new Fake("BUTTON") }), "Enter")).toBe(false);
+  });
+
+  it("fields, checkboxes and sliders are as targetOwnsKey says, however they got focus", () => {
+    expect(keeps(el("INPUT", { type: "text" }), "Enter", " ", "z")).toEqual([true, true, true]);
+    expect(keeps(el("INPUT", { type: "checkbox" }), " ", "Enter", "z")).toEqual([
+      true,
+      false,
+      false,
+    ]);
+    expect(keeps(el("TEXTAREA"), "Enter")).toEqual([true]);
+    expect(keeps(el("DIV", { is: ["[role=slider]"] }), "ArrowLeft", "Enter")).toEqual([
+      true,
+      false,
+    ]);
+  });
+});
 
 describe("targetOwnsKey", () => {
   it("buttons and links take Enter and Space, not letters or arrows", () => {
@@ -52,6 +81,10 @@ describe("targetOwnsKey", () => {
       false,
     ]);
     expect(owns(el("DIV", { is: ["[role=slider]"] }), "ArrowUp", "Enter")).toEqual([true, false]);
+    // A focusable separator (a panel's resize handle) is moved with the arrows too.
+    expect(
+      owns(el("DIV", { is: ["[role=separator][tabindex]"] }), "ArrowLeft", "End", "Enter", "m"),
+    ).toEqual([true, true, false, false]);
     expect(owns(el("BUTTON", { is: ["[role=menuitem]"] }), "ArrowDown", "Enter")).toEqual([
       true,
       true,

@@ -20,7 +20,7 @@
   import { palette, shortcut } from "$lib/palette/commands.svelte";
   import CullNote from "./CullNote.svelte";
   import { flagNote, ratingNote } from "$lib/library/culling";
-  import { targetOwnsKey } from "$lib/keys";
+  import { focusedControlOwnsKey } from "$lib/keys";
 
   const FLAG_KEYS: Record<string, number> = { p: 1, x: -1, u: 0 };
   let cullNote = $state<ReturnType<typeof CullNote> | null>(null);
@@ -50,6 +50,12 @@
   $effect(() => {
     session.defaultEdit().then((d) => (beforeEdit = d));
   });
+  // "Level by drawing a line" belongs to one visit to crop mode. Whatever ends that visit (Done,
+  // Cancel, Enter, Esc, the palette, another photo) switches it off, so the next crop doesn't
+  // start with every drag drawing a line.
+  $effect(() => {
+    if (!session.cropping) level = false;
+  });
   // The eyedropper ends when another photo opens or crop or mask mode starts.
   $effect(() => {
     void [session.image?.id, session.cropping, session.masking];
@@ -57,20 +63,22 @@
   });
 
   function onKeyDown(e: KeyboardEvent) {
-    if (e.target instanceof HTMLInputElement) return;
+    // A key the focused control uses is that control's: text in a field, Enter and Space on a
+    // button reached with Tab (Enter on the crop panel's Cancel must not apply the crop), arrows
+    // on a slider or on the panel's resize handle. A checkbox only uses Space, so ticking one
+    // doesn't switch every shortcut off until something else is clicked.
+    if (focusedControlOwnsKey(e.target, e.key)) return;
     if (session.cropping) {
       // Crop mode owns the keyboard: Enter applies, Esc cancels, [ ] rotate.
       const mod = e.ctrlKey || e.metaKey;
       if (e.key === "Enter") {
         e.preventDefault();
-        level = false;
         session.finishCrop();
       } else if (e.key === "Escape") {
-        level = false;
         session.cancelCrop();
       } else if ((e.key === "r" || e.key === "R") && !mod) {
-        level = false;
-        session.finishCrop();
+        // Not while held: the repeat would start the next crop.
+        if (!e.repeat) session.finishCrop();
       } else if ((e.key === "[" || e.key === "]") && session.edit) {
         session.edit.crop = turn(session.edit.crop, e.key === "]" ? 1 : -1);
         if (session.cropAspect) session.cropAspect = 1 / session.cropAspect;
@@ -78,7 +86,7 @@
       return;
     }
     if ((e.key === "r" || e.key === "R") && !e.ctrlKey && !e.metaKey && !e.altKey && session.edit) {
-      session.startCrop();
+      if (!e.repeat) session.startCrop();
       return;
     }
     const plain = !e.ctrlKey && !e.metaKey && !e.altKey;
@@ -91,6 +99,8 @@
       return;
     }
     if ((e.key === "m" || e.key === "M") && plain && session.edit) {
+      // One press, one switch: held, it would flip mask mode on and off.
+      if (e.repeat) return;
       if (session.masking) session.stopMasks();
       else session.startMasks();
       return;
@@ -103,7 +113,9 @@
         return;
       }
       if ((e.key === "Delete" || e.key === "Backspace") && sel !== null) {
-        session.deleteMask(sel);
+        // One press deletes one mask. The selection moves to its neighbour afterwards, so a
+        // key held a moment too long would otherwise take that one too, and the next.
+        if (!e.repeat) session.deleteMask(sel);
         return;
       }
       if (e.key === "[" || e.key === "]") {
@@ -117,20 +129,18 @@
       }
     }
     // 0–5 rate, P / X / U pick, reject, unflag the open photo, as in the Library.
-    if (plain && !e.repeat && session.image && !targetOwnsKey(e.target, e.key)) {
+    if (plain && !e.repeat && session.image) {
       const note = cull(e.key, session.image.id);
       if (note) {
         cullNote?.show(note);
         return;
       }
     }
-    // ← / → switch photos (unless a slider has focus: there they nudge its value).
+    // ← / → switch photos (a slider or a resize handle with focus has already kept them).
     if ((e.key === "ArrowLeft" || e.key === "ArrowRight") && plain && !e.shiftKey) {
-      if (!(e.target instanceof Element && e.target.closest("[role=slider]"))) {
-        e.preventDefault();
-        library.step(e.key === "ArrowLeft" ? -1 : 1);
-        return;
-      }
+      e.preventDefault();
+      library.step(e.key === "ArrowLeft" ? -1 : 1);
+      return;
     }
     if (e.key === "\\" && !e.repeat) before = true;
     if (e.key === "Escape" && session.compare) {
@@ -195,14 +205,8 @@
       "view.zoomIn": () => canvas?.zoomBy(Math.SQRT2),
       "view.zoomOut": () => canvas?.zoomBy(Math.SQRT1_2),
       "view.zoomToggle": () => canvas?.toggleZoom(),
-      "crop.apply": () => {
-        level = false;
-        session.finishCrop();
-      },
-      "crop.cancel": () => {
-        level = false;
-        session.cancelCrop();
-      },
+      "crop.apply": () => session.finishCrop(),
+      "crop.cancel": () => session.cancelCrop(),
       "view.filmstrip": {
         run: toggleStrip,
         title: () => (stripOpen ? "Hide filmstrip" : "Show filmstrip"),
