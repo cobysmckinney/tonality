@@ -288,6 +288,18 @@ impl ExportError {
     }
 }
 
+/// Where the develop shader's highlight clip falls in camera space, per channel: `wb` is its
+/// white balance multipliers and, last, the level it clips each balanced channel to.
+fn highlight_clip(wb: &[f32; 4]) -> [f32; 3] {
+    std::array::from_fn(|c| {
+        if wb[c] > 0.0 {
+            wb[3] / wb[c]
+        } else {
+            f32::INFINITY
+        }
+    })
+}
+
 /// The AI masks among `missing` (indices into `edit.masks` whose raster isn't cached) that
 /// detection has to run for before `edit` can be rendered, in order.
 ///
@@ -425,8 +437,9 @@ fn run(
             capture: tonality_raw::read_capture(&job.path).unwrap_or_default(),
             rating: job.rating,
         };
-        // Downscaled sources, by source long edge (versions with the same crop share one).
-        let mut scaled: Vec<(u32, Scaled)> = Vec::new();
+        // Downscaled sources, by source long edge and highlight clip (versions with the same
+        // crop and white balance share one).
+        let mut scaled: Vec<((u32, [u32; 3]), Scaled)> = Vec::new();
         // Clarity / Dehaze maps: made once per photo, if some version uses them.
         let presence = job
             .versions
@@ -480,10 +493,15 @@ fn run(
                         frame: [full.width, full.height],
                     }
                 } else {
-                    if !scaled.iter().any(|(l, _)| *l == src_long) {
-                        scaled.push((src_long, full.scaled(src_long)));
+                    // Highlights are clipped after white balance, in the shader; a source
+                    // that is averaged down has to be clipped at the same levels first, or
+                    // the edges of blown areas come out magenta.
+                    let clip = highlight_clip(&params.wb);
+                    let key = (src_long, clip.map(f32::to_bits));
+                    if !scaled.iter().any(|(k, _)| *k == key) {
+                        scaled.push((key, full.scaled_clipped(src_long, Some(clip))));
                     }
-                    let (_, (w, h, px)) = scaled.iter().find(|(l, _)| *l == src_long).unwrap();
+                    let (_, (w, h, px)) = scaled.iter().find(|(k, _)| *k == key).unwrap();
                     Source {
                         width: *w,
                         height: *h,
@@ -1049,6 +1067,13 @@ mod tests {
         assert!(!ExportError::from("decode failed".to_string()).folder);
         let full = std::io::Error::from(std::io::ErrorKind::StorageFull);
         assert!(ExportError::writing(full).folder);
+    }
+
+    #[test]
+    fn the_highlight_clip_is_the_shaders_seen_from_camera_space() {
+        // Red is doubled, so it reaches the clip (1.0) at half of the sensor's range.
+        assert_eq!(highlight_clip(&[2.0, 1.0, 1.6, 1.0]), [0.5, 1.0, 0.625]);
+        assert_eq!(highlight_clip(&[0.0, 1.0, 1.0, 1.0])[0], f32::INFINITY);
     }
 
     #[test]
