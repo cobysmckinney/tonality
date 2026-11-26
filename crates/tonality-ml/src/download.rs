@@ -70,12 +70,13 @@ pub fn ensure(dir: &Path, file: &ModelFile, progress: &mut dyn FnMut(u64, u64)) 
         let _ = std::fs::remove_file(&dest);
     }
     std::fs::create_dir_all(dir)?;
+    // A dead connection must fail rather than hang detection forever. The body gets as long
+    // as a slow (50 kB/s) link needs.
+    let body_secs = 120 + file.size / 50_000;
+    remove_stale_parts(&dest, Duration::from_secs(body_secs + 300));
     // Per process: another instance fetching the same file must not write into this one.
-    let part = dest.with_extension(format!("{}.part", std::process::id()));
+    let part = part_path(&dest, std::process::id());
     let res = (|| -> Result<()> {
-        // A dead connection must fail rather than hang detection forever. The body gets as long
-        // as a slow (50 kB/s) link needs.
-        let body_secs = 120 + file.size / 50_000;
         let resp = ureq::get(file.url)
             .config()
             .timeout_connect(Some(Duration::from_secs(30)))
@@ -120,6 +121,41 @@ pub fn ensure(dir: &Path, file: &ModelFile, progress: &mut dyn FnMut(u64, u64)) 
         let _ = std::fs::remove_file(&part);
     }
     res.map(|_| dest)
+}
+
+/// Where process `pid` downloads `dest` to before it is checked and renamed into place.
+fn part_path(dest: &Path, pid: u32) -> PathBuf {
+    dest.with_extension(format!("{pid}.part"))
+}
+
+/// Delete what earlier runs left of downloading `dest`: a download that was cut short by the
+/// app quitting or crashing leaves its part file (up to the whole model), and the next run,
+/// with another process id, writes a new one beside it. Only files untouched for `older_than`,
+/// which is longer than a download is allowed to take, so another instance's download that is
+/// still running is left alone.
+fn remove_stale_parts(dest: &Path, older_than: Duration) {
+    let (Some(dir), Some(stem)) = (dest.parent(), dest.file_stem()) else {
+        return;
+    };
+    let prefix = format!("{}.", stem.to_string_lossy());
+    for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        // `<stem>.<pid>.part`
+        let is_part = name
+            .strip_prefix(&prefix)
+            .and_then(|rest| rest.strip_suffix(".part"))
+            .is_some_and(|pid| !pid.is_empty() && pid.chars().all(|c| c.is_ascii_digit()));
+        let stale = entry
+            .metadata()
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|at| at.elapsed().ok())
+            .is_some_and(|age| age > older_than);
+        if is_part && stale {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
 }
 
 fn sha256_file(path: &Path) -> std::io::Result<String> {
@@ -178,6 +214,185 @@ mod tests {
             .recv_timeout(Duration::from_secs(10))
             .expect("ensure waited on another file's lock");
         assert_eq!(got.unwrap(), dir.join("installed.onnx"));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    // -----------------------------------------------------------------------------------------
+    // The download itself, against a server on this machine.
+    // -----------------------------------------------------------------------------------------
+
+    fn sha(bytes: &[u8]) -> &'static str {
+        let hex: String = Sha256::digest(bytes)
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        Box::leak(hex.into_boxed_str())
+    }
+
+    /// A folder for one test, and a server that answers every request with `body`. Returns the
+    /// folder and the URL to fetch.
+    fn serve(tag: &str, body: Vec<u8>) -> (PathBuf, &'static str) {
+        use std::net::TcpListener;
+        let dir = std::env::temp_dir().join(format!("tonality-ml-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/model.onnx", listener.local_addr().unwrap());
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { break };
+                // The request, up to its blank line.
+                let mut seen = Vec::new();
+                let mut byte = [0u8; 1];
+                while !seen.ends_with(b"\r\n\r\n") {
+                    match stream.read(&mut byte) {
+                        Ok(1) => seen.push(byte[0]),
+                        _ => break,
+                    }
+                }
+                let head = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\n\
+                     Content-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
+                // The client may hang up early (a body over its limit): not this test's failure.
+                let _ = stream.write_all(head.as_bytes());
+                let _ = stream.write_all(&body);
+            }
+        });
+        (dir, Box::leak(url.into_boxed_str()))
+    }
+
+    fn leftovers(dir: &Path) -> Vec<String> {
+        let mut names: Vec<String> = std::fs::read_dir(dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        names
+    }
+
+    #[test]
+    fn a_download_that_checks_out_is_installed() {
+        let weights = b"these are the right weights".to_vec();
+        let (dir, url) = serve("ok", weights.clone());
+        let file = ModelFile {
+            name: "good.onnx",
+            url,
+            size: weights.len() as u64,
+            sha256: sha(&weights),
+        };
+        let mut reported = (0, 0);
+        let path = ensure(&dir, &file, &mut |done, total| reported = (done, total)).unwrap();
+        assert_eq!(path, dir.join("good.onnx"));
+        assert_eq!(std::fs::read(&path).unwrap(), weights);
+        assert_eq!(reported, (weights.len() as u64, weights.len() as u64));
+        assert_eq!(leftovers(&dir), ["good.onnx"], "no part file left");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_download_with_the_wrong_contents_is_not_installed() {
+        // The right length, so only the checksum can tell.
+        let (dir, url) = serve("bad", b"tampered weights...........".to_vec());
+        let wanted = b"these are the right weights";
+        let file = ModelFile {
+            name: "bad.onnx",
+            url,
+            size: wanted.len() as u64,
+            sha256: sha(wanted),
+        };
+        let e = ensure(&dir, &file, &mut |_, _| {}).unwrap_err();
+        assert!(
+            matches!(&e, MlError::Download(m) if m.contains("checksum")),
+            "{e}"
+        );
+        assert!(
+            leftovers(&dir).is_empty(),
+            "neither the file nor its part: {:?}",
+            leftovers(&dir)
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_download_longer_than_the_model_is_cut_off() {
+        // A megabyte where 27 bytes were promised: it must not be written out in full.
+        let (dir, url) = serve("long", vec![7u8; 1 << 20]);
+        let wanted = b"these are the right weights";
+        let file = ModelFile {
+            name: "long.onnx",
+            url,
+            size: wanted.len() as u64,
+            sha256: sha(wanted),
+        };
+        assert!(ensure(&dir, &file, &mut |_, _| {}).is_err());
+        assert!(leftovers(&dir).is_empty(), "{:?}", leftovers(&dir));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_damaged_installed_file_is_fetched_again() {
+        let weights = b"these are the right weights".to_vec();
+        let (dir, url) = serve("damaged", weights.clone());
+        let file = ModelFile {
+            name: "damaged.onnx",
+            url,
+            size: weights.len() as u64,
+            sha256: sha(&weights),
+        };
+        // The right size, the wrong contents: a model runtime would fail on it every time.
+        std::fs::write(dir.join("damaged.onnx"), vec![b'?'; weights.len()]).unwrap();
+        let path = ensure(&dir, &file, &mut |_, _| {}).unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), weights);
+        assert_eq!(leftovers(&dir), ["damaged.onnx"]);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn part_files_from_runs_that_were_cut_short_are_removed() {
+        let weights = b"these are the right weights".to_vec();
+        let (dir, url) = serve("stale", weights.clone());
+        let dest = dir.join("silueta.onnx");
+        let old = std::time::SystemTime::now() - Duration::from_secs(3 * 60 * 60);
+        let aged = |name: &str, when: std::time::SystemTime| {
+            let p = dir.join(name);
+            std::fs::write(&p, b"half").unwrap();
+            std::fs::File::options()
+                .write(true)
+                .open(&p)
+                .unwrap()
+                .set_modified(when)
+                .unwrap();
+        };
+        // An earlier run's, hours old; and one from another instance that is downloading now.
+        aged("silueta.41234.part", old);
+        aged("silueta.51877.part", std::time::SystemTime::now());
+        // Old, but not this model's part file.
+        aged("other.41234.part", old);
+        aged("silueta.notes.part", old);
+
+        remove_stale_parts(&dest, Duration::from_secs(600));
+        assert_eq!(
+            leftovers(&dir),
+            [
+                "other.41234.part",
+                "silueta.51877.part",
+                "silueta.notes.part"
+            ]
+        );
+
+        // And `ensure` does it on the way to a download.
+        aged("silueta.41234.part", old);
+        let file = ModelFile {
+            name: "silueta.onnx",
+            url,
+            size: weights.len() as u64,
+            sha256: sha(&weights),
+        };
+        ensure(&dir, &file, &mut |_, _| {}).unwrap();
+        assert!(!dir.join("silueta.41234.part").exists());
+        assert!(dest.exists());
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }
