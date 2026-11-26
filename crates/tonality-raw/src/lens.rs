@@ -306,35 +306,118 @@ fn versions<S: AsRef<str>>(t: &[S]) -> Vec<u8> {
     out
 }
 
-/// How well a database lens name matches the camera's lens string. Every number in the
-/// database name must appear, both must name the same version ("II", "Mark III"), and either
-/// most of the database name's words appear in the camera's string or all of the camera's
-/// words appear in the database name (short names such as "M.12-40mm F2.8", as lensfun
-/// itself matches). The score is the share of both names' words that the other has. `None`
-/// if it doesn't match.
-fn name_score(db_name: &str, exif: &[String], maker: &str) -> Option<f32> {
+/// A lens name as words: `core` are the ones outside parentheses and brackets, `all` adds the
+/// ones inside. What's inside is a product code or a note ("(A012)", "[IF]", "(SEL35F14GM)"),
+/// which one of two names for the same lens often has and the other doesn't.
+struct Words {
+    core: Vec<String>,
+    all: Vec<String>,
+}
+
+/// Words that are in every lens name, or only decorate one ("Zoom-Nikkor"): no evidence of
+/// which lens it is.
+const FILLER: [&str; 3] = ["mm", "f", "zoom"];
+
+fn words(name: &str, maker: &str) -> Words {
     let skip = tokens(maker);
-    let want: Vec<String> = tokens(db_name)
-        .into_iter()
-        .filter(|t| !skip.contains(t))
-        .collect();
-    let exif: Vec<&String> = exif.iter().filter(|t| !skip.contains(t)).collect();
-    if want.is_empty() || exif.is_empty() {
+    let clean = |text: &str| -> Vec<String> {
+        tokens(text)
+            .into_iter()
+            .filter(|t| !skip.contains(t) && !FILLER.contains(&t.as_str()))
+            .map(|t| match t.as_str() {
+                // Sigma's lines, which a camera abbreviates and lensfun sometimes spells out.
+                "art" => "a".into(),
+                "contemporary" => "c".into(),
+                "sport" | "sports" => "s".into(),
+                _ => t,
+            })
+            .collect()
+    };
+    let (mut outside, mut inside, mut depth) = (String::new(), String::new(), 0u32);
+    for c in name.chars() {
+        match c {
+            '(' | '[' => depth += 1,
+            ')' | ']' => depth = depth.saturating_sub(1),
+            _ if depth == 0 => {
+                outside.push(c);
+                continue;
+            }
+            _ => {
+                inside.push(c);
+                continue;
+            }
+        }
+        // A bracket separates words on both sides of it.
+        outside.push(' ');
+        inside.push(' ');
+    }
+    // A maker's product code written without parentheses ("| Contemporary 017", "VC USD
+    // A009"): a number with a leading zero is never a focal length or an aperture. It, and a
+    // single letter in front of it, count like the words in parentheses.
+    let mut core = clean(&outside);
+    let mut codes = Vec::new();
+    while let Some(i) = core
+        .iter()
+        .position(|t| t.len() >= 3 && t.starts_with('0') && t.chars().all(|c| c.is_ascii_digit()))
+    {
+        codes.push(core.remove(i));
+        if i > 0 && core[i - 1].len() == 1 && core[i - 1].chars().all(char::is_alphabetic) {
+            codes.push(core.remove(i - 1));
+        }
+    }
+    let mut all = core.clone();
+    all.extend(codes);
+    all.extend(clean(&inside));
+    Words { core, all }
+}
+
+/// How well a database lens name matches the camera's lens string, or `None` if it isn't the
+/// same lens.
+///
+/// A lens that isn't in the database must match nothing: a profile for another lens bends and
+/// brightens the photo wrongly, which is worse than offering none. Two lenses of the same
+/// focal length and aperture share every number and "mm" and "f", so those alone say nothing.
+/// What tells lenses apart is the other words (the mount letters, "GM", "Art", "VCM"), and so:
+///
+/// - every number in the database name must be in the camera's string;
+/// - both must name the same version ("II", "Mark III");
+/// - the camera's string may not have a word the database name lacks: a newer design is often
+///   the old name plus one letter ("RF70-200mm F2.8 L IS USM Z");
+/// - of the database name's words, most must be in the camera's string, or (for the short
+///   names some cameras write, "M.12-40mm F2.8") all of the camera's words must be in it.
+///
+/// Words in parentheses count for the other name's benefit only (see [`Words`]). The score is
+/// the share of both names' words, those included, that the other has: of two names that both
+/// pass, the one that also agrees on the product code wins ("E 20mm F2.8 F050" is Tamron's,
+/// "E 20mm F2.8" is Sony's).
+fn name_score(db_name: &str, exif_name: &str, maker: &str) -> Option<f32> {
+    let (want, exif) = (words(db_name, maker), words(exif_name, maker));
+    if want.core.is_empty() || exif.core.is_empty() {
         return None;
     }
     let number = |t: &String| t.starts_with(|c: char| c.is_ascii_digit());
-    if want.iter().any(|t| number(t) && !exif.contains(&t)) {
+    if want.core.iter().any(|t| number(t) && !exif.all.contains(t)) {
         return None;
     }
-    if versions(&want) != versions(&exif) {
+    if versions(&want.all) != versions(&exif.all) {
         return None;
     }
-    let db_hits = want.iter().filter(|t| exif.contains(t)).count();
-    let exif_hits = exif.iter().filter(|t| want.contains(t)).count();
-    let most_of_db = db_hits as f32 / want.len() as f32 >= 0.75;
-    let all_of_exif = exif_hits == exif.len() && exif.iter().any(|t| number(t));
-    (most_of_db || all_of_exif)
-        .then_some((db_hits + exif_hits) as f32 / (want.len() + exif.len()) as f32)
+    if exif
+        .core
+        .iter()
+        .any(|t| !number(t) && !want.all.contains(t))
+    {
+        return None;
+    }
+    let db_hits = want.core.iter().filter(|t| exif.all.contains(t)).count();
+    let exif_hits = exif.core.iter().filter(|t| want.all.contains(t)).count();
+    let most_of_db = db_hits as f32 / want.core.len() as f32 >= 0.75;
+    let all_of_exif = exif_hits == exif.core.len() && exif.core.iter().any(number);
+    let shared = |a: &Words, b: &Words| a.all.iter().filter(|t| b.all.contains(t)).count();
+    (most_of_db || all_of_exif).then_some(
+        (shared(&want, &exif) + shared(&exif, &want)) as f32
+            / (want.all.len() + exif.all.len()) as f32,
+    )
 }
 
 fn same(a: &str, b: &str) -> bool {
@@ -374,7 +457,6 @@ fn lensfun(meta: &ImageMeta) -> Option<LensProfile> {
     if let Some((_, compat)) = db.mounts.iter().find(|(n, _)| *n == cam.mount) {
         mounts.extend(compat.iter().map(String::as_str));
     }
-    let exif = tokens(lens_name);
     let lens = db
         .lenses
         .iter()
@@ -385,7 +467,7 @@ fn lensfun(meta: &ImageMeta) -> Option<LensProfile> {
             let s = l
                 .models
                 .iter()
-                .filter_map(|m| name_score(m, &exif, &l.maker))
+                .filter_map(|m| name_score(m, lens_name, &l.maker))
                 .fold(f32::MIN, f32::max);
             (s > f32::MIN).then_some((s, l))
         })
@@ -679,6 +761,56 @@ mod tests {
         assert_eq!(versions(&tokens("Mark II")), [2]);
         assert_eq!(versions(&tokens("OM-1 Mk3")), [3]);
         assert!(versions(&tokens("E 18-135mm F3.5-5.6 OSS")).is_empty());
+    }
+
+    #[test]
+    fn a_lens_that_is_not_in_the_database_gets_no_other_lens_profile() {
+        let name = |make, model, lens| lensfun(&meta(make, model, lens, 85.0, 4.0)).map(|p| p.name);
+        // Same focal length and aperture as another lens is not the same lens: each of these
+        // used to get the profile named beside it.
+        for (make, model, lens) in [
+            ("Canon", "EOS R5", "RF 85mm F1.4L VCM"), // Zeiss Otus 85mm f/1.4
+            ("Canon", "EOS R5", "RF70-200mm F2.8 L IS USM Z"), // the older RF 70-200mm F2.8L
+            ("Sony", "ILCE-7M3", "FE 100mm F2.8 Macro GM OSS"), // an M42 Orestor 100mm f/2.8
+            (
+                "Sony",
+                "ILCE-7M3",
+                "FE 70-200mm F2.8 GM OSS + 1.4X Teleconverter",
+            ), // the bare lens
+            ("Nikon", "Z 6", "NIKKOR Z 35mm f/1.8 S II"), // (a version that doesn't exist)
+        ] {
+            assert_eq!(name(make, model, lens), None, "{make} {model} + {lens}");
+        }
+        // A product code in the database's name isn't part of the lens's: this one used to
+        // fall through to the older ZA.
+        assert_eq!(
+            name("Sony", "ILCE-7M3", "FE 35mm F1.4 GM").as_deref(),
+            Some("Sony FE 35mm f/1.4 GM (SEL35F14GM)")
+        );
+        // Sigma's lines, abbreviated by the camera and spelled out (with a code) by lensfun.
+        let sigma = name("Sony", "ILCE-7M3", "85mm F1.4 DG DN | A").expect("the DG DN Art");
+        assert!(sigma.contains("DG DN") && sigma.contains("Art"), "{sigma}");
+        // Two lenses with one name but for the code: the code decides, either way round.
+        let tamron = name("Sony", "ILCE-6600", "E 20mm F2.8 F050").expect("Tamron 20mm");
+        assert!(tamron.starts_with("Tamron"), "{tamron}");
+        assert_eq!(
+            name("Sony", "ILCE-6600", "E 20mm F2.8").as_deref(),
+            Some("Sony E 20mm f/2.8")
+        );
+    }
+
+    #[test]
+    fn every_lens_in_the_database_matches_its_own_name() {
+        // The matcher may be strict about other lenses, never about the lens itself.
+        for l in &db().lenses {
+            for m in &l.models {
+                assert!(
+                    name_score(m, m, &l.maker).is_some() || words(m, &l.maker).core.is_empty(),
+                    "{} | {m}",
+                    l.maker
+                );
+            }
+        }
     }
 
     #[test]
