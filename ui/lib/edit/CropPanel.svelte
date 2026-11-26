@@ -103,10 +103,27 @@
   }
 
   // ---- straighten ----
+  // The crop is shrunk to fit each new angle from `base`, the rectangle when the drag began.
   let base: Rect | null = null;
+  // The last drag's `base`, and when that drag ended. A double-click to reset is two presses
+  // first: the first one jumps the slider to the pointer and shrinks the crop for that angle.
+  // The reset goes back to the rectangle from before those presses, not the shrunken one.
+  let ended: { base: Rect; at: number } | null = null;
+  const DOUBLE_CLICK_MS = 600;
   function straighten(angle: number) {
     base ??= [...(crop.rect as Rect)] as Rect;
     set({ ...crop, angle, rect: shrinkToFit(base, angle, ...turned) });
+  }
+  function endStraighten() {
+    if (base) ended = { base, at: performance.now() };
+    base = null;
+  }
+  function resetStraighten() {
+    const before = ended && performance.now() - ended.at < DOUBLE_CLICK_MS ? ended.base : null;
+    base = before;
+    straighten(0);
+    base = null;
+    ended = null;
   }
 
   function rotate(dir: 1 | -1) {
@@ -207,12 +224,8 @@
       decimals={1}
       unit="°"
       oninput={straighten}
-      oncommit={() => (base = null)}
-      onreset={() => {
-        base = null;
-        straighten(0);
-        base = null;
-      }}
+      oncommit={endStraighten}
+      onreset={resetStraighten}
     />
     <button
       class="tool"
