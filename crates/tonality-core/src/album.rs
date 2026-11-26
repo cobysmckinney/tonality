@@ -80,18 +80,39 @@ impl Catalog {
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
+    /// Album names are unique, ignoring case: a sidecar records the albums a photo is in by
+    /// name and they're matched that way when it's read, so two albums with one name would
+    /// each take in the other's photos. `except` is the album being renamed.
+    fn name_is_free(&self, name: &str, except: Option<AlbumId>) -> Result<()> {
+        let taken: bool = self.conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM albums WHERE name = ?1 COLLATE NOCASE AND id IS NOT ?2)",
+            params![name, except],
+            |r| r.get(0),
+        )?;
+        if taken {
+            return Err(CatalogError::Invalid(format!(
+                "An album named “{name}” already exists"
+            )));
+        }
+        Ok(())
+    }
+
     pub fn create_album(&mut self, name: &str) -> Result<AlbumId> {
+        let name = clean_name(name)?;
+        self.name_is_free(&name, None)?;
         self.conn.execute(
             "INSERT INTO albums (name, created_at) VALUES (?1, ?2)",
-            params![clean_name(name)?, self.now()],
+            params![name, self.now()],
         )?;
         Ok(self.conn.last_insert_rowid())
     }
 
     pub fn rename_album(&mut self, id: AlbumId, name: &str) -> Result<()> {
+        let name = clean_name(name)?;
+        self.name_is_free(&name, Some(id))?;
         let n = self.conn.execute(
             "UPDATE albums SET name = ?1 WHERE id = ?2",
-            params![clean_name(name)?, id],
+            params![name, id],
         )?;
         if n == 0 {
             return Err(CatalogError::NotFound(format!("album {id}")));
@@ -186,6 +207,16 @@ mod tests {
 
         cat.remove_from_album(trips, &[a]).unwrap();
         assert_eq!(in_album(&cat, trips), [b]);
+
+        // Names are matched without regard to case when a sidecar is read, so two albums
+        // can't share one: each would take in the other's photos at every launch.
+        for taken in ["Trips", "trips", " TRIPS "] {
+            let e = cat.create_album(taken).unwrap_err().to_string();
+            assert!(e.contains("already exists"), "{e}");
+            assert!(cat.rename_album(fam, taken).is_err());
+        }
+        cat.rename_album(trips, "trips").unwrap();
+        cat.rename_album(trips, "Trips").unwrap();
 
         cat.rename_album(fam, "Kin").unwrap();
         cat.delete_album(trips).unwrap();
