@@ -26,9 +26,6 @@ import {
   type MaskKind,
 } from "./masks";
 
-/** When the commit HEAD is on was last changed. */
-const headTime = (v: HistoryView) => v.commits.find((c) => c.id === v.head.commit)?.time;
-
 /** Where an AI mask's detection stands (keyed by `aiKey`). */
 export type AiStatus =
   { state: "working" } | { state: "found" } | { state: "empty" } | { state: "error" };
@@ -573,6 +570,11 @@ class EditSession {
     if (prev?.kind === "photo" && next !== prev) api.closeReference(prev.image.id).catch(() => {});
     this.compare = next;
   }
+}
+
+/** When the commit HEAD is on was last changed. */
+function headTime(v: HistoryView) {
+  return v.commits.find((c) => c.id === v.head.commit)?.time;
 }
 
 export const session = new EditSession();

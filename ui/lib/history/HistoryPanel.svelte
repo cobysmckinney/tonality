@@ -12,10 +12,11 @@
   import type { EditState } from "$lib/bindings/EditState";
   import type { HistoryView } from "$lib/bindings/HistoryView";
   import { session } from "$lib/edit/session.svelte";
-  import { branchThumbKey, branchThumbs, requestBranchThumb } from "$lib/edit/versions";
+  import { branchThumbs, requestBranchThumb } from "$lib/edit/versions";
   import { branchSteps, versions } from "./graph";
   import { sessionLabel, sessionLabels, stepTime } from "./sessions";
   import { DEFAULT_WIDTH, MAX_WIDTH, MIN_WIDTH, historyWidth } from "./width.svelte";
+  import { branchThumbKey } from "$lib/edit/versions";
 
   interface Props {
     view: HistoryView;
