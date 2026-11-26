@@ -5,7 +5,7 @@ fn main() {
     // What this build reads and writes on disk, for the release workflow to put in the update
     // feed (see `tonality_core::format`). Before anything of the app starts.
     if std::env::args().nth(1).as_deref() == Some("--formats") {
-        println!("{}", tonality_app::formats_json());
+        println!("{}", tonality_app::formats::json());
         return;
     }
     tonality_app::run()

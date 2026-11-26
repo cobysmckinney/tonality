@@ -1,6 +1,7 @@
 mod ai;
 mod cancel;
 mod export;
+pub mod formats;
 mod history;
 mod images;
 mod jpeg;
@@ -398,11 +399,6 @@ pub(crate) async fn blocking<T: Send + 'static>(
 
 /// The library's lock file ([`Store::lock`]), kept open while the app runs.
 struct LibraryLock(#[allow(dead_code)] std::fs::File);
-
-/// The on-disk formats this build reads and writes, as the JSON object the update feed carries.
-pub fn formats_json() -> String {
-    serde_json::to_string(&tonality_core::Formats::CURRENT).expect("three numbers")
-}
 
 /// Why the library couldn't be opened at launch, when it couldn't: it's open in another
 /// tonality, its folder can't be made or read, or its catalog was written by a newer version.
