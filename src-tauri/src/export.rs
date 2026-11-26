@@ -1123,7 +1123,7 @@ mod tests {
             let p = tonality_raw::decode_preview(raw.as_ref(), 1600).unwrap();
             let mut edit = EditState::default();
             let cam = crate::auto_samples(&p, &edit);
-            let wb = tonality_core::auto::white_balance(&cam, &p.color);
+            let wb = tonality_core::auto::white_balance(&cam.cam, &p.color);
             let (shot_t, shot_tint) = p.color.as_shot_temperature_tint();
             let before = edit.clone();
             if let Some((t, tint)) = wb {

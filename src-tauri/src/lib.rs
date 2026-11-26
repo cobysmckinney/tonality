@@ -59,7 +59,7 @@ fn wb_presets() -> Vec<WbPresetInfo> {
 
 /// The open photo's preview sampled inside `edit`'s crop, in camera RGB and lens-corrected as
 /// the editor shows it (for Auto).
-fn auto_samples(p: &tonality_raw::Preview, edit: &EditState) -> Vec<[f32; 3]> {
+fn auto_samples(p: &tonality_raw::Preview, edit: &EditState) -> tonality_core::auto::Samples {
     let lens = tonality_core::lens::lens_table(
         p.lens.as_ref(),
         &edit.lens,
@@ -109,7 +109,7 @@ async fn auto_white_balance(
     let p = images.get(id).ok_or("image not open")?;
     blocking(move || {
         let cam = auto_samples(&p, &edit);
-        Ok(tonality_core::auto::white_balance(&cam, &p.color).map(|(t, tint)| [t, tint]))
+        Ok(tonality_core::auto::white_balance(&cam.cam, &p.color).map(|(t, tint)| [t, tint]))
     })
     .await
 }
@@ -147,7 +147,7 @@ async fn pick_white_balance(
             at,
             5,
         );
-        Ok(tonality_core::auto::white_balance_at(&cam, &p.color).map(|(t, tint)| [t, tint]))
+        Ok(tonality_core::auto::white_balance_at(&cam.cam, &p.color).map(|(t, tint)| [t, tint]))
     })
     .await
 }
