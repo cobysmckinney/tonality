@@ -515,14 +515,19 @@ fn at_focal(entries: &[serde_json::Value], focal: f32) -> Option<(String, Vec<f3
 
 /// Vignetting k1..k3 at `focal` and `aperture`, for the farthest focus distance calibrated
 /// (the subject distance isn't known): bilinear in focal length and stops.
+///
+/// "Farthest" is per focal length. Calibrations don't use one set of distances throughout
+/// (a zoom measured at 300 m at one end and 1000 m at the other, or one stray pair at 1000 m),
+/// and keeping only the rows at the lens's single farthest distance would throw every other
+/// focal length away.
 fn vignetting_at(vig: &[[f32; 6]], focal: f32, aperture: f32) -> Option<[f32; 3]> {
-    let far = vig.iter().map(|v| v[2]).fold(f32::MIN, f32::max);
-    let rows: Vec<&[f32; 6]> = vig.iter().filter(|v| v[2] == far).collect();
-    let mut focals: Vec<f32> = rows.iter().map(|v| v[0]).collect();
+    let mut focals: Vec<f32> = vig.iter().map(|v| v[0]).collect();
     focals.sort_by(f32::total_cmp);
     focals.dedup();
     let at_focal = |f: f32| -> Option<[f32; 3]> {
-        let mut ap: Vec<&&[f32; 6]> = rows.iter().filter(|v| v[0] == f).collect();
+        let here = || vig.iter().filter(move |v| v[0] == f);
+        let far = here().map(|v| v[2]).fold(f32::MIN, f32::max);
+        let mut ap: Vec<&[f32; 6]> = here().filter(|v| v[2] == far).collect();
         ap.sort_by(|a, b| a[1].total_cmp(&b[1]));
         let s = |a: f32| a.max(0.5).log2();
         let lo = ap.iter().rev().find(|v| v[1] <= aperture).or(ap.first())?;
@@ -811,6 +816,32 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn vignetting_uses_each_focal_lengths_own_farthest_distance() {
+        // 100 mm calibrated out to 80 m, 135 mm with one extra pair at 1000 m.
+        let vig = [
+            [100.0, 5.0, 1.6, -0.9, 0.0, 0.0],
+            [100.0, 5.0, 80.0, -0.5, -0.2, 0.1],
+            [135.0, 5.6, 80.0, -0.4, 0.0, 0.0],
+            [135.0, 25.0, 1000.0, -0.1, 0.05, 0.01],
+        ];
+        // At 100 mm: its own row at 80 m, not the 135 mm row that happens to be farthest.
+        assert_eq!(vignetting_at(&vig, 100.0, 5.0), Some([-0.5, -0.2, 0.1]));
+        assert_eq!(vignetting_at(&vig, 135.0, 25.0), Some([-0.1, 0.05, 0.01]));
+        let between = vignetting_at(&vig, 117.5, 5.0).unwrap();
+        assert!((between[0] - (-0.3)).abs() < 1e-5, "{between:?}");
+
+        // The lens this was found on: every focal length but 135 mm was being ignored.
+        let sigma = db()
+            .lenses
+            .iter()
+            .find(|l| l.models.iter().any(|m| m.contains("100-400mm F5-6.3 DG OS HSM")))
+            .expect("Sigma 100-400mm Contemporary");
+        let k = vignetting_at(&sigma.vig, 100.0, 5.0).unwrap();
+        let corner_gain = 1.0 / (1.0 + k[0] + k[1] + k[2]);
+        assert!(corner_gain > 2.0, "100 mm f/5 corners need {corner_gain}×, not 1.07×");
     }
 
     #[test]
