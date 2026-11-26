@@ -375,6 +375,10 @@
     font-size: var(--fs-xs);
     color: var(--text-2);
   }
+  /* (--text-2 isn't enough on the highlighted row's background.) */
+  .row.active .group {
+    color: var(--text-1);
+  }
   .keys {
     display: flex;
     align-items: center;

@@ -152,9 +152,15 @@
         >
           <button
             class="pick"
+            aria-current={sel === i ? "true" : undefined}
             onclick={() => (session.maskIndex = i)}
             ondblclick={() => startRename(m)}
-            title="{m.name}: double-click to rename"
+            onkeydown={(e) => {
+              if (e.key !== "F2") return;
+              e.preventDefault();
+              startRename(m);
+            }}
+            title="{m.name}: double-click (or F2) to rename"
           >
             <span class="thumb">
               {#if drawn && img}
@@ -449,6 +455,7 @@
     opacity: 0;
   }
   li:hover .actions,
+  li:focus-within .actions,
   li.selected .actions,
   li.hidden .actions {
     opacity: 1;

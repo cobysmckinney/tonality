@@ -240,11 +240,16 @@
           <div class="modes">
             <button
               class:active={!session.brush.erase}
+              aria-pressed={!session.brush.erase}
               onclick={() => (session.brush.erase = false)}
             >
               {mask.shape.kind === "ai" ? "Add" : "Paint"}
             </button>
-            <button class:active={session.brush.erase} onclick={() => (session.brush.erase = true)}>
+            <button
+              class:active={session.brush.erase}
+              aria-pressed={session.brush.erase}
+              onclick={() => (session.brush.erase = true)}
+            >
               Erase
             </button>
           </div>
