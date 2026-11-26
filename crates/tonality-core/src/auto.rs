@@ -12,10 +12,12 @@
 //! penalties on each slider keep ordinary photos to gentle settings. The search is a plain
 //! coordinate descent from a fixed start, so the same photo always gets the same values.
 //!
-//! **White balance** estimates the light's colour in camera RGB by "shades of grey" (Finlayson &
-//! Trezzi 2004: the p = 6 Minkowski mean of unclipped pixels, which holds up better than the plain
-//! average when one colour fills the frame), then names it with temperature and tint the way As
-//! Shot is named ([`CameraColor::temperature_tint_of`]).
+//! **White balance** estimates the light's colour from the photo's grey pixels (after Huo et
+//! al. 2006): starting from the camera's own estimate (As Shot), it takes the pixels that look
+//! neutral under the current estimate, averages their colour, and repeats with a tightening
+//! tolerance, so a large coloured surface doesn't vote. With nothing that looks grey it stays As
+//! Shot. The result is named with temperature and tint the way As Shot is named
+//! ([`CameraColor::temperature_tint_of`]). See [`white_balance`] and `docs/auto.md`.
 
 use std::sync::OnceLock;
 
