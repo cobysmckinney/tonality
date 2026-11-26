@@ -191,9 +191,19 @@ class LibraryState {
     if (paths?.length) await this.importPaths(paths, opts);
   }
 
-  /** Copy files/folders into the library. With `open`, the first photo opens in Edit. */
+  /** Imports asked for while one was running (a drop, Ctrl+O), in the order they were asked. */
+  #queuedImports: { paths: string[]; opts: { open?: boolean } }[] = [];
+
+  /**
+   * Copy files/folders into the library. With `open`, the first photo opens in Edit. One import
+   * runs at a time: another asked for meanwhile waits its turn, and says so.
+   */
   async importPaths(paths: string[], opts: { open?: boolean } = {}) {
-    if (this.importing) return;
+    if (this.importing) {
+      this.#queuedImports.push({ paths, opts });
+      toasts.notice("An import is running. This one starts when it finishes.");
+      return;
+    }
     this.importing = { done: 0, total: 0 };
     try {
       const s = await api.library.import(paths);
@@ -209,21 +219,34 @@ class LibraryState {
       // "No RAW files found" comes as an error with nothing failed: it's news, not a fault.
       if (parts.length) toasts.notice(parts.join(" · "));
       else if (!s.failed) toasts.notice(s.error ?? "Nothing to import");
-      // Show what just arrived.
-      if (s.import) this.query = { ...this.query, import: s.import.id, album: null };
+      // Show what just arrived: all of it, so a rating or flag filter left on from the last
+      // view doesn't hide photos that have neither yet.
+      if (s.import) {
+        this.query = { ...this.query, import: s.import.id, album: null, minRating: 0, flag: null };
+      }
       this.scrollTop = 0;
       await this.refresh();
-      if (s.images.length) {
-        this.selected.clear();
-        this.focus = this.anchor = s.images[0];
-        this.selected.add(s.images[0]);
-        if (opts.open) this.open(s.images[0]);
+      const first = s.images[0];
+      if (first !== undefined) {
+        // Select it only where it can be seen. When nothing new came in the view stays where
+        // it was, and the photos (already in the library) may not be in it: a selection the
+        // grid doesn't show would still take ratings, flags and Delete.
+        if (this.images.some((i) => i.id === first)) {
+          this.selected.clear();
+          this.focus = this.anchor = first;
+          this.selected.add(first);
+        }
+        if (opts.open) this.open(first);
       }
     } catch (e) {
       toasts.error("Couldn’t import", e);
     } finally {
       this.importing = null;
+      // Stop means stop: what was waiting behind the stopped import doesn't then start.
+      if (this.stoppingImport) this.#queuedImports = [];
       this.stoppingImport = false;
+      const next = this.#queuedImports.shift();
+      if (next) void this.importPaths(next.paths, next.opts);
     }
   }
 
