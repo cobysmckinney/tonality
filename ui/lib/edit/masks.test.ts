@@ -5,8 +5,10 @@ import {
   aiKey,
   brushKey,
   brushLayer,
+  maskSize,
   newAiMask,
   nextName,
+  shaderIndex,
   strokesHash,
   withoutStrokes,
 } from "./masks";
@@ -82,5 +84,43 @@ describe("stroke keys", () => {
     expect(s.masks![0].shape).toEqual({ kind: "brush", strokes: [] });
     expect(s.masks![0].name).toBe(m.name);
     expect(m.shape.kind === "brush" && m.shape.strokes.length).toBe(1);
+  });
+});
+
+describe("the mask raster's size", () => {
+  // `[full width, full height, raster width, raster height]`. The same table is in
+  // `crates/tonality-core/src/mask.rs` (`mask_size_matches_the_interface`), with the numbers
+  // its `mask_size` gives: the two have to agree exactly, or the rasters painted live in the
+  // preview and the ones the backend sends are different sizes.
+  const SIZES = [
+    [6000, 4000, 1024, 683],
+    [4000, 6000, 683, 1024],
+    [7952, 5304, 1024, 683],
+    [5304, 7952, 683, 1024],
+    [8256, 5504, 1024, 683],
+    [9504, 6336, 1024, 683],
+    [6240, 4160, 1024, 683],
+    [4672, 7008, 683, 1024],
+    [1000, 656, 1024, 672],
+    [1, 1, 1024, 1024],
+    [3, 2, 1024, 683],
+    [2000, 1312, 1024, 672],
+    [6016, 4016, 1024, 684],
+    [11648, 8736, 1024, 768],
+    [3000, 2001, 1024, 683],
+    [5472, 3648, 1024, 683],
+    [1023, 683, 1024, 684],
+    [1025, 7, 1024, 7],
+  ];
+  it("is what the backend computes", () => {
+    for (const [w, h, mw, mh] of SIZES) expect([w, h, ...maskSize(w, h)]).toEqual([w, h, mw, mh]);
+  });
+});
+
+describe("shaderIndex", () => {
+  it("counts only the masks that are drawn", () => {
+    const masks = [brush(), { ...brush(), enabled: false }, brush()];
+    expect(masks.map((_, i) => shaderIndex(masks, i))).toEqual([0, null, 1]);
+    expect(shaderIndex(masks, 7)).toBeNull();
   });
 });
