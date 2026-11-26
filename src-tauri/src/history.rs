@@ -69,8 +69,13 @@ impl CatalogState {
         f(&mut cat).map_err(|e| e.to_string())
     }
 
-    /// Change the history, rating or flag of `ids`. Both hooks run under the catalog lock, so
-    /// nothing else can slip in between them and the change.
+    /// Change the history, rating, flag or albums of `ids`. Both hooks run under the catalog
+    /// lock, so nothing else can slip in between them and the change.
+    ///
+    /// Before the change the photos are marked as ahead of their sidecars
+    /// ([`Catalog::sidecar_touch`]), and they stay so until the writer has the files on disk.
+    /// If the app stops in between, the next launch rewrites those sidecars from the catalog
+    /// instead of reading them back over it.
     pub(crate) fn edit<T>(
         &self,
         ids: &[ImageId],
@@ -80,11 +85,13 @@ impl CatalogState {
             if let Some(hook) = self.before_edit.get() {
                 hook(cat, ids);
             }
-            let out = f(cat)?;
+            cat.sidecar_touch(ids)?;
+            let out = f(cat);
+            // Also when the change failed: only the writer clears the mark just made.
             if let Some(hook) = self.on_change.get() {
                 hook(ids);
             }
-            Ok(out)
+            out
         })
     }
 }
@@ -254,7 +261,9 @@ pub async fn history_changes(
 
 /// Take photos back to as-shot and delete all their history (see
 /// [`Catalog::reset_history`]), with their edited thumbnails. Sidecars are rewritten before this
-/// returns, so a crash can't bring the old history back in from them at the next start.
+/// returns, and it says so if one couldn't be. Either way the old history can't come back in
+/// from them: a sidecar that wasn't rewritten is marked as behind the catalog, and the next
+/// launch rewrites it instead of reading it.
 #[tauri::command]
 pub async fn history_reset(
     image_ids: Vec<ImageId>,
@@ -277,5 +286,10 @@ pub async fn history_reset(
             _ => {}
         }
     }
-    crate::blocking(move || app.state::<Sidecars>().flush()).await
+    crate::blocking(move || {
+        app.state::<Sidecars>().flush_checked().map_err(|e| {
+            format!("the history was reset, but its sidecar file wasn’t rewritten yet ({e})")
+        })
+    })
+    .await
 }

@@ -8,6 +8,13 @@
 //! reaches it is reconciled right then, ahead of the change, so the pass can't merge the old
 //! history back over (say) a reset.
 //!
+//! A merge only ever adds, so it must never read a sidecar that is *behind* the catalog: that
+//! would bring back a cleared rating or flag, an album the photo left, a reset history. The
+//! catalog therefore counts each photo's changes that haven't reached its sidecar yet
+//! (`Catalog::sidecar_touch`, cleared here once the file is written). A photo still marked at
+//! launch (the app stopped before its sidecar was written, or the write failed) has its sidecar
+//! rewritten from the catalog without being read.
+//!
 //! A sidecar that can't be read (damaged, or written by a newer version) is left alone at
 //! startup, and moved aside to `….tonality.rejected` rather than overwritten or deleted when
 //! the photo next changes.
@@ -123,13 +130,23 @@ fn set_aside(path: &Path) -> CmdResult<PathBuf> {
 }
 
 fn write(app: &AppHandle, id: ImageId) -> CmdResult<()> {
-    let store = app.state::<Store>();
-    let catalog = app.state::<CatalogState>();
-    let (sc, rel) = match catalog.with(|c| Ok((c.sidecar(id)?, c.image_file(id)?.0))) {
+    write_from_catalog(
+        &app.state::<CatalogState>(),
+        app.state::<Store>().root(),
+        id,
+    )
+}
+
+/// Write `id`'s sidecar (in the library at `root`) from the catalog, then tell the catalog the
+/// file has caught up with it, unless the photo changed again while it was being written.
+fn write_from_catalog(catalog: &CatalogState, root: &Path, id: ImageId) -> CmdResult<()> {
+    let read = |c: &mut Catalog| Ok((c.sidecar(id)?, c.image_file(id)?.0, c.sidecar_pending(id)?));
+    let (sc, rel, seen) = match catalog.with(read) {
         Ok(v) => v,
         Err(_) => return Ok(()), // removed from the library meanwhile
     };
-    write_file(&path_for(&store.abs(&rel)), &sc)
+    write_file(&path_for(&root.join(rel)), &sc)?;
+    catalog.with(|c| c.sidecar_written(id, seen))
 }
 
 /// Photos the startup pass hasn't reconciled yet.
@@ -157,6 +174,11 @@ impl Pending {
         let Ok((rel, _, _)) = c.image_file(id) else {
             return Reconciled::Skipped; // removed from the library meanwhile
         };
+        // The catalog has changes this file never got: it's the newer of the two, and reading
+        // the file would undo them.
+        if c.sidecar_pending(id).is_ok_and(|n| n > 0) {
+            return Reconciled::Ready;
+        }
         let original = self.root.join(rel);
         let err = match read(&original) {
             None => return Reconciled::Ready,
@@ -171,16 +193,19 @@ impl Pending {
     }
 }
 
+/// What the writer tells a flush: `Err` names the first sidecar that couldn't be written.
+type Written = Result<(), String>;
+
 enum Msg {
     Dirty(Vec<ImageId>),
-    Flush(Sender<()>),
+    Flush(Sender<Written>),
 }
 
 /// The writer thread's queue.
 #[derive(Default)]
 struct Queue {
     dirty: BTreeSet<ImageId>,
-    flushes: Vec<Sender<()>>,
+    flushes: Vec<Sender<Written>>,
 }
 
 impl Queue {
@@ -191,15 +216,24 @@ impl Queue {
         }
     }
 
-    /// Write every dirty sidecar, then answer whoever was waiting for that.
+    /// Write every dirty sidecar, then answer whoever was waiting for that, with what went
+    /// wrong if anything did. A sidecar that couldn't be written stays marked in the catalog as
+    /// behind it, so the next launch writes it again rather than reading it.
     fn write_all(&mut self, app: &AppHandle) {
+        let mut failed: Vec<String> = Vec::new();
         for id in std::mem::take(&mut self.dirty) {
             if let Err(e) = write(app, id) {
                 log::warn!("{e}");
+                failed.push(e);
             }
         }
+        let written = match failed.as_slice() {
+            [] => Ok(()),
+            [only] => Err(only.clone()),
+            [first, rest @ ..] => Err(format!("{first} (and {} more)", rest.len())),
+        };
         for done in self.flushes.drain(..) {
-            let _ = done.send(());
+            let _ = done.send(written.clone());
         }
     }
 }
@@ -262,6 +296,9 @@ impl Sidecars {
             .spawn(move || {
                 let mut q = Queue::default();
                 reconcile(&app, &pending, &rx, &mut q);
+                // Photos changed during the pass were only collected (and written if a flush
+                // came). Without this they'd wait for the next message, which may never come.
+                q.write_all(&app);
                 while let Ok(m) = rx.recv() {
                     q.take(m);
                     while q.flushes.is_empty() {
@@ -279,8 +316,18 @@ impl Sidecars {
     }
 
     /// Write everything pending (on exit, or before a command returns). Gives up after a few
-    /// seconds rather than hang, and says so.
+    /// seconds rather than hang, and says so. A sidecar that couldn't be written is logged and
+    /// isn't an error here: the catalog remembers it's behind. See [`Sidecars::flush_checked`].
     pub fn flush(&self) -> CmdResult<()> {
+        self.wait().map(|_| ())
+    }
+
+    /// [`flush`](Self::flush), but also an error if any sidecar couldn't be written.
+    pub fn flush_checked(&self) -> CmdResult<()> {
+        self.wait()?
+    }
+
+    fn wait(&self) -> CmdResult<Written> {
         let (done, wait) = mpsc::channel();
         self.0
             .lock()
@@ -415,6 +462,76 @@ mod tests {
         );
         let sc = catalog.with(|c| c.sidecar(id)).unwrap();
         assert!(sc.head.is_none(), "history stays reset");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_sidecar_that_is_behind_the_catalog_is_rewritten_not_read_back() {
+        let root = scratch("behind");
+        let (mut c, id) = library(&root);
+        let album = c.create_album("Trips").unwrap();
+        c.history_open(id).unwrap();
+        let mut s = EditState::default();
+        s.light.exposure = 1.0;
+        c.commit(id, &s, None).unwrap();
+        let catalog = CatalogState::new(c);
+        catalog
+            .edit(&[id], |c| {
+                c.set_rating(&[id], 4)?;
+                c.set_flag(&[id], -1)?;
+                c.add_to_album(album, &[id])
+            })
+            .unwrap();
+        // All of it reaches the sidecar, and the catalog knows the file is up to date.
+        write_from_catalog(&catalog, &root, id).unwrap();
+        let file = root.join("photo.ARW.tonality");
+        let on_disk = || Sidecar::from_json(&std::fs::read_to_string(&file).unwrap()).unwrap();
+        assert_eq!((on_disk().image.rating, on_disk().image.flag), (4, -1));
+        assert_eq!(catalog.with(|c| c.sidecar_pending(id)).unwrap(), 0);
+
+        // Then the rating and flag are cleared, the photo leaves the album and its history is
+        // reset, and the app stops before the sidecar is written again.
+        catalog
+            .edit(&[id], |c| {
+                c.set_rating(&[id], 0)?;
+                c.set_flag(&[id], 0)?;
+                c.remove_from_album(album, &[id])?;
+                c.reset_history(&[id])
+            })
+            .unwrap();
+        assert!(on_disk().head.is_some(), "the file still has all of it");
+
+        // The next launch.
+        let p = pending(&root, id);
+        assert_eq!(
+            catalog.with(|c| Ok(p.reconcile(c, id))).unwrap(),
+            Reconciled::Ready
+        );
+        let now = catalog.with(|c| c.sidecar(id)).unwrap();
+        assert!(now.is_empty(), "nothing came back: {now:?}");
+        // And the file is brought up to date: with nothing left to record, it goes.
+        write_from_catalog(&catalog, &root, id).unwrap();
+        assert!(!file.exists());
+        assert_eq!(catalog.with(|c| c.sidecar_pending(id)).unwrap(), 0);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_sidecar_that_could_not_be_written_stays_marked_as_behind() {
+        let root = scratch("unwritten");
+        let (c, id) = library(&root);
+        let catalog = CatalogState::new(c);
+        catalog.edit(&[id], |c| c.set_rating(&[id], 3)).unwrap();
+        // Something in the way of the file: a folder where it should go.
+        let file = root.join("photo.ARW.tonality");
+        std::fs::create_dir_all(&file).unwrap();
+
+        assert!(write_from_catalog(&catalog, &root, id).is_err());
+        assert!(catalog.with(|c| c.sidecar_pending(id)).unwrap() > 0);
+
+        std::fs::remove_dir(&file).unwrap();
+        write_from_catalog(&catalog, &root, id).unwrap();
+        assert_eq!(catalog.with(|c| c.sidecar_pending(id)).unwrap(), 0);
         std::fs::remove_dir_all(root).unwrap();
     }
 
