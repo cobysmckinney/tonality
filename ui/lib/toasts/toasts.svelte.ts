@@ -102,12 +102,17 @@ export class Toasts {
     if (!this.#held) return;
     this.#held = false;
     // (A copy: arming replaces the map's entries.)
-    for (const [id, t] of [...this.#timers]) this.#arm(id, t.left);
+    for (const [id, t] of [...this.#timers]) this.#run(id, t.left);
   }
 
+  /** Start a notice's time afresh: `ms`, or longer if it takes longer to read. */
   #arm(id: number, ms: number) {
-    // A notice starting its time afresh (not one resumed with what it had left).
-    if (ms === NOTICE_MS) ms = readingTime(this.list.find((t) => t.id === id)?.text ?? "");
+    const text = this.list.find((t) => t.id === id)?.text ?? "";
+    this.#run(id, Math.max(ms, readingTime(text)));
+  }
+
+  /** Dismiss `id` in `ms`. */
+  #run(id: number, ms: number) {
     this.#disarm(id);
     const t: Timer = { handle: null, left: ms, since: Date.now() };
     if (!this.#held) t.handle = setTimeout(() => this.dismiss(id), ms);
