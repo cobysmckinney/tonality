@@ -2,6 +2,7 @@
   // Handles for the selected mask, drawn over the image.
   // Linear: drag either end (or the middle pin to move it) · Radial: drag inside to move, the
   // edge handles to resize, the top knob to rotate · Brush: drag to paint (Alt: erase).
+  import { onDestroy } from "svelte";
   import type { Mask } from "$lib/bindings/Mask";
   import type { Stroke } from "$lib/bindings/Stroke";
   import type { Framing } from "./renderer";
@@ -24,6 +25,8 @@
     onstroke: (stroke: Stroke) => void;
     /** A drag started (true) or ended (false), to show the mask while working. */
     oninteract?: (active: boolean) => void;
+    /** A stroke being painted was abandoned: the overlay went away before the pointer came up. */
+    oncancel?: () => void;
   }
   let {
     mask,
@@ -38,7 +41,21 @@
     onpaint,
     onstroke,
     oninteract,
+    oncancel,
   }: Props = $props();
+
+  // The overlay can go away with the pointer still down (Esc, M or \ in the middle of a
+  // drag): nothing else would then end the gesture. A stroke that was being painted is in the
+  // preview but was never saved, so it is abandoned; a shape that was being moved is on screen
+  // as it now is, so it is recorded.
+  onDestroy(() => {
+    const d = drag;
+    if (!d) return;
+    drag = null;
+    oninteract?.(false);
+    if (d.kind === "paint") oncancel?.();
+    else if (JSON.stringify(d.start) !== JSON.stringify($state.snapshot(mask))) oncommit();
+  });
 
   const nm = $derived(norm(fullW, fullH));
   /** Long-edge units per CSS pixel. */

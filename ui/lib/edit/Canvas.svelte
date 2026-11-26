@@ -24,6 +24,7 @@
     type BrushLayers,
   } from "./masks";
   import { session } from "./session.svelte";
+  import { focusedControlOwnsKey } from "$lib/keys";
   import type { Mask } from "$lib/bindings/Mask";
   import type { Stroke } from "$lib/bindings/Stroke";
 
@@ -128,7 +129,9 @@
           if (seq === detailSeq && renderer === r && image.id === id)
             r.setDetail(d.region, req.level, d.width, d.height, d.pixels);
         } catch (e) {
-          console.warn("[detail]", e);
+          // Without this the 100% view stays the preview, scaled up, and nothing says so.
+          if (seq === detailSeq && image.id === id)
+            toasts.error("Couldn’t load full-resolution detail", e);
         } finally {
           if (seq === detailSeq) loadingDetail = false;
         }
@@ -206,6 +209,9 @@
       // right one beside another photo.
       const r = frameRect;
       const f: [number, number] = [(x - renderer.mainPaneX - r.x) / r.w, (y - r.y) / r.h];
+      // Zoomed in, the photo's frame is wider than its pane: a click over the other pane is
+      // still "inside the frame", at a spot that isn't under the pointer (or on screen).
+      if (!renderer.inMainPane(x)) return;
       if (r.w > 0 && r.h > 0 && f.every((v) => v >= 0 && v <= 1)) onpick(f);
       return;
     }
@@ -369,10 +375,16 @@
         if (pending) pump();
       }
     }
-    return (r: PreviewRenderer, id: number, state: EditState) => {
+    const push = (r: PreviewRenderer, id: number, state: EditState) => {
       pending = { r, id, state };
       pump();
     };
+    /** The mask rasters the renderer holds are no longer what was fetched: fetch them again
+     *  with the next request, though the strokes haven't changed. */
+    push.forgetBrush = () => {
+      brushK = null;
+    };
+    return push;
   }
   const main = pipeline((r, params, curve, brush) => {
     if (curve) r.setCurve(curve);
@@ -444,6 +456,20 @@
     r.paintLive(brushLayer(masks, i), stroke, a, b, maskSize(image.fullWidth, image.fullHeight));
   }
 
+  /** Bumped to draw the main view again though nothing in the edit changed. */
+  let redraw = $state(0);
+
+  /**
+   * A stroke was abandoned in the middle (Esc, M or \ with the pointer still down): it was
+   * painted into the preview's mask but is in no edit. Take it out, or the photo on screen
+   * differs from what is saved and exported, and the renderer keeps painting it back in.
+   */
+  function cancelStroke() {
+    renderer?.endLive();
+    main.forgetBrush();
+    redraw++;
+  }
+
   function endStroke(i: number, stroke: Stroke) {
     renderer?.endLive();
     const m = edit.masks?.[i];
@@ -454,7 +480,9 @@
   }
 
   function onKey(e: KeyboardEvent) {
-    if (e.key === " " && session.masking && !(e.target instanceof HTMLInputElement)) {
+    // Space on a button reached with Tab presses the button; anywhere else in mask mode,
+    // held, it pans.
+    if (e.key === " " && session.masking && !focusedControlOwnsKey(e.target, " ")) {
       spaceHeld = e.type === "keydown";
       if (spaceHeld) e.preventDefault();
     }
@@ -466,6 +494,7 @@
     if (cropping && !before) state.crop = { ...state.crop, rect: [...FULL] };
     const r = renderer;
     void session.aiEpoch; // a finished detection means new layers
+    void redraw;
     if (r) main(r, image.id, state);
   });
 
@@ -554,7 +583,7 @@
       {onlevel}
     />
   {/if}
-  {#if session.lassoing && renderer && frameRect.w > 0}
+  {#if session.lassoing && !cropping && renderer && frameRect.w > 0}
     <LassoOverlay
       frame={frameRect}
       framing={session.framing ?? renderer.framing}
@@ -576,6 +605,7 @@
       oncommit={() => session.commit(null)}
       onpaint={(stroke, a, b) => paintLive(i, stroke, a, b)}
       onstroke={(stroke) => endStroke(i, stroke)}
+      oncancel={cancelStroke}
       oninteract={(v) => (interacting = v)}
     />
   {/if}

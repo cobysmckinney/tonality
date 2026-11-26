@@ -155,8 +155,10 @@ class EditSession {
   }
 
   private async addAi(preset: AiPreset, target: AiTarget) {
+    // Nothing is committed in the middle of a crop.
+    if (this.cropping) return;
     const model = await api.ai.modelFor(target);
-    if (!(await this.confirmModel(model)) || !this.edit) return;
+    if (!(await this.confirmModel(model)) || !this.edit || this.cropping) return;
     const m = newAiMask(preset, target, model, this.masks);
     this.edit.masks = [...this.masks, m];
     this.maskIndex = this.edit.masks.length - 1;
@@ -165,7 +167,8 @@ class EditSession {
   }
 
   startLasso(replace: number | null = null) {
-    if (!this.edit || (replace === null && this.masks.length >= MAX_MASKS)) return;
+    if (!this.edit || this.cropping) return;
+    if (replace === null && this.masks.length >= MAX_MASKS) return;
     this.lassoing = { replace };
   }
 
@@ -177,7 +180,7 @@ class EditSession {
   async finishLasso(lasso: [number, number][]) {
     const job = this.lassoing;
     if (!job || job.busy) return;
-    if (!this.edit || lasso.length < 3) {
+    if (!this.edit || this.cropping || lasso.length < 3) {
       this.lassoing = null;
       return;
     }
@@ -272,7 +275,9 @@ class EditSession {
   startCrop() {
     if (!this.edit || this.cropping) return;
     this.setCompare(null);
-    this.masking = false;
+    // All of mask mode, a Select Object loop waiting to be drawn included: left armed, it sat
+    // over the crop box, took every press, and the mask it added committed the unfinished crop.
+    this.stopMasks();
     this.cropAspect = null; // the panel opens on "Free"
     this.cropEntry = $state.snapshot(this.edit.crop);
   }
@@ -312,6 +317,7 @@ class EditSession {
    */
   open(id: number): Promise<void> {
     if (id === this.opening && this.openLoop) return this.openLoop;
+    if (id !== this.image?.id) this.keepCrop();
     this.opening = id;
     this.loading = "Developing…";
     this.openLoop ??= this.loadLatest().finally(() => (this.openLoop = null));
@@ -436,9 +442,24 @@ class EditSession {
   undo = () => this.run((id) => api.history.undo(id), true);
   redo = () => this.run((id) => api.history.redo(id), true);
   checkout = (commit: number) => this.run((id) => api.history.checkout(id, commit), true);
-  switchBranch = (name: string) => this.run((id) => api.history.switchBranch(id, name), true);
-  branch = (at: number, name: string | null = null) =>
-    this.run((id) => api.history.branch(id, at, name), true);
+  switchBranch = (name: string) => {
+    this.keepCrop();
+    return this.run((id) => api.history.switchBranch(id, name), true);
+  };
+  branch = (at: number, name: string | null = null) => {
+    this.keepCrop();
+    return this.run((id) => api.history.branch(id, at, name), true);
+  };
+
+  /**
+   * A crop in progress is about to be left behind (another photo, another version): finish it
+   * first, as Done would. It is only recorded on Done, so walking away used to drop it without
+   * a word and with nothing in history to get it back from. Queued ahead of what follows, for
+   * the photo and state on screen now.
+   */
+  private keepCrop() {
+    if (this.cropping) void this.finishCrop();
+  }
   renameBranch = (old: string, name: string) => {
     if (this.compare?.kind === "version" && this.compare.branch === old)
       this.compare.branch = name.trim();
@@ -494,6 +515,9 @@ class EditSession {
     if (!b || branch === this.history?.head.branch) return;
     try {
       const state = await api.history.state(b.tip);
+      // As when comparing with another photo: the brush and the mask handles map the pointer
+      // across the whole canvas, not the half the edited photo is then drawn in.
+      this.stopMasks();
       this.setCompare({ kind: "version", branch, state });
     } catch (e) {
       toasts.error(`Couldn’t show “${branch}”`, e);
