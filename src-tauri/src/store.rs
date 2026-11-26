@@ -112,6 +112,44 @@ pub fn temp_path(dest: &Path) -> PathBuf {
     dest.with_file_name(format!(".{name}.{}-{n}.part", std::process::id()))
 }
 
+/// Whether `name` is one of [`temp_path`]'s, and if so the process that made it.
+fn temp_owner(name: &str) -> Option<u32> {
+    let rest = name.strip_prefix('.')?.strip_suffix(".part")?;
+    let (_, tag) = rest.rsplit_once('.')?;
+    let (pid, n) = tag.split_once('-')?;
+    n.parse::<u64>().ok()?;
+    pid.parse().ok()
+}
+
+/// Delete the temporary files ([`temp_path`]) under `dir` that an earlier run left behind:
+/// a quit, crash or power cut in the middle of an import leaves each copy that was under way,
+/// up to a whole raw file apiece, and nothing else would ever remove them (they are hidden,
+/// and recovery skips hidden files). Returns how many were removed.
+///
+/// This run's own are left alone, so it's safe beside an import that has already started.
+/// Other runs' are dead: call it only while holding the library's lock ([`Store::lock`]).
+pub fn sweep_temp_files(dir: &Path) -> usize {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return 0;
+    };
+    let mut removed = 0;
+    for e in entries.flatten() {
+        let Ok(kind) = e.file_type() else { continue };
+        if kind.is_dir() {
+            removed += sweep_temp_files(&e.path());
+        } else if kind.is_file()
+            && temp_owner(&e.file_name().to_string_lossy())
+                .is_some_and(|pid| pid != std::process::id())
+        {
+            match std::fs::remove_file(e.path()) {
+                Ok(()) => removed += 1,
+                Err(err) => log::warn!("cannot remove {}: {err}", e.path().display()),
+            }
+        }
+    }
+    removed
+}
+
 /// Move `from` to `to`, failing with `AlreadyExists` rather than replacing anything at `to`
 /// (on a case-insensitive filesystem, anything differing only in case).
 ///
@@ -176,6 +214,39 @@ mod tests {
         assert_eq!(e.kind(), io::ErrorKind::WouldBlock);
         drop(held);
         store.lock().unwrap();
+        std::fs::remove_dir_all(&d).unwrap();
+    }
+
+    #[test]
+    fn temp_files_left_by_an_earlier_run_are_swept() {
+        let d = scratch("sweep");
+        let day = d.join("originals/2026/2026-11-02");
+        std::fs::create_dir_all(&day).unwrap();
+        let other_run = std::process::id() + 1;
+        // Half a copy from a run that was killed, and one from an import running now.
+        let stale = day.join(format!(".DSC00084.ARW.{other_run}-17.part"));
+        let live = temp_path(&day.join("DSC00085.ARW"));
+        // Not ours to touch: an original, its sidecar, and files that only look similar.
+        let kept = [
+            day.join("DSC00084.ARW"),
+            day.join("DSC00084.ARW.tonality"),
+            day.join("notes.part"),
+            day.join(".hidden"),
+            day.join(".DSC00084.ARW.part"),
+            day.join(".DSC00084.ARW.abc-1.part"),
+        ];
+        for p in kept.iter().chain([&stale, &live]) {
+            std::fs::write(p, b"x").unwrap();
+        }
+
+        assert_eq!(sweep_temp_files(&d.join("originals")), 1);
+
+        assert!(!stale.exists(), "the dead run's file is gone");
+        assert!(live.exists(), "this run's file is left alone");
+        for p in &kept {
+            assert!(p.exists(), "{} was removed", p.display());
+        }
+        assert_eq!(sweep_temp_files(&d.join("nowhere")), 0);
         std::fs::remove_dir_all(&d).unwrap();
     }
 
