@@ -4,10 +4,14 @@
 //! branches pointing at commits, and a HEAD = (branch, commit). HEAD's commit is always on its
 //! branch: either the tip, or an ancestor of it after undo/checkout.
 //!
-//! History is never rewritten. Committing while HEAD is behind its branch tip (after undo, or
-//! after checking out an older commit) forks a new branch instead of discarding anything. The
-//! only exception is *coalescing*: repeated commits from the same control within
-//! [`COALESCE_MS`] update the tip commit in place, so a run of arrow-key nudges becomes one step.
+//! Editing never rewrites history. Committing while HEAD is behind its branch tip (after undo,
+//! or after checking out an older commit) forks a new branch instead of discarding anything.
+//! The one exception while editing is *coalescing*: repeated commits from the same control
+//! within [`COALESCE_MS`] update the tip commit in place, so a run of arrow-key nudges becomes
+//! one step.
+//!
+//! Two things the user asks for by name do delete history, for good: deleting a branch
+//! ([`Catalog::delete_branch`]) and resetting a photo ([`Catalog::reset_history`]).
 
 use std::collections::{HashMap, HashSet};
 
@@ -136,6 +140,13 @@ pub(crate) fn load_state(c: &Connection, hash: &str) -> Result<EditState> {
 }
 
 pub(crate) fn store_state(c: &Connection, state: &EditState) -> Result<String> {
+    // Whatever way a state comes in (the interface, a sidecar, a merge), it has to be one that
+    // can be read back.
+    if !state.is_storable() {
+        return Err(CatalogError::Invalid(
+            "a setting is not a finite number".into(),
+        ));
+    }
     let hash = state.hash();
     c.execute(
         "INSERT OR IGNORE INTO edit_states (hash, json) VALUES (?1, ?2)",
@@ -608,8 +619,11 @@ impl Catalog {
         self.checkout_result(image)
     }
 
-    /// Delete a branch. Its commits stay in the catalog but disappear from the graph unless
-    /// another branch shares them. The last branch can't be deleted.
+    /// Delete a branch, for good: the commits only it had are deleted from the catalog, with
+    /// any edit state nothing else uses, and can't be brought back. Commits another branch
+    /// shares stay. What was deleted is remembered (`deleted_branches`, `dropped_commits`) so a
+    /// sidecar written before the delete can't restore it. If the branch was the current one,
+    /// HEAD moves to the tip of the first branch left. The last branch can't be deleted.
     pub fn delete_branch(&mut self, image: ImageId, name: &str) -> Result<Checkout> {
         let h = self.require_head(image)?;
         let all = branches(&self.conn, image)?;
@@ -1163,6 +1177,10 @@ mod tests {
                 }
                 // HEAD state is always the stored state of the HEAD commit.
                 prop_assert_eq!(&next.state, &cat.state_at(next.view.head.commit).unwrap());
+                // Reading a photo's own sidecar back, as every launch does, changes nothing.
+                let own = cat.sidecar(img).unwrap();
+                let merged = cat.merge_sidecar(img, &own).unwrap();
+                prop_assert!(!merged.changed(), "own sidecar merged as {:?}", merged);
                 cur = next;
             }
         }

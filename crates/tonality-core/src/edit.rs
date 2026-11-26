@@ -391,6 +391,14 @@ impl EditState {
         serde_json::to_string(self).expect("EditState is always serializable")
     }
 
+    /// Whether the state reads back from its own canonical JSON. It doesn't when a number in it
+    /// isn't finite: a JSON number too large for an `f32` (`1e39`) is read as infinity, and
+    /// infinity is written as `null`, which is not a number. Such a state must never be stored,
+    /// or the step that holds it can't be opened again.
+    pub fn is_storable(&self) -> bool {
+        serde_json::from_str::<EditState>(&self.to_canonical_json()).is_ok()
+    }
+
     /// Content address of this state (blake3 of canonical JSON, hex).
     pub fn hash(&self) -> String {
         blake3::hash(self.to_canonical_json().as_bytes())
