@@ -23,39 +23,46 @@ fn embedded(path: &Path, max_edge: u32) -> Result<Option<RgbImage>> {
     let src = RawSource::new(path).map_err(|e| RawError::Decode(e.to_string()))?;
     let decoder = rawler::get_decoder(&src).map_err(|e| RawError::Decode(e.to_string()))?;
     let params = RawDecodeParams::default();
-    // Smallest candidate that is still big enough; fall back to the largest available.
-    let mut best: Option<DynamicImage> = None;
-    for img in [
+    let mut images: Vec<DynamicImage> = [
         decoder.thumbnail_image(&src, &params),
         decoder.preview_image(&src, &params),
     ]
     .into_iter()
     .filter_map(|r| r.ok().flatten())
-    {
-        let long = img.width().max(img.height());
-        let good = long >= max_edge;
-        let better = match &best {
-            None => true,
-            Some(b) => {
-                let blong = b.width().max(b.height());
-                (good && (blong < max_edge || long < blong))
-                    || (!good && blong < max_edge && long > blong)
-            }
-        };
-        if better {
-            best = Some(img);
-        }
-    }
-    let Some(img) = best else { return Ok(None) };
-    // Tiny embedded thumbnails (e.g. 160×120) look bad in the grid; develop instead.
-    if img.width().max(img.height()) < max_edge / 2 {
+    .collect();
+    let sizes: Vec<(u32, u32)> = images.iter().map(|i| (i.width(), i.height())).collect();
+    let Some(chosen) = choose(&sizes, max_edge) else {
         return Ok(None);
-    }
+    };
+    let img = images.swap_remove(chosen);
     let img = img.thumbnail(max_edge, max_edge).to_rgb8();
     Ok(Some(match exif_orientation(decoder.as_ref(), &src) {
         Some(o) => orient(img, o),
         None => img,
     }))
+}
+
+/// Which of a file's embedded images (`sizes`, width × height, in the order found) to make a
+/// `max_edge` thumbnail from: the smallest that is still big enough, else the largest there
+/// is, and none at all if that is under half the size wanted (a 160 × 120 thumbnail scaled up
+/// looks bad in the grid: the raw is developed instead).
+fn choose(sizes: &[(u32, u32)], max_edge: u32) -> Option<usize> {
+    let long = |i: usize| sizes[i].0.max(sizes[i].1);
+    let mut best: Option<usize> = None;
+    for i in 0..sizes.len() {
+        let good = long(i) >= max_edge;
+        let better = match best {
+            None => true,
+            Some(b) => {
+                (good && (long(b) < max_edge || long(i) < long(b)))
+                    || (!good && long(b) < max_edge && long(i) > long(b))
+            }
+        };
+        if better {
+            best = Some(i);
+        }
+    }
+    best.filter(|&b| long(b) >= max_edge / 2)
 }
 
 /// Neutral CPU develop: as-shot WB, camera matrix, gentle tone curve.
@@ -91,4 +98,35 @@ fn developed(path: &Path, max_edge: u32) -> Result<RgbImage> {
         out.width().min(max_edge),
         out.height().min(max_edge),
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_smallest_embedded_image_that_is_big_enough_is_used() {
+        // What cameras embed: a small thumbnail and a larger preview, either way up.
+        let both = [(160, 120), (1616, 1080)];
+        assert_eq!(choose(&both, 640), Some(1), "the thumbnail is too small");
+        assert_eq!(choose(&both, 160), Some(0), "the thumbnail will do");
+        assert_eq!(
+            choose(&[(1616, 1080), (160, 120)], 160),
+            Some(1),
+            "in either order"
+        );
+        // Two that are big enough: the smaller, which is quicker to scale down.
+        assert_eq!(choose(&[(6000, 4000), (1616, 1080)], 640), Some(1));
+        assert_eq!(choose(&[(1616, 1080), (6000, 4000)], 640), Some(0));
+        // Portrait counts by its long edge.
+        assert_eq!(choose(&[(120, 160), (1080, 1616)], 1200), Some(1));
+        // None big enough: the largest, if it is at least half the size wanted...
+        assert_eq!(choose(&[(160, 120), (400, 300)], 640), Some(1));
+        assert_eq!(choose(&[(400, 300), (160, 120)], 640), Some(0));
+        assert_eq!(choose(&[(320, 240)], 640), Some(0), "exactly half");
+        // ...and nothing otherwise: the raw is developed instead.
+        assert_eq!(choose(&[(160, 120)], 640), None);
+        assert_eq!(choose(&[(160, 120), (319, 200)], 640), None);
+        assert_eq!(choose(&[], 640), None);
+    }
 }
