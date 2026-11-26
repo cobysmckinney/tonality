@@ -83,7 +83,9 @@
         </p>
         {#if r.failed.length}
           <ul class="failed">
-            {#each r.failed as f (f)}<li>{f}</li>{/each}
+            <!-- By position: two photos with one file name can fail with the same message, and a
+                 key that repeats stops the whole result from rendering. -->
+            {#each r.failed as f, i (i)}<li>{f}</li>{/each}
           </ul>
         {/if}
         <div class="actions">
