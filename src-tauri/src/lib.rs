@@ -427,18 +427,6 @@ pub fn run() {
                 .lock()
                 .map_err(|e| format!("cannot open library at {root:?}: {e}"))?;
             app.manage(LibraryLock(lock));
-            // With the lock held, any temporary file from another run is a dead one. On its
-            // own thread: a big library has a folder for every day shot.
-            let (originals, cache) = (store.abs("originals"), store.abs("cache"));
-            std::thread::Builder::new()
-                .name("sweep".into())
-                .spawn(move || {
-                    let n = store::sweep_temp_files(&originals) + store::sweep_temp_files(&cache);
-                    if n > 0 {
-                        log::info!("removed {n} temporary files left by an earlier run");
-                    }
-                })
-                .map_err(|e| e.to_string())?;
             let mut catalog = Catalog::open(store.catalog_path())?;
             thumbs::backfill_aspects(&store, &mut catalog);
             log::info!("library: {}", store.root().display());

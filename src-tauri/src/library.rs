@@ -709,12 +709,22 @@ pub async fn library_remove(ids: Vec<ImageId>, app: AppHandle) -> CmdResult<Remo
 /// Catalogue originals that are in the library folder but not in the catalog (a lost or
 /// replaced catalog, or files put there by hand), restoring their edits from sidecars.
 /// Nothing is copied or moved. Emits `import-progress` while hashing.
+///
+/// Run once at each launch, so it also clears out what an import that was cut short left
+/// behind (see [`crate::store::sweep_temp_files`]).
 #[tauri::command]
 pub async fn library_recover(app: AppHandle) -> CmdResult<ImportSummary> {
     tauri::async_runtime::spawn_blocking(move || {
         let _guard = LIBRARY_WRITE.lock().unwrap_or_else(|e| e.into_inner());
         let store = app.state::<Store>();
         let catalog = app.state::<CatalogState>();
+        // The library's lock, held since launch, means no other tonality is writing here, so
+        // a temporary file from any other run is a dead one.
+        let swept = crate::store::sweep_temp_files(&store.abs("originals"))
+            + crate::store::sweep_temp_files(&store.abs("cache"));
+        if swept > 0 {
+            log::info!("removed {swept} temporary files left by an earlier run");
+        }
         let root = store.root().to_path_buf();
         let rel = |p: &Path| -> Option<String> {
             let r = p.strip_prefix(&root).ok()?;

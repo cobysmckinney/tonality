@@ -126,7 +126,7 @@ fn temp_owner(name: &str) -> Option<u32> {
 /// up to a whole raw file apiece, and nothing else would ever remove them (they are hidden,
 /// and recovery skips hidden files). Returns how many were removed.
 ///
-/// This run's own are left alone, so it's safe beside an import that has already started.
+/// This run's own are left alone, so it's safe beside a thumbnail or an import being written.
 /// Other runs' are dead: call it only while holding the library's lock ([`Store::lock`]).
 pub fn sweep_temp_files(dir: &Path) -> usize {
     let Ok(entries) = std::fs::read_dir(dir) else {
