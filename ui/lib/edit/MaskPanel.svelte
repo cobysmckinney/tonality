@@ -232,6 +232,13 @@
             {:else if st?.state === "error"}
               <p class="ai-note warn">Detection failed.</p>
               <button class="ghost" onclick={() => session.detect(mask)}>Try again</button>
+            {:else if st?.state === "declined"}
+              <p class="ai-note warn">
+                This mask does nothing yet: it needs a model that isn’t downloaded.
+              </p>
+              <button class="ghost" onclick={() => session.downloadAndDetect(mask)}>
+                Download…
+              </button>
             {/if}
             {#if target === "object"}
               <button class="ghost" onclick={() => session.startLasso(sel)}>Circle again…</button>

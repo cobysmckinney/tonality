@@ -317,6 +317,8 @@
       params: Float32Array,
       curve: Uint16Array | null,
       brush: BrushLayers | null | undefined,
+      /** The photo and state these were made for (not always the current edit). */
+      job: { id: number; state: EditState },
     ) => void,
   ) {
     let inflight = false;
@@ -357,7 +359,7 @@
           if (curve) curveKey = key;
           brushK = bk;
           if (maps) r.setPresence(id, maps);
-          apply(r, params, curve, brush);
+          apply(r, params, curve, brush, { id, state: next });
           if (renderError !== null) toasts.dismiss(renderError);
           renderError = null;
         }
@@ -374,19 +376,33 @@
       pump();
     };
   }
-  const main = pipeline((r, params, curve, brush) => {
+  /** AI masks of `job`'s state whose raster isn't cached: have them detected. The indices in
+   *  `missing` are into that state's masks, which may be a previewed version's. */
+  function detectMissing(missing: number[] | undefined, job: { id: number; state: EditState }) {
+    // Detection runs on the open photo; another photo in the compare pane isn't it.
+    if (!missing?.length || job.id !== image.id) return;
+    const all = masksOf(job.state);
+    session.detectMissing(
+      missing.map((i) => all[i]).filter((m) => m !== undefined),
+      job.state.lens ?? null,
+    );
+  }
+  const main = pipeline((r, params, curve, brush, job) => {
     if (curve) r.setCurve(curve);
     if (brush !== undefined) r.setBrush("main", brush);
-    if (brush?.missing?.length) session.detectMissing(brush.missing);
+    detectMissing(brush?.missing, job);
     r.setParams(params);
     session.framing = r.framing;
     refreshMaskThumbs();
     drawEpoch++;
     probe();
   });
-  const side = pipeline((r, params, curve, brush) => {
+  const side = pipeline((r, params, curve, brush, job) => {
     if (!comparing) return;
     if (brush !== undefined) r.setBrush("compare", brush);
+    // Another version of this photo with an AI mask that isn't cached: without this it was
+    // drawn without that mask.
+    detectMissing(brush?.missing, job);
     r.setCompare(params, curve);
   });
 
