@@ -45,6 +45,11 @@
   let dragging = $state(false);
   let startX = 0;
   let startValue = 0;
+  // The last press: a second one at the same place soon after is the second half of a
+  // double-click (which resets), not another move of the slider.
+  let lastPress: { x: number; at: number } | null = null;
+  let second = false;
+  const DOUBLE_CLICK_MS = 500;
 
   const span = $derived(max - min);
   const pct = (v: number) => ((v - min) / span) * 100;
@@ -67,6 +72,15 @@
     track.setPointerCapture(e.pointerId);
     dragging = true;
     startX = e.clientX;
+    second =
+      lastPress !== null &&
+      e.timeStamp - lastPress.at < DOUBLE_CLICK_MS &&
+      Math.abs(e.clientX - lastPress.x) < 4;
+    lastPress = { x: e.clientX, at: e.timeStamp };
+    if (second) {
+      startValue = value;
+      return;
+    }
     // Clicking jumps to position; subsequent drag is relative so Shift-fine works.
     const rect = track.getBoundingClientRect();
     startValue = set(min + ((e.clientX - rect.left) / rect.width) * span);
@@ -83,6 +97,9 @@
     if (!dragging) return;
     dragging = false;
     track.releasePointerCapture(e.pointerId);
+    // The second press of a double-click moved nothing and has nothing to record, unless it
+    // turned into a drag after all.
+    if (second && value === startValue) return;
     oncommit?.(value);
   }
 

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { holdFocus } from "$lib/design/focus";
   import { revealItemInDir } from "@tauri-apps/plugin-opener";
   import { api } from "$lib/api";
   import type { ReleaseChannel } from "$lib/bindings/ReleaseChannel";
@@ -55,6 +56,7 @@
       aria-modal="true"
       aria-label="Settings"
       tabindex="-1"
+      use:holdFocus
       onclick={(e) => e.stopPropagation()}
     >
       <h2>Settings</h2>
@@ -192,6 +194,10 @@
     display: grid;
     place-items: center;
     background: rgba(0, 0, 0, 0.5);
+  }
+  /* Focus is put on the dialog itself when it opens; it needs no ring round all of it. */
+  .dialog:focus {
+    outline: none;
   }
   .dialog {
     width: min(420px, calc(100vw - 32px));

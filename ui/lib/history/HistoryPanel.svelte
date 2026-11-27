@@ -141,6 +141,8 @@
     else if (e.key === "End") historyWidth.set(MAX_WIDTH);
     else return;
     e.preventDefault();
+    // The handle has used the key: it isn't also Edit's "previous / next photo".
+    e.stopPropagation();
     historyWidth.save();
   }
   function resetWidth() {

@@ -735,6 +735,8 @@ export class PreviewRenderer {
   ) {
     const gl = this.gl;
     this.imageId = imageId;
+    // A stroke being painted belonged to the photo that was showing.
+    this.live = null;
     if (this.texture) gl.deleteTexture(this.texture);
     this.dropDetail();
     // Wait for this photo's params: drawing it with the previous photo's look (and histogram)
@@ -842,6 +844,12 @@ export class PreviewRenderer {
   /** CSS x of the pane showing this photo: the right one while another photo is beside it. */
   get mainPaneX() {
     return this.comparing && this.other !== null ? this.canvas.clientWidth - this.paneW : 0;
+  }
+
+  /** Whether canvas x `cssX` is over the pane showing this photo (always, when not comparing). */
+  inMainPane(cssX: number) {
+    const x0 = this.mainPaneX;
+    return cssX >= x0 && cssX <= x0 + this.paneW;
   }
 
   /** Map a canvas x coordinate into its pane. */

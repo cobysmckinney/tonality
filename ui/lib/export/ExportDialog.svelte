@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { holdFocus } from "$lib/design/focus";
   import { open } from "@tauri-apps/plugin-dialog";
   import { revealItemInDir } from "@tauri-apps/plugin-opener";
   import type { ExportColorSpace } from "$lib/bindings/ExportColorSpace";
@@ -70,6 +71,7 @@
       aria-modal="true"
       aria-label="Export"
       tabindex="-1"
+      use:holdFocus
       onclick={(e) => e.stopPropagation()}
     >
       <h2>Export {count === 1 ? "photo" : `${count} photos`}</h2>
@@ -268,6 +270,10 @@
     display: grid;
     place-items: center;
     background: rgba(0, 0, 0, 0.5);
+  }
+  /* Focus is put on the dialog itself when it opens; it needs no ring round all of it. */
+  .dialog:focus {
+    outline: none;
   }
   .dialog {
     width: min(420px, calc(100vw - 32px));
