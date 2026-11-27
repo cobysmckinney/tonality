@@ -391,6 +391,22 @@ pub fn decode_full(path: &Path) -> Result<FullImage> {
     })
 }
 
+/// Fujifilm's Super CCD cameras (S2/S3/S5 Pro, F700, S100FS and a dozen more) have a sensor
+/// turned 45°. The decoder hands their data over still laid out as a diamond, to be turned back
+/// after demosaicing, and marks it with `fuji_rotation_width`. Nothing here does that turn yet,
+/// so such a file would open as the scene rotated 45° on a black square, cropped in the wrong
+/// place: an error says so instead.
+fn fuji_diagonal_unsupported(raw: &RawImage) -> Result<()> {
+    if raw.fuji_rotation_width.is_some() {
+        return Err(RawError::Unsupported(format!(
+            "the {} {} has a Fujifilm Super CCD sensor (laid out diagonally), which tonality \
+             can't develop yet",
+            raw.clean_make, raw.clean_model
+        )));
+    }
+    Ok(())
+}
+
 /// A decoded (scaled, not demosaiced) RAW plus what's needed to develop it.
 struct Decoded {
     raw: RawImage,
@@ -406,6 +422,7 @@ impl Decoded {
         let decoder = rawler::get_decoder(&src).map_err(err)?;
         let params = RawDecodeParams::default();
         let mut raw = decoder.raw_image(&src, &params, false).map_err(err)?;
+        fuji_diagonal_unsupported(&raw)?;
         scale(&mut raw);
         apply_gain_maps(&mut raw, &crate::gainmap::read(path));
         // Not every decoder fills `RawImage::orientation` (e.g. Sony ARW), so prefer EXIF.
@@ -758,6 +775,25 @@ mod tests {
             Err(RawError::Decode(_))
         ));
         assert!(crop_rect(&raw).is_err());
+    }
+
+    #[test]
+    fn a_diagonal_fuji_sensor_is_refused_with_a_reason() {
+        let mut raw = bayer(8, 8, (0, 0, 8, 8));
+        assert!(fuji_diagonal_unsupported(&raw).is_ok());
+        // As rawler's RAF decoder marks an S5 Pro file.
+        raw.fuji_rotation_width = Some(6);
+        raw.clean_make = "Fujifilm".into();
+        raw.clean_model = "FinePix S5 Pro".into();
+        match fuji_diagonal_unsupported(&raw) {
+            Err(RawError::Unsupported(why)) => {
+                assert!(
+                    why.contains("FinePix S5 Pro") && why.contains("Super CCD"),
+                    "{why}"
+                )
+            }
+            other => panic!("{other:?}"),
+        }
     }
 
     fn image(w: u32, h: u32) -> FullImage {

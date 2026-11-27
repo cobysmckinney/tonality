@@ -28,9 +28,39 @@ use crate::lens::{LensTable, UvToSource};
 /// Rec.2020 luminance weights, as the shader's `REC2020_LUMA`.
 const LUMA: Vec3 = [0.2627, 0.6780, 0.0593];
 
-/// Camera RGB of the photo inside the crop on an `n × n` grid over the framed output (nearest
-/// pixel), lens-corrected as the shader shows it (`fs_main`: each corrected position reads the
-/// source through the lens table, times its vignetting gain). `pixel(x, y)` reads the
+/// Pixels of a photo as Auto and the white balance picker see them: the camera RGB the sensor
+/// recorded, and beside each the lens vignetting gain the editor shows it with.
+///
+/// The two are kept apart because the shader clips highlights between them: it white-balances,
+/// clips at the sensor's white, and only then applies the gain (`cam_at`, then `fs_main`). A
+/// corner pixel at 0.7 under a gain of 1.5 is a bright highlight at 1.05, not a blown one, and
+/// whether a pixel is blown has to be asked of `cam`.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Samples {
+    pub cam: Vec<Vec3>,
+    /// One per pixel of `cam`; 1 where there is no vignetting correction.
+    pub gain: Vec<f32>,
+}
+
+impl Samples {
+    /// Pixels with no lens gain.
+    pub fn plain(cam: Vec<Vec3>) -> Self {
+        let gain = vec![1.0; cam.len()];
+        Self { cam, gain }
+    }
+
+    pub fn len(&self) -> usize {
+        self.cam.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.cam.is_empty()
+    }
+}
+
+/// The photo inside the crop on an `n × n` grid over the framed output (nearest pixel), read
+/// through the lens as the shader shows it (`fs_main`: each corrected position reads the source
+/// through the lens table, and has that position's vignetting gain). `pixel(x, y)` reads the
 /// `width × height` preview; `full_w × full_h` is the full-size image the crop and `lens` are
 /// defined on.
 #[allow(clippy::too_many_arguments)]
@@ -43,10 +73,10 @@ pub fn sample(
     full_w: u32,
     full_h: u32,
     n: u32,
-) -> Vec<Vec3> {
+) -> Samples {
     let g = Geometry::new(crop, full_w as f32, full_h as f32);
     let to_src = UvToSource::new(lens, full_w, full_h);
-    let mut out = Vec::with_capacity((n * n) as usize);
+    let mut out = Samples::default();
     for j in 0..n {
         for i in 0..n {
             let (fx, fy) = ((i as f32 + 0.5) / n as f32, (j as f32 + 0.5) / n as f32);
@@ -57,7 +87,8 @@ pub fn sample(
             }
             let ([u, v], gain) = to_src.map_with_gain([u, v]);
             let (x, y) = ((u * width as f32) as u32, (v * height as f32) as u32);
-            out.push(pixel(x.min(width - 1), y.min(height - 1)).map(|c| c * gain));
+            out.cam.push(pixel(x.min(width - 1), y.min(height - 1)));
+            out.gain.push(gain);
         }
     }
     out
@@ -105,15 +136,18 @@ const PCTS: [f32; 7] = [0.5, 10.0, 25.0, 50.0, 75.0, 90.0, 99.5];
 
 /// The photo's luminance in stops from middle grey, white-balanced with `wb` (camera
 /// multipliers), unedited: sensor-clipped pixels left out (unless that's nearly all of them).
-fn scene_evs(cam: &[Vec3], color: &CameraColor, wb: Vec3) -> Vec<f32> {
+fn scene_evs(samples: &Samples, color: &CameraColor, wb: Vec3) -> Vec<f32> {
+    let cam = &samples.cam;
     let m = color.cam_to_working();
     let mut clipped = Vec::new();
     let mut evs = Vec::with_capacity(cam.len());
-    for c in cam {
-        // As the shader: white balance, then clip at the sensor's white (1).
+    for (c, gain) in cam.iter().zip(&samples.gain) {
+        // As the shader: white balance, clip at the sensor's white (1), and only then the
+        // lens's vignetting gain. A pixel is blown if the sensor was, whatever the gain makes
+        // of it afterwards.
         let b = [0, 1, 2].map(|k| c[k].max(0.0) * wb[k]);
         let clip = b.iter().any(|&v| v >= 0.999);
-        let b = b.map(|v| v.min(1.0));
+        let b = b.map(|v| v.min(1.0) * gain);
         let rgb = [0, 1, 2].map(|r| m[r][0] * b[0] + m[r][1] * b[1] + m[r][2] * b[2]);
         let max = rgb[0].max(rgb[1]).max(rgb[2]);
         let y = (LUMA[0] * rgb[0] + LUMA[1] * rgb[1] + LUMA[2] * rgb[2])
@@ -184,9 +218,8 @@ fn loss(q: &[f32; 7], l: &Light, median: f32) -> f32 {
 /// Mid-grey on screen, the median's target.
 const MEDIAN: f32 = 0.42;
 
-/// Auto Light for the photo sampled as `cam` (camera RGB, see [`sample`]), white-balanced with
-/// `wb`.
-pub fn tone(cam: &[Vec3], color: &CameraColor, wb: Vec3) -> Light {
+/// Auto Light for the photo sampled as `cam` (see [`sample`]), white-balanced with `wb`.
+pub fn tone(cam: &Samples, color: &CameraColor, wb: Vec3) -> Light {
     let evs = scene_evs(cam, color, wb);
     if evs.is_empty() {
         return Light::default();
@@ -257,6 +290,10 @@ pub fn tone(cam: &[Vec3], color: &CameraColor, wb: Vec3) -> Light {
 /// with a tightening tolerance. Coloured surfaces, however large, don't vote, so a blue car or a
 /// lawn doesn't tint the result. With no neutral-looking pixels it stays As Shot. `None` when
 /// too little of the photo is usable (nearly all clipped or black).
+///
+/// `cam` is the camera RGB as recorded ([`Samples::cam`]), without the lens's vignetting gain:
+/// the gain is the same for all three channels, so it changes no colour, and "clipped" is a
+/// fact about the sensor.
 pub fn white_balance(cam: &[Vec3], color: &CameraColor) -> Option<(f32, f32)> {
     // Unclipped pixels bright enough for their colour to mean something.
     let mut bright: Vec<f32> = cam.iter().map(|c| c[0].max(c[1]).max(c[2])).collect();
@@ -343,10 +380,10 @@ pub fn white_balance(cam: &[Vec3], color: &CameraColor) -> Option<(f32, f32)> {
     on_slider_scale(t, tint)
 }
 
-/// Camera RGB of the `size × size` preview pixels centred on frame position `at` (0..1 across
-/// the framed output, as the editor shows it: crop, turns, flip, straighten and lens correction
-/// mapped as [`sample`] maps them), for the white balance picker. Empty when `at` falls outside
-/// the photo. The patch is square in preview pixels and clipped to the preview's edges.
+/// The `size × size` preview pixels centred on frame position `at` (0..1 across the framed
+/// output, as the editor shows it: crop, turns, flip, straighten and lens correction mapped as
+/// [`sample`] maps them), for the white balance picker. Empty when `at` falls outside the
+/// photo. The patch is square in preview pixels and clipped to the preview's edges.
 #[allow(clippy::too_many_arguments)]
 pub fn sample_around(
     width: u32,
@@ -358,30 +395,31 @@ pub fn sample_around(
     full_h: u32,
     at: [f32; 2],
     size: u32,
-) -> Vec<Vec3> {
+) -> Samples {
     let inside = |p: [f32; 2]| (0.0..=1.0).contains(&p[0]) && (0.0..=1.0).contains(&p[1]);
     if width == 0 || height == 0 || !inside(at) {
-        return Vec::new();
+        return Samples::default();
     }
     let uv = Geometry::new(crop, full_w as f32, full_h as f32).apply(at);
     if !inside(uv) {
-        return Vec::new();
+        return Samples::default();
     }
     let ([u, v], gain) = UvToSource::new(lens, full_w, full_h).map_with_gain(uv);
     let cx = ((u * width as f32) as i64).min(width as i64 - 1);
     let cy = ((v * height as f32) as i64).min(height as i64 - 1);
     let r = (size / 2) as i64;
-    let mut out = Vec::with_capacity((size * size) as usize);
+    let mut out = Samples::default();
     for y in (cy - r).max(0)..=(cy + r).min(height as i64 - 1) {
         for x in (cx - r).max(0)..=(cx + r).min(width as i64 - 1) {
-            out.push(pixel(x as u32, y as u32).map(|c| c * gain));
+            out.cam.push(pixel(x as u32, y as u32));
+            out.gain.push(gain);
         }
     }
     out
 }
 
-/// White balance that makes the picked patch `cam` (camera RGB, see [`sample_around`]) neutral
-/// grey: `(temperature, tint)` on the sliders' scales, rounded as they show them. The patch's
+/// White balance that makes the picked patch `cam` (camera RGB as recorded, the
+/// [`Samples::cam`] of [`sample_around`]) neutral grey: `(temperature, tint)` on the sliders' scales, rounded as they show them. The patch's
 /// mean colour is taken as the light's colour; pixels clipped in any channel (their colour is
 /// wrong) and black ones are left out. `None` when no pixel is usable.
 pub fn white_balance_at(cam: &[Vec3], color: &CameraColor) -> Option<(f32, f32)> {
@@ -442,9 +480,14 @@ mod tests {
         })
     }
 
+    /// `cam` as samples with no lens gain.
+    fn plain(cam: &[Vec3]) -> Samples {
+        Samples::plain(cam.to_vec())
+    }
+
     /// The display percentiles a result gives.
     fn shown(cam: &[Vec3], l: &Light) -> [f32; 7] {
-        let q = percentiles(&scene_evs(cam, &camera(), [1.0; 3]));
+        let q = percentiles(&scene_evs(&plain(cam), &camera(), [1.0; 3]));
         q.map(|ev| display_of_ev(tone_ev(ev + l.exposure, l)))
     }
 
@@ -488,7 +531,7 @@ mod tests {
     #[test]
     fn a_dark_photo_gets_brighter() {
         let cam = scene(normal(-3.5, 1.2, 4000));
-        let l = tone(&cam, &camera(), [1.0; 3]);
+        let l = tone(&plain(&cam), &camera(), [1.0; 3]);
         assert!(l.exposure > 2.0, "{l:?}");
         // Most of the way to mid-grey (beyond two stops, exposure costs extra).
         assert!(shown(&cam, &l)[3] > 0.3, "{l:?}");
@@ -497,7 +540,7 @@ mod tests {
     #[test]
     fn a_bright_photo_gets_darker() {
         let cam = scene(normal(1.5, 0.8, 4000));
-        let l = tone(&cam, &camera(), [1.0; 3]);
+        let l = tone(&plain(&cam), &camera(), [1.0; 3]);
         assert!(l.exposure < -1.0, "{l:?}");
         assert!(shown(&cam, &l)[6] <= 0.97, "{l:?}");
     }
@@ -505,7 +548,7 @@ mod tests {
     #[test]
     fn a_well_exposed_photo_is_left_mostly_alone() {
         let cam = scene(normal(-0.6, 1.6, 4000));
-        let l = tone(&cam, &camera(), [1.0; 3]);
+        let l = tone(&plain(&cam), &camera(), [1.0; 3]);
         assert!(l.exposure.abs() < 0.6, "{l:?}");
         for v in [l.contrast, l.highlights, l.shadows, l.whites, l.blacks] {
             assert!(v.abs() <= 30.0, "{l:?}");
@@ -516,7 +559,7 @@ mod tests {
     fn a_high_contrast_photo_keeps_both_ends() {
         // Deep shadow and bright sky, 10 stops apart.
         let cam = scene(normal(-6.0, 0.8, 2000).chain(normal(3.0, 0.6, 2000)));
-        let l = tone(&cam, &camera(), [1.0; 3]);
+        let l = tone(&plain(&cam), &camera(), [1.0; 3]);
         let d = shown(&cam, &l);
         assert!(d[6] <= 0.97, "highlights clip: {l:?} {d:?}");
         assert!(d[0] >= 0.003, "shadows crushed: {l:?} {d:?}");
@@ -526,7 +569,7 @@ mod tests {
     #[test]
     fn a_flat_photo_gets_contrast() {
         let cam = scene(normal(-0.5, 0.35, 4000));
-        let l = tone(&cam, &camera(), [1.0; 3]);
+        let l = tone(&plain(&cam), &camera(), [1.0; 3]);
         assert!(l.contrast > 10.0, "{l:?}");
     }
 
@@ -536,8 +579,8 @@ mod tests {
         // the room.
         let mut cam = scene(normal(-3.0, 1.0, 3000));
         cam.extend(std::iter::repeat_n([1.0; 3], 600));
-        let with = tone(&cam, &camera(), [1.0; 3]);
-        let without = tone(&cam[..3000], &camera(), [1.0; 3]);
+        let with = tone(&plain(&cam), &camera(), [1.0; 3]);
+        let without = tone(&plain(&cam[..3000]), &camera(), [1.0; 3]);
         assert!(
             (with.exposure - without.exposure).abs() < 0.11,
             "{with:?} {without:?}"
@@ -549,7 +592,7 @@ mod tests {
         // A darker foreground under a bright sky: exposure follows the foreground, highlights
         // bring the sky in, whites keep its top off white.
         let cam = scene(normal(-2.0, 1.2, 2500).chain(normal(1.5, 0.7, 1500)));
-        let l = tone(&cam, &camera(), [1.0; 3]);
+        let l = tone(&plain(&cam), &camera(), [1.0; 3]);
         assert!(l.exposure > 0.0, "{l:?}");
         assert!(l.highlights < -20.0, "{l:?}");
         assert!(shown(&cam, &l)[6] <= 0.92, "{l:?}");
@@ -559,7 +602,7 @@ mod tests {
     fn deep_shadows_are_lifted_with_shadows() {
         // A wide-range scene whose darkest tenth sits far below the rest.
         let cam = scene(normal(-6.0, 0.8, 2000).chain(normal(3.0, 0.6, 2000)));
-        let l = tone(&cam, &camera(), [1.0; 3]);
+        let l = tone(&plain(&cam), &camera(), [1.0; 3]);
         assert!(l.shadows > 20.0, "{l:?}");
         let zero = Light {
             exposure: l.exposure,
@@ -575,7 +618,7 @@ mod tests {
             scene(normal(1.5, 0.8, 4000)),
             scene(normal(-3.5, 1.2, 4000)),
         ] {
-            let l = tone(&cam, &camera(), [1.0; 3]);
+            let l = tone(&plain(&cam), &camera(), [1.0; 3]);
             assert!(l.highlights <= 0.0 && l.shadows >= 0.0, "{l:?}");
         }
     }
@@ -584,8 +627,8 @@ mod tests {
     fn auto_tone_is_deterministic() {
         let cam = scene(normal(-2.0, 2.0, 3000));
         assert_eq!(
-            tone(&cam, &camera(), [1.0; 3]),
-            tone(&cam, &camera(), [1.0; 3])
+            tone(&plain(&cam), &camera(), [1.0; 3]),
+            tone(&plain(&cam), &camera(), [1.0; 3])
         );
     }
 
@@ -676,13 +719,13 @@ mod tests {
             20,
         );
         assert_eq!(all.len(), 400);
-        assert!(all.iter().any(|c| c[0] < 0.1) && all.iter().any(|c| c[0] > 0.1));
+        assert!(all.cam.iter().any(|c| c[0] < 0.1) && all.cam.iter().any(|c| c[0] > 0.1));
         let crop = Crop {
             rect: [0.5, 0.0, 0.5, 1.0],
             ..Crop::default()
         };
         let right = sample(100, 50, px, &crop, &LensTable::identity(), 1000, 500, 20);
-        assert!(!right.is_empty() && right.iter().all(|c| c[0] > 0.1));
+        assert!(!right.is_empty() && right.cam.iter().all(|c| c[0] > 0.1));
     }
 
     #[test]
@@ -732,26 +775,80 @@ mod tests {
                 let gain = lens_at(r * k, 3);
                 let x = ((src[0] * w as f32) as u32).min(w - 1) as f32;
                 let y = ((src[1] * h as f32) as u32).min(h - 1) as f32;
-                let c = got[(j * n + i) as usize];
+                let k = (j * n + i) as usize;
+                let (c, got_gain) = (got.cam[k], got.gain[k]);
                 let at = format!("uv {uv:?}");
-                assert!((c[2] - gain).abs() < 1e-5, "{at}: gain {} vs {gain}", c[2]);
                 assert!(
-                    (c[0] / c[2] - x).abs() < 1e-3,
-                    "{at}: x {} vs {x}",
-                    c[0] / c[2]
+                    (got_gain - gain).abs() < 1e-5,
+                    "{at}: gain {got_gain} vs {gain}"
                 );
-                assert!(
-                    (c[1] / c[2] - y).abs() < 1e-3,
-                    "{at}: y {} vs {y}",
-                    c[1] / c[2]
-                );
+                // The pixel itself comes back as the sensor recorded it.
+                assert_eq!(c, [x, y, 1.0], "{at}");
                 corner_gain = corner_gain.max(gain);
             }
         }
         // The corrected corners are brighter, and they read nearer the centre than uv itself.
         assert!(corner_gain > 1.4, "{corner_gain}");
-        let first = got[0];
-        assert!(first[0] / first[2] > 0.5 / n as f32 * w as f32);
+        assert!(got.cam[0][0] > 0.5 / n as f32 * w as f32);
+    }
+
+    #[test]
+    fn a_bright_corner_under_vignetting_correction_is_not_taken_for_blown() {
+        // Mid-grey, with a corner of sky at 0.7 that the lens profile brightens 1.5×: the
+        // editor shows it at 1.05, a highlight the sliders can bring down. The sensor was
+        // nowhere near its white.
+        let mut s = Samples::plain(vec![[0.18; 3]; 3000]);
+        s.cam.extend(vec![[0.7; 3]; 600]);
+        s.gain.extend(vec![1.5; 600]);
+        let evs = scene_evs(&s, &camera(), [1.0; 3]);
+        assert_eq!(evs.len(), 3600, "nothing is left out as clipped");
+        let brightest = evs.last().unwrap();
+        let shown = (0.7f32 * 1.5 / GREY as f32).log2();
+        assert!((brightest - shown).abs() < 0.05, "{brightest} vs {shown}");
+        // And Auto pulls those highlights in, which it can only do if it sees them.
+        let seen = tone(&s, &camera(), [1.0; 3]);
+        let unseen = tone(&plain(&s.cam[..3000]), &camera(), [1.0; 3]);
+        assert!(seen.highlights < unseen.highlights || seen.exposure < unseen.exposure);
+
+        // A pixel the sensor did clip is still left out, whatever its gain.
+        let mut blown = Samples::plain(vec![[0.18; 3]; 3000]);
+        blown.cam.extend(vec![[1.0; 3]; 600]);
+        blown.gain.extend(vec![1.5; 600]);
+        assert_eq!(scene_evs(&blown, &camera(), [1.0; 3]).len(), 3000);
+
+        // The picker on that corner: a usable spot, since the patch is the sensor's values.
+        let px = |_: u32, _: u32| [0.7, 0.7, 0.7];
+        let lens = vignetting_table(1.5);
+        let patch = sample_around(
+            100,
+            50,
+            px,
+            &Crop::default(),
+            &lens,
+            1000,
+            500,
+            [0.99, 0.99],
+            5,
+        );
+        assert!(patch.gain.iter().all(|g| *g > 1.2), "{:?}", patch.gain);
+        assert!(white_balance_at(&patch.cam, &camera()).is_some());
+    }
+
+    /// A lens table that only brightens the corners, to `corner` times.
+    fn vignetting_table(corner: f32) -> LensTable {
+        use crate::lens::{lens_table, radial, LensCorrection, LensProfile, LensSource};
+        let profile = LensProfile {
+            source: LensSource::Embedded,
+            name: "test".into(),
+            distortion: None,
+            chromatic: false,
+            vignetting: Some(radial(|r| 1.0 + (corner - 1.0) * r * r)),
+        };
+        let on = LensCorrection {
+            profile: true,
+            ..Default::default()
+        };
+        lens_table(Some(&profile), &on, 1000.0, 500.0)
     }
 
     #[test]
@@ -830,26 +927,26 @@ mod tests {
         // Uncropped: frame position = source position; 5 × 5 pixels around it.
         let s = at(&Crop::default(), [0.25, 0.5]);
         assert_eq!(s.len(), 25);
-        assert_eq!(centre(&s), (25.0, 25.0));
+        assert_eq!(centre(&s.cam), (25.0, 25.0));
         // Cropped to the right half: the frame's left edge is the middle of the source.
         let right = Crop {
             rect: [0.5, 0.0, 0.5, 1.0],
             ..Crop::default()
         };
-        assert_eq!(centre(&at(&right, [0.1, 0.5])), (55.0, 25.0));
+        assert_eq!(centre(&at(&right, [0.1, 0.5]).cam), (55.0, 25.0));
         // A quarter turn clockwise: the frame's top-left corner is the source's bottom-left.
         let turned = Crop {
             turns: 1,
             ..Crop::default()
         };
-        let (x, y) = centre(&at(&turned, [0.1, 0.1]));
+        let (x, y) = centre(&at(&turned, [0.1, 0.1]).cam);
         assert!(x < 15.0 && y > 40.0, "({x}, {y})");
         // Flipped: left and right swap.
         let flipped = Crop {
             flip: true,
             ..Crop::default()
         };
-        let (x, _) = centre(&at(&flipped, [0.1, 0.5]));
+        let (x, _) = centre(&at(&flipped, [0.1, 0.5]).cam);
         assert!(x > 85.0, "{x}");
         // At a corner the patch is clipped to the preview; outside the frame, nothing.
         assert_eq!(at(&Crop::default(), [0.0, 0.0]).len(), 9);
@@ -871,8 +968,8 @@ mod tests {
             let s = sample_around(100, 50, px, &crop, &id, 1000, 500, f, 1);
             assert_eq!(s.len(), 1);
             let [u, v] = g.apply(f);
-            assert_eq!(s[0][0], (u * 100.0).floor(), "{f:?}");
-            assert_eq!(s[0][1], (v * 50.0).floor(), "{f:?}");
+            assert_eq!(s.cam[0][0], (u * 100.0).floor(), "{f:?}");
+            assert_eq!(s.cam[0][1], (v * 50.0).floor(), "{f:?}");
         }
         // Off centre, straightening moves where a frame position reads from.
         let level = Crop {
