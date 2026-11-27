@@ -19,13 +19,23 @@ updates:
     schedule:
       interval: weekly
     groups:
+      # Tauri's npm packages have to stay on the same minor as its crates (CI checks, with
+      # scripts/check-tauri.mjs), so they get a pull request of their own: bump the crates in
+      # it, and the rest of the npm updates aren't held up meanwhile.
+      tauri:
+        patterns: ["@tauri-apps/*"]
       npm:
         update-types: [minor, patch]
+        exclude-patterns: ["@tauri-apps/*"]
 
   - package-ecosystem: cargo
     directory: /
     schedule:
       interval: monthly
     groups:
+      # The other half of the npm group above.
+      tauri:
+        patterns: ["tauri", "tauri-*"]
       cargo:
         update-types: [minor, patch]
+        exclude-patterns: ["tauri", "tauri-*"]

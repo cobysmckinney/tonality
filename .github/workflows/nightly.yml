@@ -27,6 +27,7 @@ jobs:
   prepare:
     name: Anything new?
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: read
     outputs:
@@ -92,6 +93,7 @@ jobs:
     name: Publish nightly
     needs: [prepare, build]
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: write
     steps:
@@ -110,11 +112,11 @@ jobs:
           ls -l release
           repo=(--repo "$GITHUB_REPOSITORY")
           title="tonality nightly ($VERSION)"
-          if gh release view "$TAG" "${repo[@]}" >/dev/null 2>&1; then
-            gh api -X PATCH "repos/$GITHUB_REPOSITORY/git/refs/tags/$TAG" -f sha="$SHA" -F force=true >/dev/null
-            gh release edit "$TAG" "${repo[@]}" --title "$title" --notes "$NOTES" \
-              --prerelease --latest=false
-          else
+          # Only the very first nightly has no release to upload into. Creating it puts the tag
+          # on this commit at once; every later run moves the tag last (below).
+          existed=true
+          if ! gh release view "$TAG" "${repo[@]}" >/dev/null 2>&1; then
+            existed=false
             gh release create "$TAG" "${repo[@]}" --target "$SHA" --title "$title" --notes "$NOTES" \
               --prerelease --latest=false
           fi
@@ -124,6 +126,15 @@ jobs:
           find release -type f ! -name latest.json -print0 |
             xargs -0 gh release upload "$TAG" "${repo[@]}" --clobber
           gh release upload "$TAG" release/latest.json "${repo[@]}" --clobber
+
+          # Only now does the tag move. "Anything new?" compares main with it, so moving it
+          # before the uploads would make a night whose upload failed look finished, and it
+          # would never be built again.
+          if [ "$existed" = true ]; then
+            gh api -X PATCH "repos/$GITHUB_REPOSITORY/git/refs/tags/$TAG" -f sha="$SHA" -F force=true >/dev/null
+            gh release edit "$TAG" "${repo[@]}" --title "$title" --notes "$NOTES" \
+              --prerelease --latest=false
+          fi
 
           # Last night's installers (their names carry the version) go.
           gh release view "$TAG" "${repo[@]}" --json assets --jq '.assets[].name' |

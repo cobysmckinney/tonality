@@ -11,7 +11,7 @@
     "test": "vitest run",
     "format": "prettier --write ui",
     "format:check": "prettier --check ui",
-    "bindings": "cargo test -p tonality-core export_bindings",
+    "bindings": "cargo test --workspace export_bindings",
     "licences": "cargo fetch --locked && cargo about generate --locked --fail -c licences/about.toml -o licences/THIRD-PARTY-NOTICES.txt licences/about.hbs",
     "tauri": "tauri",
     "release": "node scripts/release.mjs",
