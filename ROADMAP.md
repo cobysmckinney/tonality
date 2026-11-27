@@ -19,24 +19,15 @@ commit.
 
 ## Now
 
-In review: fixes from a code audit of `main` at `65cce25` (2026-11-25), one pull request per
-area. Move each to **Done** when it merges.
+What a code audit of `main` at `65cce25` (2026-11-25) found and its pull requests
+(#164 to #175) only half fixed:
 
-- [ ] CI and build tooling: time limits, `--locked`, a Tauri version check, LF checkouts, a
-      nightly that can be retried (#164).
-- [ ] Log file and updater (#165).
-- [ ] Import: hash on copy, the Recycle Bin, leftover temporary files, queued imports (#166).
-- [ ] Catalog and sidecars; catalog v8; a guard against updating to a build that can't read
-      the library (#167). Also 0.2's "say so when the library is already open".
-- [ ] Export: sizes, crop sharpness, lens corners, highlights, EXIF, failing fast (#168).
-- [ ] Lens profiles and raw decoding (#169).
-- [ ] AI masks: small raws, download prompts, version previews, stale downloads (#170).
-- [ ] Edit: keyboard, crop and tool fixes (#171).
-- [ ] Photo switching, thumbnails and Library state (#172).
-- [ ] Tests: export rendering, raw decoding, the preview's GLSL (#173).
-- [ ] Accessibility: the curve, crop and masks from the keyboard; contrast; screen readers
-      (#174). Part of 0.9's accessibility item.
-- [ ] Notices, README, the shortcut sheet and this roadmap (#175).
+- [ ] The fitted preview in Edit still puts a magenta outline around blown highlights; resized
+      exports no longer do. The preview is averaged before the white balance is known, so it
+      needs to carry how much of each pixel was sensor-clipped (#91).
+- [ ] Fujifilm Super CCD raws (S5 Pro, S3 Pro, F700, S100FS) are refused with a reason instead
+      of opening rotated 45°. Developing them means porting rawler's rotation, and a sample
+      file to check it against (#89).
 
 ---
 
@@ -52,8 +43,6 @@ Each milestone is a release. The order inside one is a suggestion.
 
 What's left after #58–#62.
 
-- [ ] Say so when the library is already open in another window. Today the app exits with
-      nothing on screen (the reason is in the log).
 - [ ] Notice photos whose original has gone missing: mark them in the grid and offer to remove
       them, instead of failing with a decode error when opened.
 - [ ] Never reuse a photo's id. `images.id` isn't `AUTOINCREMENT`, so removing the newest
@@ -196,6 +185,18 @@ _(new ideas go here)_
 - Tethered shooting; printing.
 
 ## Done
+- 2026-11-26 — Notices, README, the shortcut sheet and this roadmap (#175).
+- 2026-11-26 — Accessibility: the curve, crop and masks from the keyboard; contrast; what screen readers are told (#174). Part of 0.9's accessibility item.
+- 2026-11-26 — Tests: export rendering, raw decoding, the preview's GLSL (#173).
+- 2026-11-26 — Photo switching, thumbnails and Library state (#172).
+- 2026-11-26 — Edit: keyboard, crop and tool fixes (#171).
+- 2026-11-26 — AI masks: small raws, download prompts, version previews, stale downloads (#170).
+- 2026-11-26 — Lens profiles and raw decoding (#169).
+- 2026-11-26 — Export: sizes, crop sharpness, lens corners, highlights, EXIF, failing fast (#168).
+- 2026-11-26 — Catalog and sidecars; catalog v8; a guard against updating to a build that can't read the library; saying so when the library is already open (#167).
+- 2026-11-26 — Import: hash on copy, the Recycle Bin, leftover temporary files, queued imports (#166).
+- 2026-11-26 — Log file and updater (#165).
+- 2026-11-26 — CI and build tooling: time limits, `--locked`, a Tauri version check, LF checkouts, a nightly that can be retried (#164).
 - 2026-11-25 — Rate, pick and reject in Edit; an edited mark on grid and filmstrip thumbnails (#75).
 - 2026-11-25 — Compare with another photo, side by side, to match a look (#71).
 - 2026-11-25 — Merge from another version, panel by panel, with a live preview (#74).
