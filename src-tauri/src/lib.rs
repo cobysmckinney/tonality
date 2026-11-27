@@ -413,7 +413,8 @@ pub fn run() {
             // First, so that anything going wrong below is on record.
             match app.path().app_log_dir() {
                 Ok(dir) => {
-                    if let Err(e) = logging::init(&dir) {
+                    let version = app.package_info().version.to_string();
+                    if let Err(e) = logging::init(&dir, &version) {
                         eprintln!("no log file in {}: {e}", dir.display());
                     }
                 }
