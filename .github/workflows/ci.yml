@@ -30,7 +30,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential pkg-config libssl-dev \
-            libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev
+            libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev glslang-tools
 
       - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
         with:
@@ -64,6 +64,8 @@ jobs:
           VK_DRIVER_FILES: /dev/null
           VK_ICD_FILENAMES: /dev/null
           __EGL_VENDOR_LIBRARY_FILENAMES: /dev/null
+          # The preview's GLSL is compiled by glslang (installed above): no skipping that here.
+          TONALITY_REQUIRE_GLSLANG: 1
 
       # `git status`, not `git diff`: a binding for a new type that was never committed counts.
       - name: Bindings are up to date

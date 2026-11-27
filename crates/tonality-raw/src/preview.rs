@@ -753,6 +753,191 @@ mod tests {
         raw
     }
 
+    /// The value of sensor pixel `(x, y)` of a `w`-wide CFA image.
+    fn sensor(raw: &RawImage, x: usize, y: usize) -> f32 {
+        raw.data.as_f32()[y * raw.width + x]
+    }
+
+    #[test]
+    fn scaling_uses_each_cfa_positions_own_black_level_and_keeps_values_below_it() {
+        use rawler::rawimage::{BlackLevel, WhiteLevel};
+        let mut raw = bayer(4, 4, (0, 0, 4, 4));
+        // One black level per position of the 2 × 2 block, in the order (0,0), (1,0), (0,1),
+        // (1,1), and one white level for all.
+        raw.blacklevel = BlackLevel::new(&[64u16, 80, 96, 112], 2, 2, 1);
+        raw.whitelevel = WhiteLevel::new(vec![1088u32]);
+        // Each pixel at its own black level plus a quarter of its range, but for two: one at
+        // white, and one below black (noise around black goes both ways).
+        let black = |x: usize, y: usize| [64.0f32, 80.0, 96.0, 112.0][(y % 2) * 2 + x % 2];
+        let mut data: Vec<f32> = (0..16)
+            .map(|i| {
+                let b = black(i % 4, i / 4);
+                b + (1088.0 - b) / 4.0
+            })
+            .collect();
+        data[4 + 3] = 1088.0; // (3, 1): position (1, 1), at white
+        data[2 * 4] = 64.0 - 16.0; // (0, 2): position (0, 0), 16 below its black
+        raw.data = RawImageData::Float(data);
+
+        scale(&mut raw);
+
+        for (x, y) in [(0, 0), (1, 0), (0, 1), (1, 1), (2, 3), (3, 2)] {
+            let v = sensor(&raw, x, y);
+            assert!((v - 0.25).abs() < 1e-6, "({x}, {y}) is {v}");
+        }
+        assert!((sensor(&raw, 3, 1) - 1.0).abs() < 1e-6, "white is 1");
+        let below = sensor(&raw, 0, 2);
+        assert!(
+            (below - (-16.0 / 1024.0)).abs() < 1e-6,
+            "below black stays below zero: {below}"
+        );
+        // The levels now say what the data is: black 0, white 1.
+        assert!(raw.blacklevel.levels.iter().all(|l| l.as_f32() == 0.0));
+        assert_eq!(raw.whitelevel.0, [1]);
+    }
+
+    #[test]
+    fn scaling_handles_images_that_are_not_a_cfa() {
+        use rawler::rawimage::{BlackLevel, WhiteLevel};
+        // Linear RGB (a DNG from a scanner or a phone): three samples per pixel, a level each.
+        let mut raw = bayer(2, 1, (0, 0, 2, 1));
+        raw.photometric = RawPhotometricInterpretation::LinearRaw;
+        raw.cpp = 3;
+        raw.blacklevel = BlackLevel::new(&[100u16, 200, 300], 1, 1, 3);
+        raw.whitelevel = WhiteLevel::new(vec![1100u32, 1200, 1300]);
+        raw.data = RawImageData::Float(vec![600.0, 700.0, 800.0, 1100.0, 200.0, 250.0]);
+        scale(&mut raw);
+        let px = raw.data.as_f32();
+        for (got, want) in px.iter().zip([0.5, 0.5, 0.5, 1.0, 0.0, -0.05]) {
+            assert!((got - want).abs() < 1e-6, "{px:?}");
+        }
+    }
+
+    #[test]
+    fn every_orientation_puts_each_pixel_where_exif_says() {
+        // A 3 × 2 picture whose pixels are numbered row by row:  0 1 2
+        //                                                         3 4 5
+        let picture =
+            || ImageBuffer::<image::Luma<u8>, Vec<u8>>::from_raw(3, 2, (0..6).collect()).unwrap();
+        // What each EXIF orientation shows, row by row, once the picture is turned upright.
+        let cases: [(Orientation, (u32, u32), &[u8]); 9] = [
+            (Orientation::Normal, (3, 2), &[0, 1, 2, 3, 4, 5]),
+            (Orientation::Unknown, (3, 2), &[0, 1, 2, 3, 4, 5]),
+            (Orientation::HorizontalFlip, (3, 2), &[2, 1, 0, 5, 4, 3]),
+            (Orientation::Rotate180, (3, 2), &[5, 4, 3, 2, 1, 0]),
+            (Orientation::VerticalFlip, (3, 2), &[3, 4, 5, 0, 1, 2]),
+            // Mirrored across the diagonal from top-left: rows become columns.
+            (Orientation::Transpose, (2, 3), &[0, 3, 1, 4, 2, 5]),
+            // Turned a quarter clockwise: the left column becomes the top row, bottom first.
+            (Orientation::Rotate90, (2, 3), &[3, 0, 4, 1, 5, 2]),
+            // Mirrored across the other diagonal.
+            (Orientation::Transverse, (2, 3), &[5, 2, 4, 1, 3, 0]),
+            // Turned a quarter anticlockwise.
+            (Orientation::Rotate270, (2, 3), &[2, 5, 1, 4, 0, 3]),
+        ];
+        for (o, size, pixels) in cases {
+            let out = orient(picture(), o);
+            assert_eq!(out.dimensions(), size, "{o:?}");
+            assert_eq!(out.as_raw().as_slice(), pixels, "{o:?}");
+            // `transposes` is what sizes the full image before it is decoded: it has to say
+            // "sideways" for exactly the orientations that come out sideways.
+            assert_eq!(transposes(o), size == (2, 3), "{o:?}");
+        }
+    }
+
+    #[test]
+    fn camera_colour_prefers_a_daylight_matrix_and_survives_a_missing_white_balance() {
+        let d65 = vec![0.9f32, 0.1, 0.0, 0.1, 0.8, 0.1, 0.0, 0.2, 0.7];
+        let tungsten = vec![0.5f32; 9];
+        let as_rows = |m: &[f32]| [[m[0], m[1], m[2]], [m[3], m[4], m[5]], [m[6], m[7], m[8]]];
+
+        let mut raw = bayer(2, 2, (0, 0, 2, 2));
+        raw.wb_coeffs = [2.1, 1.0, 1.6, f32::NAN];
+        raw.color_matrix.insert(Illuminant::A, tungsten.clone());
+        raw.color_matrix.insert(Illuminant::D65, d65.clone());
+        let c = camera_color(&raw);
+        assert_eq!(c.xyz_to_cam, as_rows(&d65), "D65 before tungsten");
+        assert_eq!(
+            c.as_shot_wb,
+            [2.1, 1.0, 1.6],
+            "the fourth (emerald) isn't needed"
+        );
+
+        // Only a tungsten matrix: better than none.
+        raw.color_matrix.remove(&Illuminant::D65);
+        assert_eq!(camera_color(&raw).xyz_to_cam, as_rows(&tungsten));
+        // No matrix for any illuminant: the decoder's own.
+        raw.color_matrix.clear();
+        raw.xyz_to_cam = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0], [0.0; 3]];
+        assert_eq!(
+            camera_color(&raw).xyz_to_cam,
+            tonality_core::color::IDENTITY
+        );
+
+        // A white balance the camera didn't record (zero, NaN, negative) can't be multiplied
+        // by: fall back to the one that makes the matrix's white neutral.
+        let neutral = raw.neutralwb();
+        for bad in [
+            [0.0, 1.0, 1.5, 0.0],
+            [f32::NAN, 1.0, 1.5, 0.0],
+            [2.0, 1.0, -1.0, 0.0],
+        ] {
+            raw.wb_coeffs = bad;
+            let wb = camera_color(&raw).as_shot_wb;
+            assert_eq!(wb, [neutral[0], neutral[1], neutral[2]], "{bad:?}");
+            assert!(wb.iter().all(|v| v.is_finite() && *v > 0.0), "{wb:?}");
+        }
+    }
+
+    #[test]
+    fn gain_maps_start_at_the_active_area_not_the_sensors_corner() {
+        use rawler::imgop::{Dim2, Point, Rect};
+        // A map that doubles its top-left 2 × 2 pixels. DNG opcodes count from the active
+        // area; rawler keeps the whole sensor, masked border included.
+        let double = crate::gainmap::GainMap {
+            top: 0,
+            left: 0,
+            bottom: 2,
+            right: 2,
+            plane: 0,
+            planes: 1,
+            row_pitch: 1,
+            col_pitch: 1,
+            points_v: 1,
+            points_h: 1,
+            spacing_v: 1.0,
+            spacing_h: 1.0,
+            origin_v: 0.0,
+            origin_h: 0.0,
+            map_planes: 1,
+            gains: vec![2.0],
+        };
+        let doubled = |raw: &RawImage| -> Vec<(usize, usize)> {
+            (0..raw.height)
+                .flat_map(|y| (0..raw.width).map(move |x| (x, y)))
+                .filter(|&(x, y)| sensor(raw, x, y) == 1.0)
+                .collect()
+        };
+        // The active area starts 4 across and 2 down.
+        let mut raw = bayer(32, 24, (0, 0, 32, 24));
+        raw.active_area = Some(Rect::new(Point::new(4, 2), Dim2::new(24, 20)));
+        apply_gain_maps(&mut raw, std::slice::from_ref(&double));
+        assert_eq!(doubled(&raw), [(4, 2), (5, 2), (4, 3), (5, 3)]);
+        // With none recorded, the whole sensor is the active area.
+        let mut raw = bayer(32, 24, (0, 0, 32, 24));
+        apply_gain_maps(&mut raw, std::slice::from_ref(&double));
+        assert_eq!(doubled(&raw), [(0, 0), (1, 0), (0, 1), (1, 1)]);
+        // One too small to be believed (damaged metadata) is treated the same way.
+        let mut raw = bayer(32, 24, (0, 0, 32, 24));
+        raw.active_area = Some(Rect::new(Point::new(4, 2), Dim2::new(1, 1)));
+        apply_gain_maps(&mut raw, std::slice::from_ref(&double));
+        assert_eq!(doubled(&raw), [(0, 0), (1, 0), (0, 1), (1, 1)]);
+        // No maps: nothing changes.
+        let mut raw = bayer(32, 24, (0, 0, 32, 24));
+        apply_gain_maps(&mut raw, &[]);
+        assert!(doubled(&raw).is_empty());
+    }
+
     #[test]
     fn a_one_pixel_crop_develops_the_whole_sensor() {
         let raw = bayer(32, 24, (31, 0, 1, 24));

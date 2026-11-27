@@ -48,12 +48,46 @@ pub struct Gpu {
     lost: Arc<AtomicBool>,
     /// Adapter name, for diagnostics.
     pub adapter: String,
+    /// Output tile size, [`TILE`] unless a test asked for smaller ones.
+    tile: u32,
 }
 
 const TARGET: wgpu::TextureFormat = wgpu::TextureFormat::Rgba32Float;
 
+/// Why a [`Gpu`] couldn't be made.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GpuError {
+    /// There is nothing here to render on: no adapter, or only one that can't draw to the float
+    /// target the renderer needs (Mesa's OpenGL software renderer). Not a fault in tonality,
+    /// and the one case in which the GPU tests skip themselves.
+    NoAdapter(String),
+    /// An adapter is there but its device couldn't be opened.
+    Device(String),
+    /// The develop pipeline didn't build on a device that should take it: the shader, or the
+    /// way it is set up, is wrong for this backend.
+    Pipeline(String),
+}
+
+impl std::fmt::Display for GpuError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            GpuError::NoAdapter(e) => write!(f, "no usable GPU adapter: {e}"),
+            GpuError::Device(e) => write!(f, "cannot open GPU device: {e}"),
+            GpuError::Pipeline(e) => write!(f, "cannot build the develop pipeline: {e}"),
+        }
+    }
+}
+
+impl std::error::Error for GpuError {}
+
+impl From<GpuError> for String {
+    fn from(e: GpuError) -> String {
+        e.to_string()
+    }
+}
+
 impl Gpu {
-    pub fn new() -> Result<Self, String> {
+    pub fn new() -> Result<Self, GpuError> {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             backends: wgpu::Backends::PRIMARY | wgpu::Backends::GL,
             ..wgpu::InstanceDescriptor::new_without_display_handle()
@@ -62,14 +96,25 @@ impl Gpu {
             power_preference: wgpu::PowerPreference::HighPerformance,
             ..Default::default()
         }))
-        .map_err(|e| format!("no GPU adapter: {e}"))?;
+        .map_err(|e| GpuError::NoAdapter(e.to_string()))?;
         let name = adapter.get_info().name;
+        // Asked up front, so that an adapter that simply can't do this is told apart from a
+        // pipeline that fails to build on one that can.
+        if !adapter
+            .get_texture_format_features(TARGET)
+            .allowed_usages
+            .contains(wgpu::TextureUsages::RENDER_ATTACHMENT)
+        {
+            return Err(GpuError::NoAdapter(format!(
+                "{name} can't render to a float target"
+            )));
+        }
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             label: Some("tonality export"),
             required_limits: wgpu::Limits::downlevel_defaults().using_resolution(adapter.limits()),
             ..Default::default()
         }))
-        .map_err(|e| format!("cannot open GPU device: {e}"))?;
+        .map_err(|e| GpuError::Device(e.to_string()))?;
 
         // wgpu's default handlers panic; record the failure instead, so callers get an error and
         // can rebuild the device (a driver reset, suspend/resume, running out of video memory).
@@ -124,7 +169,7 @@ impl Gpu {
         });
         scopes
             .pop()
-            .map_err(|e| format!("cannot build the develop pipeline: {e}"))?;
+            .map_err(|e| GpuError::Pipeline(e.to_string()))?;
         Ok(Self {
             device,
             queue,
@@ -132,7 +177,17 @@ impl Gpu {
             sampler,
             lost,
             adapter: name,
+            tile: TILE,
         })
+    }
+
+    /// Render in tiles of `tile` pixels, not [`TILE`]. For tests: a small picture then goes
+    /// through the same tile loop, source rectangles and read-back offsets as a 40-megapixel
+    /// export, and has to come out the same as when rendered in one piece.
+    #[doc(hidden)]
+    pub fn with_tile_size(mut self, tile: u32) -> Self {
+        self.tile = tile.max(1);
+        self
     }
 
     /// Whether the device has been lost (or failed outside an error scope): every further call
@@ -210,13 +265,14 @@ impl Gpu {
         let presence_view = self.presence_texture(presence);
 
         let mut out = vec![0u16; (w * h * 3) as usize];
-        let tiles: Vec<(u32, u32)> = (0..h.div_ceil(TILE))
-            .flat_map(|ty| (0..w.div_ceil(TILE)).map(move |tx| (tx * TILE, ty * TILE)))
+        let tile = self.tile;
+        let tiles: Vec<(u32, u32)> = (0..h.div_ceil(tile))
+            .flat_map(|ty| (0..w.div_ceil(tile)).map(move |tx| (tx * tile, ty * tile)))
             .collect();
         let mut inflight: Option<InFlight> = None;
         for (n, &(x, y)) in tiles.iter().enumerate() {
-            let tw = TILE.min(w - x);
-            let th = TILE.min(h - y);
+            let tw = tile.min(w - x);
+            let th = tile.min(h - y);
             // The source area this tile reads (rotation makes it larger), plus an apron for
             // Detail's neighbourhood, clamped to the image.
             let (fw, fh) = (w as f32, h as f32);
