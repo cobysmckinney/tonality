@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { HistoryView } from "$lib/bindings/HistoryView";
-import { branchSteps, layoutGraph, versions } from "./graph";
+import { branchSteps, deletion, layoutGraph, versions } from "./graph";
 
 const c = (id: number, parent: number | null) => ({ id, parent, summary: `c${id}`, time: 0 });
 
@@ -85,6 +85,27 @@ describe("branchSteps", () => {
 
   it("gives a fresh version no steps of its own", () => {
     expect(ids(branchSteps(view, "hdr"))).toEqual([["main", true, [1]]]);
+  });
+});
+
+describe("deletion", () => {
+  it("counts the steps only that version has, and says where the photo goes", () => {
+    // bw is the current version: its two steps go, and the photo switches to main.
+    expect(deletion(view, "bw")).toEqual({ steps: 2, switchesTo: "main" });
+    // main shares 1 and 2 with bw: only 3 goes, and the current version stays.
+    expect(deletion(view, "main")).toEqual({ steps: 1, switchesTo: null });
+    expect(deletion(view, "hdr")).toEqual({ steps: 0, switchesTo: null });
+  });
+
+  it("doesn't count steps a later fork still holds", () => {
+    // bw-2 forks from bw's first step (4), so deleting bw only loses 5.
+    const forked = { ...view, branches: [...view.branches, { name: "bw-2", tip: 4 }] };
+    expect(deletion(forked, "bw")?.steps).toBe(1);
+  });
+
+  it("is nothing for the only version, or a name that isn't one", () => {
+    expect(deletion({ ...view, branches: [view.branches[0]] }, "main")).toBeNull();
+    expect(deletion(view, "nope")).toBeNull();
   });
 });
 

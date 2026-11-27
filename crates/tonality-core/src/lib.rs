@@ -6,6 +6,7 @@ pub mod color;
 pub mod curve;
 pub mod edit;
 pub mod exif;
+pub mod format;
 pub mod geometry;
 pub mod grading;
 pub mod history;
@@ -16,6 +17,7 @@ pub mod sidecar;
 
 pub use catalog::{Catalog, CatalogError, ImageId};
 pub use edit::{EditState, Panel, WbPreset};
+pub use format::Formats;
 pub use history::{Checkout, CommitId, Head, HistoryView};
 pub use mask::{Mask, MaskShape};
 pub use sidecar::{MergeSummary, Sidecar};

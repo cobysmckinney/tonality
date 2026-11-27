@@ -37,6 +37,10 @@ pub struct Catalog {
     pub(crate) edited_states: RefCell<HashMap<String, bool>>,
 }
 
+/// The schema this build reads and writes: one more than the last for each migration below.
+/// An older build refuses a catalog with a higher one (see [`crate::format`]).
+pub const CATALOG_VERSION: u32 = MIGRATIONS.len() as u32;
+
 const MIGRATIONS: &[&str] = &[
     // v1
     r#"
@@ -156,7 +160,83 @@ const MIGRATIONS: &[&str] = &[
         PRIMARY KEY (image_id, name, tip_created_at)
     ) WITHOUT ROWID;
     "#,
+    // v6: an index for each foreign key that had none. Deleting a row makes SQLite look for
+    // rows that refer to it, and without one that is a scan of the whole table for every row
+    // deleted: resetting 50 photos' history in a library of 60,000 steps took 12 seconds.
+    r#"
+    CREATE INDEX commits_state ON commits(state_hash);
+    CREATE INDEX refs_commit ON refs(commit_id);
+    CREATE INDEX heads_commit ON heads(commit_id);
+    "#,
+    // v7: how many changes a photo has had that its sidecar doesn't hold yet (0: the file is
+    // up to date). A sidecar that is behind must not be read back over the catalog at the next
+    // launch: it would bring back a cleared rating or flag, an album the photo left, or a
+    // history that was reset. See `Catalog::sidecar_touch`.
+    r#"
+    ALTER TABLE images ADD COLUMN sidecar_pending INTEGER NOT NULL DEFAULT 0;
+    "#,
+    // v8: album names are unique, compared the way a sidecar's album names are matched
+    // (ignoring ASCII case). `prepare` renames the duplicates older builds allowed first.
+    r#"
+    CREATE UNIQUE INDEX albums_name ON albums(name COLLATE NOCASE);
+    "#,
 ];
+
+/// What migration `to` needs done before its SQL that SQL alone can't do.
+fn prepare(to: usize, conn: &Connection) -> rusqlite::Result<()> {
+    match to {
+        8 => rename_duplicate_albums(conn),
+        _ => Ok(()),
+    }
+}
+
+/// Run migration `to` (1-based: the version the catalog is at afterwards).
+fn migrate(to: usize, conn: &Connection) -> rusqlite::Result<()> {
+    prepare(to, conn)?;
+    conn.execute_batch(MIGRATIONS[to - 1])?;
+    conn.pragma_update(None, "user_version", to as i64)
+}
+
+/// Give every album whose name another, older album already has (ignoring case) a name of its
+/// own: "Trips" becomes "Trips 2", or the next number that's free. Its photos' sidecars still
+/// say "Trips", which is the older album's name, so they are marked as behind the catalog and
+/// get rewritten instead of read.
+fn rename_duplicate_albums(conn: &Connection) -> rusqlite::Result<()> {
+    let duplicates: Vec<(i64, String)> = conn
+        .prepare(
+            "SELECT id, name FROM albums a WHERE EXISTS
+                 (SELECT 1 FROM albums b WHERE b.id < a.id AND b.name = a.name COLLATE NOCASE)
+             ORDER BY id",
+        )?
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+        .collect::<rusqlite::Result<_>>()?;
+    for (id, name) in duplicates {
+        let free = (2..)
+            .map(|n| format!("{name} {n}"))
+            .find_map(|candidate| {
+                match conn.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM albums WHERE name = ?1 COLLATE NOCASE)",
+                    [&candidate],
+                    |r| r.get::<_, bool>(0),
+                ) {
+                    Ok(true) => None,
+                    Ok(false) => Some(Ok(candidate)),
+                    Err(e) => Some(Err(e)),
+                }
+            })
+            .expect("unbounded")?;
+        conn.execute(
+            "UPDATE albums SET name = ?1 WHERE id = ?2",
+            rusqlite::params![free, id],
+        )?;
+        conn.execute(
+            "UPDATE images SET sidecar_pending = sidecar_pending + 1
+             WHERE id IN (SELECT image_id FROM album_images WHERE album_id = ?1)",
+            [id],
+        )?;
+    }
+    Ok(())
+}
 
 pub fn system_clock() -> Clock {
     Box::new(|| {
@@ -195,14 +275,15 @@ impl Catalog {
             Ok(v) if v <= MIGRATIONS.len() => v,
             _ => {
                 return Err(CatalogError::Invalid(format!(
-                    "catalog schema v{version} is newer than this build of tonality supports"
+                    "this library was last opened by a newer version of tonality (its catalog \
+                     is v{version}, and this version reads up to v{CATALOG_VERSION}). Install \
+                     that version, or a newer one, to open it."
                 )));
             }
         };
-        for (i, sql) in MIGRATIONS.iter().enumerate().skip(version) {
+        for to in version + 1..=MIGRATIONS.len() {
             let tx = conn.unchecked_transaction()?;
-            tx.execute_batch(sql)?;
-            tx.pragma_update(None, "user_version", i as i64 + 1)?;
+            migrate(to, &tx)?;
             tx.commit()?;
         }
         Ok(Catalog {
@@ -280,6 +361,67 @@ mod tests {
             .execute("UPDATE refs SET name = 'renamed' WHERE image_id = 1", [])
             .unwrap();
         assert_eq!(head(1), "renamed");
+    }
+
+    /// Deleting a row makes SQLite look for rows that refer to it. Without an index on the
+    /// referring column that's a scan of the whole table for every row deleted, under the
+    /// lock every other command waits on.
+    #[test]
+    fn every_foreign_key_has_an_index_to_be_checked_by() {
+        let cat = Catalog::open_in_memory().unwrap();
+        let strings = |sql: &str| -> Vec<String> {
+            let mut stmt = cat.conn.prepare(sql).unwrap();
+            let rows = stmt.query_map([], |r| r.get(0)).unwrap();
+            rows.collect::<rusqlite::Result<_>>().unwrap()
+        };
+        let mut unindexed = Vec::new();
+        for table in strings("SELECT name FROM sqlite_master WHERE type = 'table'") {
+            // The first column of each index on the table (the primary key's included).
+            let mut leading = strings(&format!(
+                "SELECT (SELECT name FROM pragma_index_info(l.name) WHERE seqno = 0)
+                 FROM pragma_index_list('{table}') l"
+            ));
+            // An INTEGER PRIMARY KEY is the rowid: no index is listed for it.
+            leading.extend(strings(&format!(
+                "SELECT name FROM pragma_table_info('{table}') WHERE pk = 1"
+            )));
+            for column in strings(&format!(
+                "SELECT \"from\" FROM pragma_foreign_key_list('{table}') WHERE seq = 0"
+            )) {
+                if !leading.contains(&column) {
+                    unindexed.push(format!("{table}({column})"));
+                }
+            }
+        }
+        assert!(unindexed.is_empty(), "no index on {unindexed:?}");
+    }
+
+    #[test]
+    fn duplicate_album_names_are_told_apart_when_upgrading() {
+        // A catalog from before names had to be unique, with three "Trips" (one in another
+        // case) and a "Trips 2" already taken.
+        let conn = Connection::open_in_memory().unwrap();
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+        for to in 1..=5 {
+            migrate(to, &conn).unwrap();
+        }
+        conn.execute_batch(
+            "INSERT INTO images (id, hash, file, name, file_size, imported_at) VALUES (1, 'h', 'f', 'n', 1, 0), (2, 'h2', 'f2', 'n2', 1, 0);
+             INSERT INTO albums (id, name, created_at) VALUES
+                 (1, 'Trips', 0), (2, 'Trips 2', 0), (3, 'trips', 0), (4, 'Family', 0), (5, 'Trips', 0);
+             INSERT INTO album_images (album_id, image_id, added_at) VALUES (1, 1, 0), (3, 2, 0);",
+        )
+        .unwrap();
+        let mut cat = Catalog::init(conn).unwrap();
+        let names: Vec<String> = cat.albums().unwrap().into_iter().map(|a| a.name).collect();
+        assert_eq!(names, ["Family", "Trips", "Trips 2", "trips 3", "Trips 4"]);
+        // Nobody lost a photo, and the renamed album's photo will have its sidecar rewritten
+        // from the catalog rather than read back (it still says "trips").
+        assert_eq!(cat.album_members(1).unwrap(), [1]);
+        assert_eq!(cat.album_members(3).unwrap(), [2]);
+        assert_eq!(cat.sidecar_pending(1).unwrap(), 0);
+        assert!(cat.sidecar_pending(2).unwrap() > 0);
+        assert!(cat.create_album("TRIPS 3").is_err());
     }
 
     #[test]

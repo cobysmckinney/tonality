@@ -11,6 +11,18 @@ use crate::grading::ColorGrading;
 use crate::lens::LensCorrection;
 use crate::mask::{describe_masks, Mask};
 
+/// What an edit state can hold, as a number that goes up whenever a build older than the
+/// change would lose something reading a newer state: a new setting (it ignores the field, and
+/// writes the state back without it) or a new value of an existing one (it can't read the state
+/// at all). Nothing is refused on this number; it lets the updater tell that an older build
+/// can't be trusted with this library (see [`crate::format`]).
+///
+/// 1: v0.1.1. 2: colour grading.
+///
+/// The test `the_stored_shape_is_the_one_edit_format_names` fails when the shape changes, as a
+/// reminder to decide whether this needs raising.
+pub const EDIT_FORMAT: u32 = 2;
+
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, TS)]
 #[serde(default, rename_all = "camelCase")]
 #[ts(export)]
@@ -389,6 +401,14 @@ impl EditState {
     /// declaration order, so this is deterministic for a given schema version.
     pub fn to_canonical_json(&self) -> String {
         serde_json::to_string(self).expect("EditState is always serializable")
+    }
+
+    /// Whether the state reads back from its own canonical JSON. It doesn't when a number in it
+    /// isn't finite: a JSON number too large for an `f32` (`1e39`) is read as infinity, and
+    /// infinity is written as `null`, which is not a number. Such a state must never be stored,
+    /// or the step that holds it can't be opened again.
+    pub fn is_storable(&self) -> bool {
+        serde_json::from_str::<EditState>(&self.to_canonical_json()).is_ok()
     }
 
     /// Content address of this state (blake3 of canonical JSON, hex).
@@ -862,6 +882,79 @@ pub fn list_changes(prev: &EditState, next: &EditState) -> Vec<Change> {
 mod tests {
     use super::*;
     use crate::grading::Harmony;
+
+    /// Every type an edit state is made of, with its fields and variants, as TypeScript (which
+    /// is how the types are already written out for the interface).
+    fn stored_shape() -> String {
+        struct Walk {
+            cfg: ts_rs::Config,
+            seen: std::collections::BTreeMap<String, String>,
+        }
+        impl ts_rs::TypeVisitor for Walk {
+            fn visit<T: TS + 'static + ?Sized>(&mut self) {
+                let name = T::name(&self.cfg);
+                if self.seen.contains_key(&name) {
+                    return;
+                }
+                self.seen.insert(name, T::inline(&self.cfg));
+                T::visit_dependencies(self);
+            }
+        }
+        let mut walk = Walk {
+            cfg: ts_rs::Config::default(),
+            seen: Default::default(),
+        };
+        ts_rs::TypeVisitor::visit::<EditState>(&mut walk);
+        let all: String = walk
+            .seen
+            .iter()
+            .map(|(name, shape)| format!("{name} = {shape}\n"))
+            .collect();
+        // Without the doc comments (rewording one changes nothing that's stored), and with
+        // every run of white space as one space.
+        let mut shape = String::new();
+        let mut rest = all.as_str();
+        while let Some(at) = rest.find("/*") {
+            shape.push_str(&rest[..at]);
+            rest = rest[at..]
+                .find("*/")
+                .map_or("", |end| &rest[at + end + 2..]);
+        }
+        shape.push_str(rest);
+        shape
+            .lines()
+            .map(|l| l.split_whitespace().collect::<Vec<_>>().join(" "))
+            .filter(|l| !l.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// The shape [`EDIT_FORMAT`] was last decided for (blake3 of [`stored_shape`]).
+    const EDIT_SHAPE: &str = "a8450af3e601905795d21a9442f448af18c63824cb73521d0a765909bd679e44";
+
+    #[test]
+    fn the_stored_shape_is_the_one_edit_format_names() {
+        let shape = stored_shape();
+        assert!(
+            shape.contains("ColorGrading = {"),
+            "walks nested types: {shape}"
+        );
+        assert!(
+            shape.contains("MaskShape = "),
+            "and the ones inside lists: {shape}"
+        );
+        let hash = blake3::hash(shape.as_bytes()).to_hex().to_string();
+        assert_eq!(
+            hash, EDIT_SHAPE,
+            "\nWhat an edit state can hold has changed.\n\
+             1. If a build from before this change would lose something reading a state written \
+             after it (a new setting, or a new value for one), raise EDIT_FORMAT and add a line \
+             to its comment. A rename or a retyped field needs more than that: older states \
+             still have to load.\n\
+             2. Set EDIT_SHAPE to \"{hash}\".\n\
+             The shape is now:\n{shape}"
+        );
+    }
 
     #[test]
     fn presence_settings_stay_out_of_the_hash_until_used() {

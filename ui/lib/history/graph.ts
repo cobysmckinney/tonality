@@ -182,6 +182,27 @@ export function branchSteps(view: HistoryView, branch = view.head.branch): StepG
   return groups;
 }
 
+/**
+ * What deleting version `name` does: how many steps go with it (the ones no other version
+ * reaches; steps it shares stay), and the version the photo switches to if it is the current
+ * one. `null` when it can't be deleted (it's the only version, or isn't one).
+ */
+export function deletion(
+  view: HistoryView,
+  name: string,
+): { steps: number; switchesTo: string | null } | null {
+  const gone = view.branches.find((b) => b.name === name);
+  const others = view.branches.filter((b) => b.name !== name);
+  if (!gone || !others.length) return null;
+  const parents = new Map(view.commits.map((c) => [c.id, c.parent]));
+  const kept = new Set(others.flatMap((b) => lineage(parents, b.tip)));
+  return {
+    steps: lineage(parents, gone.tip).filter((id) => !kept.has(id)).length,
+    // The catalog moves HEAD to the first version left, in creation order.
+    switchesTo: view.head.branch === name ? others[0].name : null,
+  };
+}
+
 export interface VersionInfo {
   name: string;
   tip: number;

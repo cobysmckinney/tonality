@@ -275,6 +275,22 @@ pub async fn update_check(app: AppHandle) -> CmdResult<Option<UpdateInfo>> {
         },
         e => e.to_string(),
     })?;
+    // The stable channel offers a nightly build the latest stable even when that's older. An
+    // older build is only safe if it reads what this one has written: otherwise it refuses the
+    // catalog (and the app can't start, to switch back), or opens it and drops the settings it
+    // doesn't know from every photo it saves.
+    if let Some(u) = &update {
+        let current = &app.package_info().version;
+        let older = crate::formats::parsed_like(current, &u.version)
+            .is_some_and(|remote| &remote < current);
+        if older && !crate::formats::reads_this_library(&u.raw_json) {
+            return Err(format!(
+                "tonality {} can’t open this library: this version ({current}) saves it in a \
+                 newer format. Stay on Nightly until a newer stable release is out.",
+                u.version
+            ));
+        }
+    }
     let info = update.as_ref().map(|u| UpdateInfo {
         version: u.version.clone(),
         notes: u.body.clone().filter(|b| !b.trim().is_empty()),

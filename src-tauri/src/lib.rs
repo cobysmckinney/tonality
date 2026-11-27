@@ -1,6 +1,7 @@
 mod ai;
 mod cancel;
 mod export;
+pub mod formats;
 mod history;
 mod images;
 mod jpeg;
@@ -399,6 +400,48 @@ pub(crate) async fn blocking<T: Send + 'static>(
 /// The library's lock file ([`Store::lock`]), kept open while the app runs.
 struct LibraryLock(#[allow(dead_code)] std::fs::File);
 
+/// Why the library couldn't be opened at launch, when it couldn't: it's open in another
+/// tonality, its folder can't be made or read, or its catalog was written by a newer version.
+/// The window then shows this and nothing else, since nothing of the library is there for the
+/// rest of the app to use.
+struct StartupError(Option<String>);
+
+#[tauri::command]
+fn startup_error(error: tauri::State<'_, StartupError>) -> Option<String> {
+    error.0.clone()
+}
+
+/// Close the app, from the screen that shows a [`StartupError`].
+#[tauri::command]
+fn quit(app: tauri::AppHandle) {
+    app.exit(0);
+}
+
+/// Open the library and everything that hangs off it.
+fn open_library(app: &tauri::App) -> Result<(), String> {
+    let root = Store::resolve(app.path().picture_dir().ok(), app.path().home_dir().ok());
+    let at = root.display().to_string();
+    let store =
+        Store::open(root).map_err(|e| format!("Couldn’t open the library at {at}: {e}."))?;
+    // Before anything reads or writes it; held for the app's lifetime.
+    let lock = store.lock().map_err(|e| match e.kind() {
+        std::io::ErrorKind::WouldBlock => {
+            format!("The library at {at} is already open in another tonality window.")
+        }
+        _ => format!("Couldn’t open the library at {at}: {e}."),
+    })?;
+    let mut catalog = Catalog::open(store.catalog_path())
+        .map_err(|e| format!("Couldn’t open the library at {at}: {e}"))?;
+    app.manage(LibraryLock(lock));
+    thumbs::backfill_aspects(&store, &mut catalog);
+    log::info!("library: {}", store.root().display());
+    app.manage(store);
+    app.manage(history::CatalogState::new(catalog));
+    app.manage(sidecar::Sidecars::start(app.handle().clone()));
+    app.manage(updates::Updates::load(app.handle()));
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -420,21 +463,13 @@ pub fn run() {
                 }
                 Err(e) => eprintln!("no log file: {e}"),
             }
-            let root = Store::resolve(app.path().picture_dir().ok(), app.path().home_dir().ok());
-            let store = Store::open(root.clone())
-                .map_err(|e| format!("cannot open library at {root:?}: {e}"))?;
-            // Before anything reads or writes it; held for the app's lifetime.
-            let lock = store
-                .lock()
-                .map_err(|e| format!("cannot open library at {root:?}: {e}"))?;
-            app.manage(LibraryLock(lock));
-            let mut catalog = Catalog::open(store.catalog_path())?;
-            thumbs::backfill_aspects(&store, &mut catalog);
-            log::info!("library: {}", store.root().display());
-            app.manage(store);
-            app.manage(history::CatalogState::new(catalog));
-            app.manage(sidecar::Sidecars::start(app.handle().clone()));
-            app.manage(updates::Updates::load(app.handle()));
+            // A library that can't be opened is said on screen. Failing here instead would
+            // end the app before it has a window, with the reason only in the log.
+            let failed = open_library(app).err();
+            if let Some(why) = &failed {
+                log::error!("{why}");
+            }
+            app.manage(StartupError(failed));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -445,6 +480,8 @@ pub fn run() {
             pick_white_balance,
             startup_path,
             startup_import,
+            startup_error,
+            quit,
             logging::ui_log,
             logging::log_path,
             dev_snapshot_path,
@@ -506,8 +543,11 @@ pub fn run() {
         .expect("error while building tonality")
         .run(|app, event| {
             if let tauri::RunEvent::Exit = event {
-                if let Err(e) = app.state::<sidecar::Sidecars>().flush() {
-                    log::warn!("sidecars not saved on exit: {e}");
+                // Not there when the library couldn't be opened.
+                if let Some(sidecars) = app.try_state::<sidecar::Sidecars>() {
+                    if let Err(e) = sidecars.flush() {
+                        log::warn!("sidecars not saved on exit: {e}");
+                    }
                 }
             }
         });

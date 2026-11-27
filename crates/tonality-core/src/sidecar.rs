@@ -124,7 +124,11 @@ impl Sidecar {
         let bad = |m: &str| Err(CatalogError::Invalid(format!("damaged sidecar: {m}")));
         let mut states = HashMap::new();
         for (k, v) in &self.states {
-            states.insert(k.as_str(), serde_json::from_value::<EditState>(v.clone())?);
+            let state = serde_json::from_value::<EditState>(v.clone())?;
+            if !state.is_storable() {
+                return bad("a setting is not a finite number");
+            }
+            states.insert(k.as_str(), state);
         }
         for (i, c) in self.commits.iter().enumerate() {
             match c.parent {
@@ -184,6 +188,47 @@ impl MergeSummary {
 }
 
 impl Catalog {
+    /// Note that `images` are about to change in a way their sidecars record. Call it before
+    /// the change, under the same lock: from then until [`Catalog::sidecar_written`] says the
+    /// file has caught up, the catalog is the newer of the two, and the file must be rewritten
+    /// from it, never merged into it. That holds across a crash, which is the point: a merge
+    /// only ever adds, so reading a sidecar that is behind would bring back a rating or flag
+    /// that was cleared, an album the photo was taken out of, or a history that was reset.
+    pub fn sidecar_touch(&mut self, images: &[ImageId]) -> Result<()> {
+        let mut stmt = self.conn.prepare_cached(
+            "UPDATE images SET sidecar_pending = sidecar_pending + 1 WHERE id = ?1",
+        )?;
+        for image in images {
+            stmt.execute([image])?;
+        }
+        Ok(())
+    }
+
+    /// How many changes `image` has had since its sidecar was last written (0: none, the file
+    /// is up to date). Read it together with [`Catalog::sidecar`], and hand it back to
+    /// [`Catalog::sidecar_written`] once that sidecar is on disk.
+    pub fn sidecar_pending(&self, image: ImageId) -> Result<i64> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT sidecar_pending FROM images WHERE id = ?1",
+                [image],
+                |r| r.get(0),
+            )
+            .optional()?
+            .unwrap_or(0))
+    }
+
+    /// The sidecar read when `image` had `seen` pending changes is on disk. If there has been
+    /// another change since, the file is still behind and stays marked so.
+    pub fn sidecar_written(&mut self, image: ImageId, seen: i64) -> Result<()> {
+        self.conn.execute(
+            "UPDATE images SET sidecar_pending = 0 WHERE id = ?1 AND sidecar_pending = ?2",
+            params![image, seen],
+        )?;
+        Ok(())
+    }
+
     /// Everything about `image` that a sidecar records.
     pub fn sidecar(&self, image: ImageId) -> Result<Sidecar> {
         let c = &self.conn;
@@ -307,6 +352,10 @@ impl Catalog {
         // skipped and stands for its nearest kept ancestor).
         let mut map: Vec<CommitId> = Vec::with_capacity(sc.commits.len());
         let mut skipped: Vec<bool> = Vec::with_capacity(sc.commits.len());
+        // Catalog commits already taken by one of the sidecar's. Two commits in one sidecar are
+        // two commits, however alike (the same edit made again after an undo has the same
+        // parent and the same state), so they never stand for the same catalog commit.
+        let mut used: HashSet<CommitId> = HashSet::new();
         let existing_root: Option<CommitId> = tx
             .query_row(
                 "SELECT id FROM commits WHERE image_id = ?1 AND parent IS NULL ORDER BY id LIMIT 1",
@@ -324,6 +373,7 @@ impl Catalog {
                     Some(root) if fresh => Some(root),
                     Some(root) => {
                         if same_state(&tx, root, &state_hash)? {
+                            used.insert(root);
                             map.push(root);
                             skipped.push(false);
                             continue;
@@ -338,20 +388,22 @@ impl Catalog {
                 skipped.push(true);
                 continue;
             }
-            let found = same_child(&tx, image, parent, &state_hash, c)?;
+            let found = same_child(&tx, image, parent, &state_hash, c, &used)?;
             // Or the same commit, rewritten here since that sidecar was written (a slider gesture
             // coalesces into its commit in place): same parent and creation time, updated later.
             // Without this, a sidecar left stale by a crash comes back as a diverged branch.
             let found = match found {
                 Some(id) => Some(id),
-                None => tx
-                    .query_row(
+                None => {
+                    let mut stmt = tx.prepare_cached(
                         "SELECT id FROM commits WHERE image_id = ?1 AND parent IS ?2 AND created_at = ?3
-                         AND key IS NOT NULL AND updated_at > ?4 ORDER BY id LIMIT 1",
-                        params![image, parent, c.created, c.time],
-                        |r| r.get(0),
-                    )
-                    .optional()?,
+                         AND key IS NOT NULL AND updated_at > ?4 ORDER BY id",
+                    )?;
+                    let rewritten: Vec<CommitId> = stmt
+                        .query_map(params![image, parent, c.created, c.time], |r| r.get(0))?
+                        .collect::<rusqlite::Result<_>>()?;
+                    rewritten.into_iter().find(|id| !used.contains(id))
+                }
             };
             let id = match found {
                 Some(id) => id,
@@ -370,6 +422,7 @@ impl Catalog {
                     tx.last_insert_rowid()
                 }
             };
+            used.insert(id);
             map.push(id);
             skipped.push(false);
         }
@@ -545,45 +598,63 @@ fn same_state(tx: &rusqlite::Connection, id: CommitId, hash: &str) -> Result<boo
 
 /// The catalog's child of `parent` that is the sidecar's commit `c` (state hashed `hash`), if any:
 /// one with the same state (in today's format), or the very same commit (same creation and
-/// update times and summary) whatever its stored state looks like.
+/// update times and summary) whatever its stored state looks like. Never one of `used`, which
+/// already stand for other commits of the same sidecar.
 fn same_child(
     tx: &rusqlite::Connection,
     image: ImageId,
     parent: Option<CommitId>,
     hash: &str,
     c: &SidecarCommit,
+    used: &HashSet<CommitId>,
 ) -> Result<Option<CommitId>> {
+    struct Kid {
+        id: CommitId,
+        state: String,
+        summary: String,
+        created: i64,
+        updated: i64,
+    }
+    let mut stmt = tx.prepare_cached(
+        "SELECT id, state_hash, summary, created_at, updated_at FROM commits
+         WHERE image_id = ?1 AND parent IS ?2 ORDER BY id",
+    )?;
+    let kids: Vec<Kid> = stmt
+        .query_map(params![image, parent], |r| {
+            Ok(Kid {
+                id: r.get(0)?,
+                state: r.get(1)?,
+                summary: r.get(2)?,
+                created: r.get(3)?,
+                updated: r.get(4)?,
+            })
+        })?
+        .collect::<rusqlite::Result<_>>()?;
+    let kids: Vec<Kid> = kids.into_iter().filter(|k| !used.contains(&k.id)).collect();
     // The state as the sidecar names it (the hash it was stored under, maybe in an older
     // format) first, then as re-hashed today: two siblings can be the same state in both formats
     // (a copy an older merge made), and the sidecar's own name says which one this commit is.
+    // Among siblings with that state (the same edit made twice), the one made when this commit
+    // was; failing that, the oldest.
     for h in [c.state.as_str(), hash] {
-        let exact = tx
-            .query_row(
-                "SELECT id FROM commits WHERE image_id = ?1 AND parent IS ?2 AND state_hash = ?3 ORDER BY id LIMIT 1",
-                params![image, parent, h],
-                |r| r.get(0),
-            )
-            .optional()?;
-        if exact.is_some() {
-            return Ok(exact);
+        let mut alike = kids.iter().filter(|k| k.state == h);
+        let oldest = alike.next();
+        let exact = oldest
+            .filter(|k| k.created == c.created)
+            .or_else(|| alike.find(|k| k.created == c.created))
+            .or(oldest);
+        if let Some(k) = exact {
+            return Ok(Some(k.id));
         }
     }
-    let mut stmt = tx.prepare(
-        "SELECT id, summary, created_at, updated_at FROM commits WHERE image_id = ?1 AND parent IS ?2 ORDER BY id",
-    )?;
-    let kids: Vec<(CommitId, String, i64, i64)> = stmt
-        .query_map(params![image, parent], |r| {
-            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
-        })?
-        .collect::<rusqlite::Result<_>>()?;
-    for (id, summary, created, updated) in &kids {
-        if *created == c.created && *updated == c.time && *summary == c.summary {
-            return Ok(Some(*id));
+    for k in &kids {
+        if k.created == c.created && k.updated == c.time && k.summary == c.summary {
+            return Ok(Some(k.id));
         }
     }
-    for (id, ..) in &kids {
-        if same_state(tx, *id, hash)? {
-            return Ok(Some(*id));
+    for k in &kids {
+        if same_state(tx, k.id, hash)? {
+            return Ok(Some(k.id));
         }
     }
     Ok(None)
@@ -1051,6 +1122,94 @@ mod tests {
         );
         assert!(Sidecar::from_json(r#"{"tonality": 99}"#).is_err());
         assert!(Sidecar::from_json(r#"{"hello": 1}"#).is_err());
+    }
+
+    #[test]
+    fn merging_a_photos_own_sidecar_changes_nothing_when_two_steps_are_alike() {
+        // Exposure +1, undo, Exposure +1 again: two steps with the same parent and the same
+        // settings, the second on its own version. Then one more edit on that version.
+        let (mut a, ia, t) = clocked();
+        a.history_open(ia).unwrap();
+        for (at, f) in [
+            (
+                10_000,
+                &(|a: &mut Catalog| a.commit(ia, &exp(1.0), None)) as &dyn Fn(&mut Catalog) -> _,
+            ),
+            (20_000, &|a: &mut Catalog| a.undo(ia)),
+            (30_000, &|a: &mut Catalog| a.commit(ia, &exp(1.0), None)),
+            (40_000, &|a: &mut Catalog| a.commit(ia, &exp(2.0), None)),
+        ] {
+            t.store(at, std::sync::atomic::Ordering::SeqCst);
+            f(&mut a).unwrap();
+        }
+        let before = graph(&a, ia);
+        assert_eq!(before.len(), 2, "main and main-2: {before:?}");
+
+        // What every launch does. It used to map both alike steps onto the older one, take the
+        // last edit for new history, and add a "main-3" nobody made.
+        for launch in 1..=2 {
+            let own = a.sidecar(ia).unwrap();
+            let m = a.merge_sidecar(ia, &own).unwrap();
+            assert!(!m.changed(), "launch {launch}: {m:?}");
+            assert_eq!(graph(&a, ia), before, "launch {launch}");
+        }
+
+        // Into a library that doesn't have the photo's history, both steps arrive, each with
+        // its own time.
+        let mut b = Catalog::open_in_memory().unwrap();
+        let ib = b.test_image("x");
+        let own = a.sidecar(ia).unwrap();
+        b.merge_sidecar(ib, &own).unwrap();
+        assert_eq!(b.sidecar(ib).unwrap().commits, own.commits);
+    }
+
+    #[test]
+    fn a_sidecar_is_behind_until_the_change_it_was_read_at_is_the_last() {
+        let mut cat = Catalog::open_in_memory().unwrap();
+        let img = cat.test_image("x");
+        assert_eq!(cat.sidecar_pending(img).unwrap(), 0);
+
+        cat.sidecar_touch(&[img]).unwrap();
+        cat.set_rating(&[img], 3).unwrap();
+        // The writer reads the sidecar...
+        let seen = cat.sidecar_pending(img).unwrap();
+        assert!(seen > 0);
+        // ...and before it has the file on disk, the photo changes again.
+        cat.sidecar_touch(&[img]).unwrap();
+        cat.set_rating(&[img], 0).unwrap();
+        cat.sidecar_written(img, seen).unwrap();
+        assert!(
+            cat.sidecar_pending(img).unwrap() > 0,
+            "the file on disk doesn't have the second change"
+        );
+
+        let seen = cat.sidecar_pending(img).unwrap();
+        cat.sidecar_written(img, seen).unwrap();
+        assert_eq!(cat.sidecar_pending(img).unwrap(), 0);
+        assert_eq!(cat.sidecar_pending(img + 99).unwrap(), 0, "no such photo");
+    }
+
+    #[test]
+    fn a_number_too_large_to_store_is_refused() {
+        let ((mut a, ia), (mut b, ib)) = pair();
+        a.history_open(ia).unwrap();
+        a.commit(ia, &exp(1.0), None).unwrap();
+        let mut sc = a.sidecar(ia).unwrap();
+        // 1e39 is a valid JSON number and more than an f32 holds: it reads as infinity, which
+        // is then written to the catalog as `null`, which can't be read back.
+        let state = sc.commits[1].state.clone();
+        sc.states.get_mut(&state).unwrap()["light"]["exposure"] = serde_json::json!(1e39);
+
+        let e = sc.check().unwrap_err().to_string();
+        assert!(e.contains("not a finite number"), "{e}");
+        assert!(b.merge_sidecar(ib, &sc).is_err());
+        assert!(b.history_view(ib).is_err(), "nothing was merged");
+        // And no path into the catalog stores one.
+        let mut inf = exp(0.0);
+        inf.light.exposure = f32::INFINITY;
+        b.history_open(ib).unwrap();
+        assert!(b.commit(ib, &inf, None).is_err());
+        assert_eq!(b.history_open(ib).unwrap().state, EditState::default());
     }
 
     #[test]

@@ -5,3 +5,4 @@
 # It is recommended to check this file in to source control so that
 # everyone who runs the test benefits from these saved cases.
 cc 071ef56aee99372da7825a31a4132d87a8c4f62ec21823d662209b663a3aa4fb # shrinks to ops = [Commit { exposure: 1, key: Some(0), dt: 0 }, Commit { exposure: 0, key: Some(0), dt: 0 }]
+cc ca9720f2b854abd7f1709d0f4839f37031a327314bafb83360926ac3179534bf # shrinks to ops = [Commit { exposure: 1, key: None, dt: 0 }, Undo, Commit { exposure: 5, key: None, dt: 0 }, Undo, Commit { exposure: 5, key: None, dt: 200 }, Branch(18316641943229450911), Commit { exposure: 0, key: None, dt: 0 }]

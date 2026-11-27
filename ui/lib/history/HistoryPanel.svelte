@@ -13,7 +13,7 @@
   import type { HistoryView } from "$lib/bindings/HistoryView";
   import { session } from "$lib/edit/session.svelte";
   import { branchThumbs, requestBranchThumb } from "$lib/edit/versions";
-  import { branchSteps, versions } from "./graph";
+  import { branchSteps, deletion, versions } from "./graph";
   import { sessionLabel, sessionLabels, stepTime } from "./sessions";
   import { DEFAULT_WIDTH, MAX_WIDTH, MIN_WIDTH, historyWidth } from "./width.svelte";
   import { branchThumbKey } from "$lib/edit/versions";
@@ -196,16 +196,24 @@
     if (session.history) startRename(session.history.head.branch);
   }
 
+  const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? "" : "s"}`;
+
   async function remove(name: string) {
-    const ok = await ask(`Delete the version “${name}”? Its edits will no longer be shown.`, {
-      title: "Delete version",
-      kind: "warning",
-      okLabel: "Delete",
-    });
+    const what = session.history && deletion(session.history, name);
+    // Says what is lost, like the Reset dialog: the steps are deleted for good, not hidden.
+    const lost = !what
+      ? "Its steps are deleted."
+      : what.steps === 0
+        ? "It has no steps of its own, so no edits are lost."
+        : `Its ${plural(what.steps, "step")} ${what.steps === 1 ? "is" : "are"} deleted.`;
+    const kept = what?.steps ? " Steps it shares with other versions stay." : "";
+    const moves = what?.switchesTo ? ` The photo switches to “${what.switchesTo}”.` : "";
+    const ok = await ask(
+      `Delete the version “${name}”? ${lost}${kept}${moves} This can't be undone.`,
+      { title: "Delete version", kind: "warning", okLabel: "Delete", cancelLabel: "Cancel" },
+    );
     if (ok) await session.deleteBranch(name).catch(() => {});
   }
-
-  const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? "" : "s"}`;
 </script>
 
 <div class="panel" bind:this={panel}>
