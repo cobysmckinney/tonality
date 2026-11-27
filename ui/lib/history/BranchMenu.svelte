@@ -3,7 +3,7 @@
   // Click to switch · compare side by side · copy settings from it.
   import { ask } from "@tauri-apps/plugin-dialog";
   import { session } from "$lib/edit/session.svelte";
-  import { branchThumbs, requestBranchThumb } from "$lib/edit/versions";
+  import { branchThumbKey, branchThumbs, requestBranchThumb } from "$lib/edit/versions";
 
   let open = $state(false);
   let root = $state<HTMLDivElement>();
@@ -14,14 +14,19 @@
   // Render thumbnails for every tip when the menu opens (cached per commit).
   $effect(() => {
     if (!open || !view) return;
-    for (const b of view.branches)
-      requestBranchThumb(view.imageId, b.name === current ? view.head.commit : b.tip);
+    for (const b of view.branches) {
+      const commit = b.name === current ? view.head.commit : b.tip;
+      requestBranchThumb(view.imageId, commit, timeOf(commit));
+    }
   });
+
+  /** When `commit` last changed: part of its thumbnail's key (see `branchThumbKey`). */
+  const timeOf = (commit: number) => view?.commits.find((c) => c.id === commit)?.time ?? 0;
 
   function thumb(name: string, tip: number): string {
     if (!view) return "";
     const commit = name === current ? view.head.commit : tip;
-    return branchThumbs.get(`${view.imageId}:${commit}`) ?? "";
+    return branchThumbs.get(branchThumbKey(view.imageId, commit, timeOf(commit))) ?? "";
   }
 
   function onWindowDown(e: PointerEvent) {

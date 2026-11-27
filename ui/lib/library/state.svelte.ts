@@ -4,7 +4,7 @@ import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { ask, open } from "@tauri-apps/plugin-dialog";
 import { SvelteSet } from "svelte/reactivity";
-import { api, RAW_EXTENSIONS } from "$lib/api";
+import { api, catalogWrites, RAW_EXTENSIONS } from "$lib/api";
 import { app } from "$lib/app.svelte";
 import type { AlbumInfo } from "$lib/bindings/AlbumInfo";
 import type { EditState } from "$lib/bindings/EditState";
@@ -139,15 +139,30 @@ class LibraryState {
   /** Bumped per refresh: only the newest one's results are shown (filters can change faster
    *  than queries come back). */
   private refreshSeq = 0;
+  /** Bumped by each rating or flag set here. A list that was read from the catalog before one
+   *  of these doesn't have it, and showing that list would undo the change on screen. */
+  private localSeq = 0;
 
   async refresh(): Promise<void> {
     const seq = ++this.refreshSeq;
     try {
+      // After every change made here has reached the catalog: a list read while a rating is
+      // still on its way to being saved comes back without it.
+      await catalogWrites();
+      if (seq !== this.refreshSeq) return;
+      const local = this.localSeq;
       const [overview, images] = await Promise.all([
         api.library.overview(),
         api.library.images(this.query),
       ]);
       if (seq !== this.refreshSeq) return;
+      if (local !== this.localSeq) {
+        // Something was rated or flagged while this was on its way. Read again, once the
+        // catalog has those changes.
+        await catalogWrites();
+        if (seq !== this.refreshSeq) return;
+        return this.refresh();
+      }
       this.imports = overview.imports;
       this.albums = overview.albums;
       // The album being shown was deleted.
@@ -334,6 +349,7 @@ class LibraryState {
       rating,
     );
     this.patch(ids, (i) => ({ ...i, rating: r }));
+    this.localSeq++;
     api.library.setRating(ids, r).catch((e) => toasts.error("Couldn’t save the rating", e));
     return r;
   }
@@ -342,6 +358,7 @@ class LibraryState {
   setFlag(flag: number, ids = this.targets()): number | null {
     if (!ids.length) return null;
     this.patch(ids, (i) => ({ ...i, flag }));
+    this.localSeq++;
     api.library.setFlag(ids, flag).catch((e) => toasts.error("Couldn’t save the flag", e));
     return flag;
   }

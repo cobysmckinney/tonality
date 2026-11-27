@@ -55,9 +55,12 @@ export class Toasts {
     const id = this.#next++;
     this.list.push({ id, kind, text, count: 1 });
     if (kind === "notice") this.#arm(id, NOTICE_MS);
-    // Over the limit: the oldest notice makes room, else the oldest error.
+    // Over the limit: the oldest notice makes room, else the oldest error. Never the one just
+    // added: among four errors a new notice is the only notice, and would be dismissed in the
+    // call that added it, so "12 imported" was never shown.
     while (this.list.length > MAX_TOASTS) {
-      const out = this.list.find((t) => t.kind === "notice") ?? this.list[0];
+      const earlier = this.list.slice(0, -1);
+      const out = earlier.find((t) => t.kind === "notice") ?? earlier[0];
       this.dismiss(out.id);
     }
     return id;

@@ -367,18 +367,28 @@ class EditSession {
   }
 
   private async loadLatest() {
+    // Opens given up on, because another photo was asked for meanwhile, since the last one
+    // that was seen through.
+    let abandoned = 0;
     try {
       while (this.opening !== null && this.opening !== this.image?.id) {
         const id = this.opening;
         try {
           const t0 = performance.now();
           const [info, checkout] = await Promise.all([api.openImage(id), api.history.open(id)]);
-          if (this.opening !== id) continue;
+          if (this.opening !== id) {
+            abandoned++;
+            continue;
+          }
           const pixels = await api.previewPixels(info.id);
-          if (this.opening !== id) continue;
+          if (this.opening !== id) {
+            abandoned++;
+            continue;
+          }
           console.info(
             `[tonality] opened ${info.name} ${info.width}×${info.height} in ${Math.round(performance.now() - t0)}ms`,
           );
+          abandoned = 0; // this photo is now the one the backend used last
           this.pixels = pixels;
           this.setCompare(afterOpen(this.compare, id));
           this.applying = null;
@@ -399,10 +409,21 @@ class EditSession {
           const head = checkout.view.commits.find((c) => c.id === checkout.view.head.commit);
           if (head?.parent != null) scheduleLibraryThumb(id, checkout.state);
         } catch (e) {
-          if (this.opening !== id) continue;
+          if (this.opening !== id) {
+            abandoned++;
+            continue;
+          }
           toasts.error(`Couldn’t open ${this.nameOf(id) ?? "this photo"}`, e);
           this.opening = this.image?.id ?? null;
         }
+      }
+      // Ended on the photo already on screen, after stepping away and straight back: the
+      // backend decoded each photo that was given up on, and it only keeps a few. Open this
+      // one again, so that it is the one used last there (it's still decoded, almost always)
+      // and can't be the next to go, which left it unable to redraw: "image not open".
+      const shown = this.image?.id;
+      if (abandoned && shown !== undefined && this.opening === shown) {
+        await api.openImage(shown).catch((e) => toasts.error("Couldn’t reopen this photo", e));
       }
     } finally {
       this.loading = null;
@@ -446,7 +467,11 @@ class EditSession {
       try {
         const r = await op(id);
         if (this.history?.imageId !== id) return; // another image was opened meanwhile
-        const moved = this.history.head.commit !== r.view.head.commit;
+        // Another step, or the same one changed: a control nudged again soon after is merged
+        // into its step in place, which keeps the id and changes the look (and the time).
+        const moved =
+          this.history.head.commit !== r.view.head.commit ||
+          headTime(this.history) !== headTime(r.view);
         this.history = r.view;
         this.onHead?.(id, r.state);
         if (applyState) {
@@ -611,6 +636,11 @@ class EditSession {
     if (prev?.kind === "photo" && next !== prev) api.closeReference(prev.image.id).catch(() => {});
     this.compare = next;
   }
+}
+
+/** When the commit HEAD is on was last changed. */
+function headTime(v: HistoryView) {
+  return v.commits.find((c) => c.id === v.head.commit)?.time;
 }
 
 export const session = new EditSession();
