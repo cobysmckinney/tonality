@@ -12942,11 +12942,11 @@ SOFTWARE.
 MIT License (MIT)
 
 Used by:
-  tonality-core 0.1.1
-  tonality-ml 0.1.1
-  tonality-raw 0.1.1
-  tonality-render 0.1.1
-  tonality 0.1.1
+  tonality-core 0.1.2
+  tonality-ml 0.1.2
+  tonality-raw 0.1.2
+  tonality-render 0.1.2
+  tonality 0.1.2
   block2 0.6.2 (https://github.com/madsmtm/objc2)
   dlopen2 0.8.2 (https://github.com/OpenByteDev/dlopen2)
   dlopen2_derive 0.4.3 (https://github.com/OpenByteDev/dlopen2)

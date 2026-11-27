@@ -5731,7 +5731,7 @@ checksum = "009dbb7700f11c55ef83aebbe4c0e9cf1f1ac0844bd8d6f00dc38f302026e13a"
 
 [[package]]
 name = "tonality"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
@@ -5763,7 +5763,7 @@ dependencies = [
 
 [[package]]
 name = "tonality-core"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "blake3",
  "kamadak-exif",
@@ -5777,7 +5777,7 @@ dependencies = [
 
 [[package]]
 name = "tonality-ml"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "half",
  "image",
@@ -5792,7 +5792,7 @@ dependencies = [
 
 [[package]]
 name = "tonality-raw"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "half",
  "image",
@@ -5807,7 +5807,7 @@ dependencies = [
 
 [[package]]
 name = "tonality-render"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "half",
  "image",
