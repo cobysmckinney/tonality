@@ -31,6 +31,10 @@ change is a step you can go back to, and a photo can have several versions side 
 Installers for Linux (AppImage), macOS (Apple Silicon) and Windows are attached to each
 [release](https://github.com/cobysmckinney/tonality/releases).
 
+The AppImage needs glibc 2.39 or newer: Ubuntu 24.04, Debian 13, Fedora 40 and later. On an
+older system (Ubuntu 22.04, Debian 12) it won't start, with an error about `GLIBC_2.38` if run
+from a terminal and nothing at all from a file manager.
+
 The builds are not signed, so macOS and Windows will warn before the first launch. After that,
 tonality updates itself. Pick the Stable or Nightly channel in Settings (Ctrl+,). Updates
 download in the background and install when you click **Restart to Update**. On Linux this
@@ -151,15 +155,26 @@ the last three it's signed but not notarised, and macOS still warns; the build s
 tonality's code is under the [MIT licence](LICENSE). It also ships or downloads work under
 other terms:
 
-- **Lens data** from [lensfun](https://lensfun.github.io/), CC BY-SA 3.0
-  (`crates/tonality-raw/lensfun`).
+- **Lens data** from [lensfun](https://lensfun.github.io/), copyright the lensfun
+  contributors, CC BY-SA 3.0 (`crates/tonality-raw/lensfun`, which says which snapshot). What
+  is built into the app is modified: reduced to rectilinear lenses and the fields tonality
+  uses, and converted to JSON. It is under the same licence.
 - **RAW decoding** by [rawler](https://github.com/dnglab/dnglab), LGPL-2.1, compiled into
   the app. Because tonality's source is public, you can rebuild it against a modified rawler.
-- **AI mask models**, downloaded on first use. The sky and people model (SegFormer-B0) is
-  licensed by NVIDIA for non-commercial use only.
+- **AI mask models**, downloaded on first use, after asking:
+  - Subject and Background: silueta, a pruned U²-Net, from
+    [rembg](https://github.com/danielgatis/rembg). Apache-2.0.
+  - Sky and People: SegFormer-B0 trained on ADE20K,
+    [exported by Xenova](https://huggingface.co/Xenova/segformer-b0-finetuned-ade-512-512).
+    NVIDIA's SegFormer licence: **not for commercial use**.
+  - Select Object: MobileSAM, [exported by Acly](https://huggingface.co/Acly/MobileSAM).
+    Apache-2.0.
 
-The other Rust crates, ONNX Runtime and the frontend packages are under permissive licences
-(MIT, Apache-2.0, BSD and similar) or MPL-2.0. Each installer includes `LICENSE` and
+The other Rust crates, ONNX Runtime (and the libraries built into it) and the frontend
+packages are under permissive licences (MIT, Apache-2.0, BSD and similar) or MPL-2.0. Each
+installer includes `LICENSE` and
 [`licences/THIRD-PARTY-NOTICES.txt`](licences/THIRD-PARTY-NOTICES.txt), which has the full
-text of every licence, including the LGPL-2.1. After changing Rust dependencies, regenerate it
+text of every licence, including the LGPL-2.1. The part of that file that isn't about Rust
+crates is written by hand, in `licences/about.hbs`: nothing checks it, so a new bundled
+library or frontend package has to be added there. After changing Rust dependencies, regenerate it
 with `npm run licences` (needs `cargo install cargo-about`).

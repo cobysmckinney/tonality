@@ -40,6 +40,25 @@ pub fn neutral_srgb(pixels: &[u16], width: u32, height: u32, color: &CameraColor
     neutral_srgb_sized(pixels, width, height, color, width, height)
 }
 
+/// The photo as the models and the mask refinement see it: exactly `w × h`, the mask raster's
+/// size. A source larger than that is averaged down ([`neutral_srgb_sized`]); a smaller one (a
+/// preview of a raw under about 2048 px is half its sensor's size, which can be less than the
+/// raster) is scaled up, since every raster made from this image has to come out `w × h`.
+pub fn neutral_srgb_at(
+    pixels: &[u16],
+    width: u32,
+    height: u32,
+    color: &CameraColor,
+    w: u32,
+    h: u32,
+) -> RgbImage {
+    let img = neutral_srgb_sized(pixels, width, height, color, w, h);
+    if img.dimensions() == (w, h) {
+        return img;
+    }
+    image::imageops::resize(&img, w, h, image::imageops::FilterType::Triangle)
+}
+
 /// [`neutral_srgb`], box-downsampled to `out_w × out_h` (≤ the source) on the way. Averaging the
 /// linear data first means the colour maths only runs on the output pixels.
 pub fn neutral_srgb_sized(
@@ -239,6 +258,34 @@ mod tests {
         assert_eq!(
             neutral_srgb_sized(&px, 8, 4, &color(), 3, 3).dimensions(),
             (3, 3)
+        );
+    }
+
+    #[test]
+    fn a_source_smaller_than_the_mask_is_brought_up_to_it() {
+        // A 2000 × 1312 Bayer raw: its preview is 1000 × 656, its mask raster 1024 × 672.
+        let (sw, sh, w, h) = (1000u32, 656u32, 1024u32, 672u32);
+        let grey = f16::from_f32(0.18).to_bits();
+        let px = vec![grey; (sw * sh * 3) as usize];
+        assert_eq!(
+            neutral_srgb_sized(&px, sw, sh, &color(), w, h).dimensions(),
+            (sw, sh),
+            "never scaled up on its own"
+        );
+        let img = neutral_srgb_at(&px, sw, sh, &color(), w, h);
+        assert_eq!(img.dimensions(), (w, h));
+        // Every raster made from it is then the mask's size: the sky one takes its size from
+        // the image, and used to come back too small to be saved.
+        let prob = vec![0.9f32; 64 * 42];
+        assert_eq!(
+            crate::refine::sky_raster(&prob, 64, 42, &img).len(),
+            (w * h) as usize
+        );
+        // Larger sources are averaged down as before.
+        let big = vec![grey; (2048 * 1344 * 3) as usize];
+        assert_eq!(
+            neutral_srgb_at(&big, 2048, 1344, &color(), w, h),
+            neutral_srgb_sized(&big, 2048, 1344, &color(), w, h)
         );
     }
 

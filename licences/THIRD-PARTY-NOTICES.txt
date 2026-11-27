@@ -10,6 +10,9 @@ NOT FROM CRATES
 
 Lens data
   The lensfun database (https://lensfun.github.io/), built into the app.
+  Copyright the lensfun contributors. From `data/db` at commit 52cf1a7b0e82 (2026-11-04).
+  Modified: reduced to rectilinear lenses and to the fields tonality uses, and converted to
+  JSON. The built-in data is under the same licence as the database.
   Licence: CC BY-SA 3.0, https://creativecommons.org/licenses/by-sa/3.0/
 
 ONNX Runtime
@@ -17,14 +20,63 @@ ONNX Runtime
   Copyright (c) Microsoft Corporation. Licence: MIT (text below).
   https://github.com/microsoft/onnxruntime
 
+  The ONNX Runtime library that is linked in is built from other projects as well. The ones
+  found in the library tonality ships:
+    ONNX (https://github.com/onnx/onnx), by the ONNX project contributors. Apache-2.0.
+    Abseil (https://github.com/abseil/abseil-cpp), by The Abseil Authors. Apache-2.0.
+    FlatBuffers (https://github.com/google/flatbuffers), by Google. Apache-2.0.
+    Protocol Buffers (https://github.com/protocolbuffers/protobuf).
+      Copyright 2008 Google Inc.  All rights reserved. BSD-3-Clause.
+    RE2 (https://github.com/google/re2).
+      Copyright (c) 2009 The RE2 Authors. All rights reserved. BSD-3-Clause.
+    cpuinfo (https://github.com/pytorch/cpuinfo). BSD-2-Clause:
+      Copyright (c) 2019 Google LLC
+      Copyright (c) 2017-2018 Facebook Inc.
+      Copyright (C) 2012-2017 Georgia Institute of Technology
+      Copyright (C) 2010-2012 Marat Dukhan
+      All rights reserved.
+  The Apache-2.0 and BSD-3-Clause texts are below, with the crates under them. The BSD-2-Clause
+  text follows here. ONNX Runtime's own ThirdPartyNotices.txt, in its repository, lists
+  everything it is built from.
+
+      Redistribution and use in source and binary forms, with or without modification, are
+      permitted provided that the following conditions are met:
+
+      * Redistributions of source code must retain the above copyright notice, this list of
+        conditions and the following disclaimer.
+
+      * Redistributions in binary form must reproduce the above copyright notice, this list
+        of conditions and the following disclaimer in the documentation and/or other
+        materials provided with the distribution.
+
+      THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY
+      EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
+      MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL
+      THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+      SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT
+      OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+      INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+      LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+      OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
 Frontend packages, bundled into the app's interface
   svelte (MIT, Copyright (c) 2016-2025 Svelte Contributors)
+  clsx, which svelte uses (MIT, Copyright (c) Luke Edwards <luke.edwards05@gmail.com>
+    (lukeed.com))
   @tauri-apps/api, @tauri-apps/plugin-dialog, @tauri-apps/plugin-opener
     (MIT OR Apache-2.0, Copyright (c) 2017 - Present Tauri Apps Contributors).
   Licence texts below.
 
-AI mask models are downloaded on first use, not shipped. They have their own terms; see the
-README.
+AI mask models
+  Downloaded the first time a mask needs them, after asking; not shipped. Each has its own
+  terms:
+    Subject and Background: silueta, a pruned U²-Net, from rembg
+      (https://github.com/danielgatis/rembg). Apache-2.0.
+    Sky and People: SegFormer-B0 trained on ADE20K, exported by Xenova
+      (https://huggingface.co/Xenova/segformer-b0-finetuned-ade-512-512). NVIDIA's SegFormer
+      licence: research and evaluation only, NOT for commercial use.
+    Select Object: MobileSAM, exported by Acly (https://huggingface.co/Acly/MobileSAM).
+      Apache-2.0.
 
 
 RUST CRATES

@@ -1,3 +1,9 @@
+# Text files are LF in the repository and in every checkout, whatever core.autocrlf says: the
+# licence notices are generated from a template, and Prettier checks for LF.
+* text=auto eol=lf
+# The notices copy each crate's licence file as it is, CRLF lines included. Never normalised.
+licences/THIRD-PARTY-NOTICES.txt -text
+
 # Generated files: collapsed in GitHub diffs and left out of the language statistics.
 Cargo.lock linguist-generated
 package-lock.json linguist-generated

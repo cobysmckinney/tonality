@@ -3,7 +3,7 @@
   // Click to switch · compare side by side · copy settings from it.
   import { ask } from "@tauri-apps/plugin-dialog";
   import { session } from "$lib/edit/session.svelte";
-  import { branchThumbs, requestBranchThumb } from "$lib/edit/versions";
+  import { branchThumbKey, branchThumbs, requestBranchThumb } from "$lib/edit/versions";
 
   let open = $state(false);
   let root = $state<HTMLDivElement>();
@@ -14,23 +14,33 @@
   // Render thumbnails for every tip when the menu opens (cached per commit).
   $effect(() => {
     if (!open || !view) return;
-    for (const b of view.branches)
-      requestBranchThumb(view.imageId, b.name === current ? view.head.commit : b.tip);
+    for (const b of view.branches) {
+      const commit = b.name === current ? view.head.commit : b.tip;
+      requestBranchThumb(view.imageId, commit, timeOf(commit));
+    }
   });
+
+  /** When `commit` last changed: part of its thumbnail's key (see `branchThumbKey`). */
+  const timeOf = (commit: number) => view?.commits.find((c) => c.id === commit)?.time ?? 0;
 
   function thumb(name: string, tip: number): string {
     if (!view) return "";
     const commit = name === current ? view.head.commit : tip;
-    return branchThumbs.get(`${view.imageId}:${commit}`) ?? "";
+    return branchThumbs.get(branchThumbKey(view.imageId, commit, timeOf(commit))) ?? "";
   }
 
   function onWindowDown(e: PointerEvent) {
     if (open && root && !root.contains(e.target as Node)) open = false;
   }
+  let trigger = $state<HTMLButtonElement>();
   function onKey(e: KeyboardEvent) {
     if (open && e.key === "Escape") {
       e.stopPropagation();
+      // Focus goes back to the button it came from, not to nowhere: the row that had it is
+      // removed with the list.
+      const inside = root?.contains(document.activeElement);
       open = false;
+      if (inside) trigger?.focus();
     }
   }
 
@@ -64,6 +74,9 @@
     <button
       class="trigger"
       class:open
+      bind:this={trigger}
+      aria-expanded={open}
+      aria-controls={open ? "versions-list" : undefined}
       onclick={() => (open = !open)}
       title="Versions of this photo"
     >
@@ -80,14 +93,16 @@
     </button>
 
     {#if open}
-      <div class="pop" role="menu">
+      <!-- A group of buttons under a button that says it is open, not role="menu": each
+           row holds several buttons, and a menu promises arrow keys and items only. -->
+      <div class="pop" id="versions-list" role="group" aria-label="Versions of this photo">
         {#each view.branches as b (b.name)}
           {@const isCurrent = b.name === current}
           {@const src = thumb(b.name, b.tip)}
           <div class="item" class:current={isCurrent}>
             <button
               class="pick"
-              role="menuitem"
+              aria-current={isCurrent ? "true" : undefined}
               onclick={() => {
                 open = false;
                 if (!isCurrent) session.switchBranch(b.name);

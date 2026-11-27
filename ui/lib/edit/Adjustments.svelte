@@ -8,6 +8,7 @@
   import type { ColorMixer } from "$lib/bindings/ColorMixer";
   import type { WbPreset } from "$lib/bindings/WbPreset";
   import { api } from "$lib/api";
+  import { toasts } from "$lib/toasts/toasts.svelte";
   import type { EditState } from "$lib/bindings/EditState";
   import type { HueBand } from "$lib/bindings/HueBand";
   import type { LensCorrection } from "$lib/bindings/LensCorrection";
@@ -94,8 +95,34 @@
     oncommit?.(null);
   }
 
+  // The white balance before the Temperature or Tint drag under way (`wbStart`), and before the
+  // last one that ended (`wbEnded`). A double-click to reset is two presses first, and the
+  // first moves the slider to the pointer, which also makes the other slider's value explicit.
+  // Resetting from what was there before those presses leaves no trace of them.
+  let wbStart: WhiteBalance | null = null;
+  let wbEnded: { before: WhiteBalance; at: number } | null = null;
+  const DOUBLE_CLICK_MS = 600;
+  function endWb(key: "temperature" | "tint") {
+    if (wbStart) wbEnded = { before: wbStart, at: performance.now() };
+    wbStart = null;
+    oncommit?.(key);
+  }
+  function resetWbSlider(key: "temperature" | "tint") {
+    const recent = wbEnded && performance.now() - wbEnded.at < DOUBLE_CLICK_MS;
+    const from = recent && wbEnded ? wbEnded.before : wb;
+    wbStart = wbEnded = null;
+    edit.whiteBalance =
+      key === "temperature"
+        ? { temperature: null, tint: from.tint ?? null }
+        : { temperature: from.temperature ?? null, tint: null };
+    // Under the slider's own key: the click that began the double-click was recorded as a
+    // step, and this folds into it (and removes it, if nothing changed) instead of adding one.
+    oncommit?.(key);
+  }
+
   /** The sliders' values, as Custom (no preset). */
   function setWb(patch: { temperature?: number | null; tint?: number | null }) {
+    wbStart ??= $state.snapshot(edit.whiteBalance);
     edit.whiteBalance = {
       temperature: wb.temperature ?? image.asShotTemperature,
       tint: wb.tint ?? image.asShotTint,
@@ -110,13 +137,12 @@
     const key = JSON.stringify([image.id, edit.crop, edit.lens ?? null]);
     if (autoCache?.key !== key) {
       const result = api.autoWhiteBalance(image.id, $state.snapshot(edit) as EditState);
-      result.catch((e) => {
-        console.warn("[auto] white balance:", e);
+      result.catch(() => {
         autoCache = null;
       });
       autoCache = { key, result };
     }
-    return autoCache.result.catch(() => null);
+    return autoCache.result;
   }
 
   /** The white balance `mode` sets, starting from `from` (Custom keeps its values). */
@@ -128,6 +154,7 @@
         tint: from.tint ?? image.asShotTint,
       };
     if (mode === "auto") {
+      // A failure is the caller's to report (choosing says so; hovering just shows nothing).
       const r = await autoWbValues();
       return r && { temperature: r[0], tint: r[1], preset: "auto" };
     }
@@ -150,18 +177,33 @@
     }
     wbBefore ??= { id: image.id, wb: $state.snapshot(edit.whiteBalance), mode: wbMode };
     const id = image.id;
-    wbOf(mode, wbBefore.wb).then((w) => {
-      if (w && seq === previewSeq && wbBefore && image.id === id) edit.whiteBalance = w;
-    });
+    wbOf(mode, wbBefore.wb)
+      .then((w) => {
+        if (w && seq === previewSeq && wbBefore && image.id === id) edit.whiteBalance = w;
+      })
+      // Only a preview: choosing the mode is what reports a failure.
+      .catch(() => {});
   }
   async function chooseWb(mode: string) {
     const seq = ++previewSeq;
     const id = image.id;
     const from = wbBefore && wbBefore.id === id ? wbBefore.wb : $state.snapshot(edit.whiteBalance);
     wbBefore = null;
-    const w = await wbOf(mode, from);
+    let w: WhiteBalance | null;
+    try {
+      w = await wbOf(mode, from);
+    } catch (e) {
+      if (seq === previewSeq && image.id === id) {
+        edit.whiteBalance = from;
+        toasts.error("Couldn’t set Auto white balance", e);
+      }
+      return;
+    }
     if (seq !== previewSeq || image.id !== id) return;
     edit.whiteBalance = w ?? from;
+    // Auto found nothing to go on: say so, as the eyedropper does for a spot it can't use.
+    if (!w && mode === "auto")
+      toasts.notice("Too little of this photo is usable for Auto white balance.");
     if (w && !same(w, from)) oncommit?.(null);
   }
   // ---- auto tone: computed from the preview by the backend ----
@@ -176,7 +218,7 @@
       edit.light = light;
       oncommit?.(null);
     } catch (e) {
-      console.warn("[auto] tone:", e);
+      if (image.id === id) toasts.error("Couldn’t set Auto", e);
     } finally {
       autoBusy = null;
     }
@@ -344,11 +386,8 @@
         bipolar={false}
         track="linear-gradient(90deg, #4f7fd9, #d8d8d8 40%, #e0a63c)"
         oninput={(v) => setWb({ temperature: v })}
-        oncommit={() => oncommit?.("temperature")}
-        onreset={() => {
-          edit.whiteBalance = { temperature: null, tint: wb.tint };
-          oncommit?.(null);
-        }}
+        oncommit={() => endWb("temperature")}
+        onreset={() => resetWbSlider("temperature")}
       />
       <Slider
         label="Tint"
@@ -358,11 +397,8 @@
         defaultValue={image.asShotTint}
         track="linear-gradient(90deg, #4fb55a, #d8d8d8 50%, #c45bc4)"
         oninput={(v) => setWb({ tint: v })}
-        oncommit={() => oncommit?.("tint")}
-        onreset={() => {
-          edit.whiteBalance = { temperature: wb.temperature, tint: null };
-          oncommit?.(null);
-        }}
+        oncommit={() => endWb("tint")}
+        onreset={() => resetWbSlider("tint")}
       />
     </Section>
 

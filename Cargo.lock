@@ -5743,6 +5743,7 @@ dependencies = [
  "libc",
  "log",
  "rayon",
+ "semver",
  "serde",
  "serde_json",
  "tauri",

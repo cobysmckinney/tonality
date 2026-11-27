@@ -26,9 +26,14 @@ import {
   type MaskKind,
 } from "./masks";
 
-/** Where an AI mask's detection stands (keyed by `aiKey`). */
+/** Where an AI mask's detection stands (keyed by `aiKey`). `declined`: its model isn't
+ *  installed and the download was turned down, for this photo. */
 export type AiStatus =
-  { state: "working" } | { state: "found" } | { state: "empty" } | { state: "error" };
+  | { state: "working" }
+  | { state: "found" }
+  | { state: "empty" }
+  | { state: "error" }
+  | { state: "declined" };
 
 /** The latest `ai-progress` event: a model download, or a detection running. */
 export interface AiProgress {
@@ -124,8 +129,20 @@ class EditSession {
     return this.commit(null);
   }
 
+  /** The download prompt that is open for each model, so two masks waiting on one model
+   *  (Sky and People, Subject and Background) share one prompt, not one each. */
+  #asking = new Map<string, Promise<boolean>>();
+
   /** Ask before a model's first download. Resolves false if declined. */
-  private async confirmModel(model: string): Promise<boolean> {
+  private confirmModel(model: string): Promise<boolean> {
+    const open = this.#asking.get(model);
+    if (open) return open;
+    const asked = this.askForModel(model).finally(() => this.#asking.delete(model));
+    this.#asking.set(model, asked);
+    return asked;
+  }
+
+  private async askForModel(model: string): Promise<boolean> {
     if (this.approved.has(model)) return true;
     let info;
     try {
@@ -140,7 +157,7 @@ class EditSession {
     }
     const mb = Math.round(info.size / 1e6);
     const ok = await ask(
-      `${info.label} masks need a one-time ${mb} MB download. The model runs on this computer: your photos never leave it.`,
+      `${info.label} masks need a one-time ${mb} MB download. The model runs on this computer: your photos never leave it.\n\nThe model’s licence: ${info.license}.`,
       { title: "Download AI model", okLabel: `Download ${mb} MB`, kind: "info" },
     );
     if (ok) this.approved.add(model);
@@ -155,8 +172,10 @@ class EditSession {
   }
 
   private async addAi(preset: AiPreset, target: AiTarget) {
+    // Nothing is committed in the middle of a crop.
+    if (this.cropping) return;
     const model = await api.ai.modelFor(target);
-    if (!(await this.confirmModel(model)) || !this.edit) return;
+    if (!(await this.confirmModel(model)) || !this.edit || this.cropping) return;
     const m = newAiMask(preset, target, model, this.masks);
     this.edit.masks = [...this.masks, m];
     this.maskIndex = this.edit.masks.length - 1;
@@ -165,7 +184,8 @@ class EditSession {
   }
 
   startLasso(replace: number | null = null) {
-    if (!this.edit || (replace === null && this.masks.length >= MAX_MASKS)) return;
+    if (!this.edit || this.cropping) return;
+    if (replace === null && this.masks.length >= MAX_MASKS) return;
     this.lassoing = { replace };
   }
 
@@ -177,7 +197,7 @@ class EditSession {
   async finishLasso(lasso: [number, number][]) {
     const job = this.lassoing;
     if (!job || job.busy) return;
-    if (!this.edit || lasso.length < 3) {
+    if (!this.edit || this.cropping || lasso.length < 3) {
       this.lassoing = null;
       return;
     }
@@ -202,8 +222,11 @@ class EditSession {
     }
   }
 
-  /** Run the model for an AI mask, unless it's already running. */
-  async detect(m: Mask) {
+  /**
+   * Run the model for an AI mask, unless it's already running. `lens`: the lens settings of
+   * the state the mask is in, when that isn't the current edit (a previewed version).
+   */
+  async detect(m: Mask, lens = this.edit?.lens ?? null) {
     const key = aiKey(m);
     const id = this.image?.id;
     if (
@@ -218,7 +241,7 @@ class EditSession {
     // Statuses are per photo (cleared on open): a result for one we've left is dropped.
     const here = () => this.image?.id === id;
     try {
-      const found = await api.ai.detect(id, target, model, this.edit?.lens ?? null);
+      const found = await api.ai.detect(id, target, model, lens);
       if (!here()) return;
       this.aiStatus.set(key, { state: found ? "found" : "empty" });
       // A scene pass also caches its sibling (sky ↔ people).
@@ -241,19 +264,41 @@ class EditSession {
     }
   }
 
-  /** The layers came back without some AI rasters (new library, cleared cache): detect them. */
-  detectMissing(indices: number[]) {
-    for (const i of indices) {
-      const m = this.masks[i];
-      const key = m && aiKey(m);
-      const st = key ? this.aiStatus.get(key)?.state : undefined;
-      // Don't retry failures automatically, or loop on a model that found nothing.
-      if (m && st !== "working" && st !== "error" && st !== "empty") {
-        if (st === "found") this.aiStatus.delete(key!); // cache was cleared under us
-        this.confirmModel((m.shape as { model: string }).model).then((ok) => {
-          if (ok) this.detect(m);
-        });
-      }
+  /**
+   * The layers came back without some AI rasters (new library, cleared cache): detect them.
+   * `masks` are the masks themselves, from the state the layers were fetched for, with its
+   * `lens`. That state isn't always the current edit (a version being previewed, the compare
+   * pane), so they can't be looked up by position in `this.masks`.
+   */
+  detectMissing(masks: Mask[], lens: EditState["lens"] | null = this.edit?.lens ?? null) {
+    for (const m of masks) {
+      const key = aiKey(m);
+      if (!key || m.shape.kind !== "ai") continue;
+      const st = this.aiStatus.get(key)?.state;
+      // Don't retry failures automatically, loop on a model that found nothing, or ask again
+      // for a download that was just turned down.
+      if (st === "working" || st === "error" || st === "empty" || st === "declined") continue;
+      if (st === "found") this.aiStatus.delete(key); // cache was cleared under us
+      void this.downloadAndDetect(m, lens);
+    }
+  }
+
+  /**
+   * Detect an AI mask whose model may not be installed: ask about the download first (again,
+   * if it was declined before: this is also the mask panel's Download button).
+   */
+  async downloadAndDetect(m: Mask, lens = this.edit?.lens ?? null) {
+    const key = aiKey(m);
+    if (!key || m.shape.kind !== "ai") return;
+    const id = this.image?.id;
+    const ok = await this.confirmModel(m.shape.model);
+    // Statuses are per photo: an answer for one we've left says nothing about this one.
+    if (this.image?.id !== id) return;
+    if (ok) {
+      if (this.aiStatus.get(key)?.state === "declined") this.aiStatus.delete(key);
+      await this.detect(m, lens);
+    } else {
+      this.aiStatus.set(key, { state: "declined" });
     }
   }
 
@@ -272,7 +317,9 @@ class EditSession {
   startCrop() {
     if (!this.edit || this.cropping) return;
     this.setCompare(null);
-    this.masking = false;
+    // All of mask mode, a Select Object loop waiting to be drawn included: left armed, it sat
+    // over the crop box, took every press, and the mask it added committed the unfinished crop.
+    this.stopMasks();
     this.cropAspect = null; // the panel opens on "Free"
     this.cropEntry = $state.snapshot(this.edit.crop);
   }
@@ -312,6 +359,7 @@ class EditSession {
    */
   open(id: number): Promise<void> {
     if (id === this.opening && this.openLoop) return this.openLoop;
+    if (id !== this.image?.id) this.keepCrop();
     this.opening = id;
     this.loading = "Developing…";
     this.openLoop ??= this.loadLatest().finally(() => (this.openLoop = null));
@@ -319,18 +367,28 @@ class EditSession {
   }
 
   private async loadLatest() {
+    // Opens given up on, because another photo was asked for meanwhile, since the last one
+    // that was seen through.
+    let abandoned = 0;
     try {
       while (this.opening !== null && this.opening !== this.image?.id) {
         const id = this.opening;
         try {
           const t0 = performance.now();
           const [info, checkout] = await Promise.all([api.openImage(id), api.history.open(id)]);
-          if (this.opening !== id) continue;
+          if (this.opening !== id) {
+            abandoned++;
+            continue;
+          }
           const pixels = await api.previewPixels(info.id);
-          if (this.opening !== id) continue;
+          if (this.opening !== id) {
+            abandoned++;
+            continue;
+          }
           console.info(
             `[tonality] opened ${info.name} ${info.width}×${info.height} in ${Math.round(performance.now() - t0)}ms`,
           );
+          abandoned = 0; // this photo is now the one the backend used last
           this.pixels = pixels;
           this.setCompare(afterOpen(this.compare, id));
           this.applying = null;
@@ -351,10 +409,21 @@ class EditSession {
           const head = checkout.view.commits.find((c) => c.id === checkout.view.head.commit);
           if (head?.parent != null) scheduleLibraryThumb(id, checkout.state);
         } catch (e) {
-          if (this.opening !== id) continue;
+          if (this.opening !== id) {
+            abandoned++;
+            continue;
+          }
           toasts.error(`Couldn’t open ${this.nameOf(id) ?? "this photo"}`, e);
           this.opening = this.image?.id ?? null;
         }
+      }
+      // Ended on the photo already on screen, after stepping away and straight back: the
+      // backend decoded each photo that was given up on, and it only keeps a few. Open this
+      // one again, so that it is the one used last there (it's still decoded, almost always)
+      // and can't be the next to go, which left it unable to redraw: "image not open".
+      const shown = this.image?.id;
+      if (abandoned && shown !== undefined && this.opening === shown) {
+        await api.openImage(shown).catch((e) => toasts.error("Couldn’t reopen this photo", e));
       }
     } finally {
       this.loading = null;
@@ -398,7 +467,11 @@ class EditSession {
       try {
         const r = await op(id);
         if (this.history?.imageId !== id) return; // another image was opened meanwhile
-        const moved = this.history.head.commit !== r.view.head.commit;
+        // Another step, or the same one changed: a control nudged again soon after is merged
+        // into its step in place, which keeps the id and changes the look (and the time).
+        const moved =
+          this.history.head.commit !== r.view.head.commit ||
+          headTime(this.history) !== headTime(r.view);
         this.history = r.view;
         this.onHead?.(id, r.state);
         if (applyState) {
@@ -436,9 +509,24 @@ class EditSession {
   undo = () => this.run((id) => api.history.undo(id), true);
   redo = () => this.run((id) => api.history.redo(id), true);
   checkout = (commit: number) => this.run((id) => api.history.checkout(id, commit), true);
-  switchBranch = (name: string) => this.run((id) => api.history.switchBranch(id, name), true);
-  branch = (at: number, name: string | null = null) =>
-    this.run((id) => api.history.branch(id, at, name), true);
+  switchBranch = (name: string) => {
+    this.keepCrop();
+    return this.run((id) => api.history.switchBranch(id, name), true);
+  };
+  branch = (at: number, name: string | null = null) => {
+    this.keepCrop();
+    return this.run((id) => api.history.branch(id, at, name), true);
+  };
+
+  /**
+   * A crop in progress is about to be left behind (another photo, another version): finish it
+   * first, as Done would. It is only recorded on Done, so walking away used to drop it without
+   * a word and with nothing in history to get it back from. Queued ahead of what follows, for
+   * the photo and state on screen now.
+   */
+  private keepCrop() {
+    if (this.cropping) void this.finishCrop();
+  }
   renameBranch = (old: string, name: string) => {
     if (this.compare?.kind === "version" && this.compare.branch === old)
       this.compare.branch = name.trim();
@@ -494,6 +582,9 @@ class EditSession {
     if (!b || branch === this.history?.head.branch) return;
     try {
       const state = await api.history.state(b.tip);
+      // As when comparing with another photo: the brush and the mask handles map the pointer
+      // across the whole canvas, not the half the edited photo is then drawn in.
+      this.stopMasks();
       this.setCompare({ kind: "version", branch, state });
     } catch (e) {
       toasts.error(`Couldn’t show “${branch}”`, e);
@@ -545,6 +636,11 @@ class EditSession {
     if (prev?.kind === "photo" && next !== prev) api.closeReference(prev.image.id).catch(() => {});
     this.compare = next;
   }
+}
+
+/** When the commit HEAD is on was last changed. */
+function headTime(v: HistoryView) {
+  return v.commits.find((c) => c.id === v.head.commit)?.time;
 }
 
 export const session = new EditSession();

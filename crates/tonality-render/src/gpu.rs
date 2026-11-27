@@ -234,10 +234,11 @@ impl Gpu {
         if src.pixels.len() != (sw_all * sh_all * 3) as usize {
             return Err("source size mismatch".into());
         }
-        // Output size: the framed (cropped) size, at the source's scale.
-        let scale = sw_all as f32 / src.frame[0] as f32;
-        let w = ((params.geo0[3] * scale).round() as u32).max(1);
-        let h = ((params.geo1[3] * scale).round() as u32).max(1);
+        let (w, h) = output_size(
+            (sw_all, sh_all),
+            src.frame,
+            (params.geo0[3], params.geo1[3]),
+        );
         let geo = Geometry {
             width: params.geo0[3],
             height: params.geo1[3],
@@ -614,6 +615,19 @@ impl ErrorScopes {
     }
 }
 
+/// The size of the output: the framed (cropped) size `framed`, which is in pixels of the
+/// full-size photo `frame`, at the scale of the source `src` actually being rendered.
+///
+/// The scale is the ratio of the long edges. A downscaled source is made to an exact long edge
+/// and its short edge is rounded, so a scale taken from the short edge (the width, for a
+/// portrait photo) is slightly off, and the long edge computed from it could come out a pixel
+/// over or under what was asked for, with the whole source stretched to fit.
+fn output_size(src: (u32, u32), frame: [u32; 2], framed: (f32, f32)) -> (u32, u32) {
+    let scale = src.0.max(src.1) as f32 / frame[0].max(frame[1]).max(1) as f32;
+    let px = |v: f32| ((v * scale).round() as u32).max(1);
+    (px(framed.0), px(framed.1))
+}
+
 fn uniform(d: &wgpu::Device, label: &str, bytes: Vec<u8>) -> wgpu::Buffer {
     use wgpu::util::DeviceExt;
     d.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -639,4 +653,51 @@ struct InFlight {
     row_bytes: u32,
     /// Kept alive until its copy has run.
     _target: wgpu::Texture,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The source a resized export renders from: `FullImage::scaled`'s arithmetic.
+    fn scaled(w: u32, h: u32, long_edge: u32) -> (u32, u32) {
+        let s = long_edge as f32 / w.max(h) as f32;
+        (
+            (w as f32 * s).round().max(1.0) as u32,
+            (h as f32 * s).round().max(1.0) as u32,
+        )
+    }
+
+    #[test]
+    fn a_resized_export_is_exactly_the_size_of_its_source() {
+        // Portrait photos used to come out a pixel off: 4000 × 6000 at 1600 was 1067 × 1601.
+        for (w, h) in [
+            (4000, 6000),
+            (4672, 7008),
+            (5304, 7952),
+            (6000, 4000),
+            (8256, 5504),
+        ] {
+            for edge in [1024, 1080, 1600, 1920, 2000, 2048, 2560, 4096] {
+                let src = scaled(w, h, edge);
+                let out = output_size(src, [w, h], (w as f32, h as f32));
+                assert_eq!(out, src, "{w} × {h} at {edge}");
+                assert_eq!(out.0.max(out.1), edge, "{w} × {h} at {edge}");
+            }
+        }
+        // At full size nothing is scaled, and a crop keeps its own size.
+        assert_eq!(
+            output_size((4000, 6000), [4000, 6000], (4000.0, 6000.0)),
+            (4000, 6000)
+        );
+        assert_eq!(
+            output_size((4000, 6000), [4000, 6000], (2000.0, 1500.0)),
+            (2000, 1500)
+        );
+        // A cropped, resized one is the crop at the source's scale.
+        assert_eq!(
+            output_size((1067, 1600), [4000, 6000], (3000.0, 3000.0)),
+            (800, 800)
+        );
+    }
 }

@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount, untrack } from "svelte";
   import { api } from "$lib/api";
+  import { targetOwnsKey } from "$lib/keys";
   import { toasts } from "$lib/toasts/toasts.svelte";
   import type { EditState } from "$lib/bindings/EditState";
   import type { ImageInfo } from "$lib/bindings/ImageInfo";
@@ -24,6 +25,7 @@
     type BrushLayers,
   } from "./masks";
   import { session } from "./session.svelte";
+  import { focusedControlOwnsKey } from "$lib/keys";
   import type { Mask } from "$lib/bindings/Mask";
   import type { Stroke } from "$lib/bindings/Stroke";
 
@@ -128,7 +130,9 @@
           if (seq === detailSeq && renderer === r && image.id === id)
             r.setDetail(d.region, req.level, d.width, d.height, d.pixels);
         } catch (e) {
-          console.warn("[detail]", e);
+          // Without this the 100% view stays the preview, scaled up, and nothing says so.
+          if (seq === detailSeq && image.id === id)
+            toasts.error("Couldn’t load full-resolution detail", e);
         } finally {
           if (seq === detailSeq) loadingDetail = false;
         }
@@ -206,6 +210,9 @@
       // right one beside another photo.
       const r = frameRect;
       const f: [number, number] = [(x - renderer.mainPaneX - r.x) / r.w, (y - r.y) / r.h];
+      // Zoomed in, the photo's frame is wider than its pane: a click over the other pane is
+      // still "inside the frame", at a spot that isn't under the pointer (or on screen).
+      if (!renderer.inMainPane(x)) return;
       if (r.w > 0 && r.h > 0 && f.every((v) => v >= 0 && v <= 1)) onpick(f);
       return;
     }
@@ -245,6 +252,25 @@
     }
     const lines = e.deltaMode === 1 ? e.deltaY * 16 : e.deltaY;
     zoomBy(Math.exp(-lines * 0.0025), local(e));
+  }
+
+  // Shift+arrows move around a zoomed photo (the arrows alone switch photos). A focused
+  // control that uses arrows itself keeps them.
+  const PAN_STEP = 80;
+  const PAN: Record<string, [number, number]> = {
+    ArrowLeft: [1, 0],
+    ArrowRight: [-1, 0],
+    ArrowUp: [0, 1],
+    ArrowDown: [0, -1],
+  };
+  function panKey(e: KeyboardEvent) {
+    const dir = PAN[e.key];
+    if (!dir || !e.shiftKey || e.ctrlKey || e.metaKey || e.altKey) return;
+    if (!renderer || fit || cropping || e.defaultPrevented || targetOwnsKey(e.target, e.key))
+      return;
+    e.preventDefault();
+    // (`pan` takes a drag: the photo follows it, so the view goes the other way.)
+    renderer.pan(dir[0] * PAN_STEP, dir[1] * PAN_STEP);
   }
 
   const zoomLabel = $derived(fit ? "Fit" : `${Math.round(scale * 100)}%`);
@@ -317,6 +343,8 @@
       params: Float32Array,
       curve: Uint16Array | null,
       brush: BrushLayers | null | undefined,
+      /** The photo and state these were made for (not always the current edit). */
+      job: { id: number; state: EditState },
     ) => void,
   ) {
     let inflight = false;
@@ -357,7 +385,7 @@
           if (curve) curveKey = key;
           brushK = bk;
           if (maps) r.setPresence(id, maps);
-          apply(r, params, curve, brush);
+          apply(r, params, curve, brush, { id, state: next });
           if (renderError !== null) toasts.dismiss(renderError);
           renderError = null;
         }
@@ -369,24 +397,44 @@
         if (pending) pump();
       }
     }
-    return (r: PreviewRenderer, id: number, state: EditState) => {
+    const push = (r: PreviewRenderer, id: number, state: EditState) => {
       pending = { r, id, state };
       pump();
     };
+    /** The mask rasters the renderer holds are no longer what was fetched: fetch them again
+     *  with the next request, though the strokes haven't changed. */
+    push.forgetBrush = () => {
+      brushK = null;
+    };
+    return push;
   }
-  const main = pipeline((r, params, curve, brush) => {
+  /** AI masks of `job`'s state whose raster isn't cached: have them detected. The indices in
+   *  `missing` are into that state's masks, which may be a previewed version's. */
+  function detectMissing(missing: number[] | undefined, job: { id: number; state: EditState }) {
+    // Detection runs on the open photo; another photo in the compare pane isn't it.
+    if (!missing?.length || job.id !== image.id) return;
+    const all = masksOf(job.state);
+    session.detectMissing(
+      missing.map((i) => all[i]).filter((m) => m !== undefined),
+      job.state.lens ?? null,
+    );
+  }
+  const main = pipeline((r, params, curve, brush, job) => {
     if (curve) r.setCurve(curve);
     if (brush !== undefined) r.setBrush("main", brush);
-    if (brush?.missing?.length) session.detectMissing(brush.missing);
+    detectMissing(brush?.missing, job);
     r.setParams(params);
     session.framing = r.framing;
     refreshMaskThumbs();
     drawEpoch++;
     probe();
   });
-  const side = pipeline((r, params, curve, brush) => {
+  const side = pipeline((r, params, curve, brush, job) => {
     if (!comparing) return;
     if (brush !== undefined) r.setBrush("compare", brush);
+    // Another version of this photo with an AI mask that isn't cached: without this it was
+    // drawn without that mask.
+    detectMissing(brush?.missing, job);
     r.setCompare(params, curve);
   });
 
@@ -444,6 +492,20 @@
     r.paintLive(brushLayer(masks, i), stroke, a, b, maskSize(image.fullWidth, image.fullHeight));
   }
 
+  /** Bumped to draw the main view again though nothing in the edit changed. */
+  let redraw = $state(0);
+
+  /**
+   * A stroke was abandoned in the middle (Esc, M or \ with the pointer still down): it was
+   * painted into the preview's mask but is in no edit. Take it out, or the photo on screen
+   * differs from what is saved and exported, and the renderer keeps painting it back in.
+   */
+  function cancelStroke() {
+    renderer?.endLive();
+    main.forgetBrush();
+    redraw++;
+  }
+
   function endStroke(i: number, stroke: Stroke) {
     renderer?.endLive();
     const m = edit.masks?.[i];
@@ -454,7 +516,9 @@
   }
 
   function onKey(e: KeyboardEvent) {
-    if (e.key === " " && session.masking && !(e.target instanceof HTMLInputElement)) {
+    // Space on a button reached with Tab presses the button; anywhere else in mask mode,
+    // held, it pans.
+    if (e.key === " " && session.masking && !focusedControlOwnsKey(e.target, " ")) {
       spaceHeld = e.type === "keydown";
       if (spaceHeld) e.preventDefault();
     }
@@ -466,6 +530,7 @@
     if (cropping && !before) state.crop = { ...state.crop, rect: [...FULL] };
     const r = renderer;
     void session.aiEpoch; // a finished detection means new layers
+    void redraw;
     if (r) main(r, image.id, state);
   });
 
@@ -516,7 +581,7 @@
 </script>
 
 <svelte:window
-  onkeydown={onKey}
+  onkeydown={(e) => (onKey(e), panKey(e))}
   onkeyup={onKey}
   onblur={() => (spaceHeld = false)}
   onpointerdown={onWindowDown}
@@ -554,7 +619,7 @@
       {onlevel}
     />
   {/if}
-  {#if session.lassoing && renderer && frameRect.w > 0}
+  {#if session.lassoing && !cropping && renderer && frameRect.w > 0}
     <LassoOverlay
       frame={frameRect}
       framing={session.framing ?? renderer.framing}
@@ -573,9 +638,11 @@
       brush={session.brush}
       passthrough={spaceHeld}
       onchange={(m) => setMask(i, m)}
+      onnudge={() => session.commit(`mask-shape-${i}`)}
       oncommit={() => session.commit(null)}
       onpaint={(stroke, a, b) => paintLive(i, stroke, a, b)}
       onstroke={(stroke) => endStroke(i, stroke)}
+      oncancel={cancelStroke}
       oninteract={(v) => (interacting = v)}
     />
   {/if}

@@ -19,26 +19,24 @@ commit.
 
 ## Now
 
-In review. Move each to **Done** when its pull request merges.
+In review: fixes from a code audit of `main` at `65cce25` (2026-11-25), one pull request per
+area. Move each to **Done** when it merges.
 
-From a review of the interface (2026-11-24), built in parallel:
-
-- [ ] Rate, pick and reject in Edit; an edited mark on grid and filmstrip thumbnails
-      (#75).
-- [ ] White balance as a dropdown with Temperature and Tint always shown, hover to preview a
-      preset, and an eyedropper (#68). Also 0.3's eyedropper item.
-- [ ] Right panel: a tool strip under the histogram, the shooting info (ISO, shutter, aperture,
-      focal length), Auto as a real button, sections that remember being open, and an option to
-      keep one open at a time (#69).
-- [ ] History: what a step changed, on hover; hover a version to preview it; times by session
-      instead of "now" on every step; Reset all history moved into the version menu; a
-      resizable panel (#73).
-- [ ] Merge from another version, panel by panel, with a live preview (#74).
-- [ ] Canvas: file name and camera moved to the filmstrip, a zoom menu, no "← →" hint
-      (#70); a pixel readout and a navigator when zoomed in (#72).
-- [ ] Errors and notices as toasts (#66). Also 0.2's toast item.
-- [ ] Command palette (Ctrl+K), with every shortcut listed under `?` (#67).
-- [ ] Compare with another photo, side by side, to match a look (#71).
+- [ ] CI and build tooling: time limits, `--locked`, a Tauri version check, LF checkouts, a
+      nightly that can be retried (#164).
+- [ ] Log file and updater (#165).
+- [ ] Import: hash on copy, the Recycle Bin, leftover temporary files, queued imports (#166).
+- [ ] Catalog and sidecars; catalog v8; a guard against updating to a build that can't read
+      the library (#167). Also 0.2's "say so when the library is already open".
+- [ ] Export: sizes, crop sharpness, lens corners, highlights, EXIF, failing fast (#168).
+- [ ] Lens profiles and raw decoding (#169).
+- [ ] AI masks: small raws, download prompts, version previews, stale downloads (#170).
+- [ ] Edit: keyboard, crop and tool fixes (#171).
+- [ ] Photo switching, thumbnails and Library state (#172).
+- [ ] Tests: export rendering, raw decoding, the preview's GLSL (#173).
+- [ ] Accessibility: the curve, crop and masks from the keyboard; contrast; screen readers
+      (#174). Part of 0.9's accessibility item.
+- [ ] Notices, README, the shortcut sheet and this roadmap (#175).
 
 ---
 
@@ -56,8 +54,6 @@ What's left after #58–#62.
 
 - [ ] Say so when the library is already open in another window. Today the app exits with
       nothing on screen (the reason is in the log).
-- [ ] Show errors where they happen (toasts), not only in the line at the bottom of the
-      Library sidebar.
 - [ ] Notice photos whose original has gone missing: mark them in the grid and offer to remove
       them, instead of failing with a decode error when opened.
 - [ ] Never reuse a photo's id. `images.id` isn't `AUTOINCREMENT`, so removing the newest
@@ -86,7 +82,6 @@ what most stands between tonality and someone using it for a real shoot, so it r
 what's left of 0.2 rather than after it.
 
 - [ ] Type a value into a slider.
-- [ ] White balance eyedropper.
 - [ ] Copy and paste settings between photos, and sync them to a selection, choosing which
       panels. Build it as "apply this step, or this version, to other photos" (a cherry-pick):
       the Copy Settings dialog already applies chosen panels from a version as one step, so
@@ -170,7 +165,7 @@ Ship quality. No new features after this.
 - [ ] `cargo-deny` or `cargo-audit` in CI.
 - [ ] macOS Intel, `.deb` and Flatpak builds; an AppImage that runs on older glibc if that
       can be had.
-- [ ] A user manual, a keyboard shortcut reference in the app, and a changelog.
+- [ ] A user manual and a changelog.
 - [ ] Memory: a guard and a plan for 60–100 megapixel files (the full decode is held as
       32-bit float before it's halved).
 - [ ] Say in the app that sharpening, noise reduction and Texture only show fully at 1:1.
@@ -201,6 +196,16 @@ _(new ideas go here)_
 - Tethered shooting; printing.
 
 ## Done
+- 2026-11-25 — Rate, pick and reject in Edit; an edited mark on grid and filmstrip thumbnails (#75).
+- 2026-11-25 — Compare with another photo, side by side, to match a look (#71).
+- 2026-11-25 — Merge from another version, panel by panel, with a live preview (#74).
+- 2026-11-25 — History: what a step changed, on hover; hover a version to preview it; times by session instead of "now" on every step; Reset all history moved into the version menu; a resizable panel (#73).
+- 2026-11-25 — Right panel: a tool strip under the histogram, the shooting info, Auto as a real button, sections that remember being open, and an option to keep one open at a time (#69).
+- 2026-11-25 — A pixel readout and a navigator when zoomed in (#72).
+- 2026-11-25 — White balance as a dropdown with Temperature and Tint always shown, hover to preview a preset, and an eyedropper (W) (#68).
+- 2026-11-25 — Canvas: file name and camera moved to the filmstrip, a zoom menu, no "← →" hint (#70).
+- 2026-11-25 — Command palette (Ctrl+K), with every shortcut listed under `?`: the keyboard shortcut reference (#67).
+- 2026-11-25 — Errors and notices as toasts, where they happen (#66).
 - 2026-11-23 — macOS build signed and notarised once the Apple secrets exist (#62).
 - 2026-11-23 — GPU tests run in CI, on a macOS runner (#61).
 - 2026-11-23 — Stop a running import or export (#60).

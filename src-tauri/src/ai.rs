@@ -56,9 +56,15 @@ pub fn save_raster(path: &std::path::Path, data: Vec<u8>, w: u32, h: u32) -> Res
     std::fs::create_dir_all(path.parent().unwrap()).map_err(|e| e.to_string())?;
     let img = image::GrayImage::from_raw(w, h, data).ok_or("raster has the wrong size")?;
     let tmp = crate::store::temp_path(path);
-    img.save_with_format(&tmp, image::ImageFormat::Png)
-        .map_err(|e| e.to_string())?;
-    std::fs::rename(&tmp, path).map_err(|e| e.to_string())
+    let saved = img
+        .save_with_format(&tmp, image::ImageFormat::Png)
+        .map_err(|e| e.to_string())
+        .and_then(|()| std::fs::rename(&tmp, path).map_err(|e| e.to_string()));
+    if saved.is_err() {
+        // A full disk, say: don't leave half a raster behind under a name nothing looks for.
+        let _ = std::fs::remove_file(&tmp);
+    }
+    saved
 }
 
 /// Every raster layer of `edit` for a photo (`hash`, `w × h`, lens `profile`): brush strokes,
@@ -161,7 +167,8 @@ pub struct Photo<'a> {
     /// The open photo Edit asked for (progress events name it), or none for export.
     pub image: Option<ImageId>,
     pub hash: &'a str,
-    /// Camera-space linear pixels (half-float bits) and their size: any resolution ≥ the mask.
+    /// Camera-space linear pixels (half-float bits) and their size: any resolution. Smaller
+    /// than the mask raster (the preview of a small raw) is scaled up to it.
     pub pixels: &'a [u16],
     pub width: u32,
     pub height: u32,
@@ -200,9 +207,10 @@ pub fn detect(
     // the refinement loops yield to the UI.
     let found = crate::priority::pool().install(|| -> CmdResult<bool> {
         let (w, h) = mask_size(photo.full_width, photo.full_height);
-        // Downsample before converting: the models never see more than the mask raster.
+        // Downsample before converting: the models never see more than the mask raster, and
+        // never less, so every raster below comes out `w × h`.
         let img =
-            input::neutral_srgb_sized(photo.pixels, photo.width, photo.height, photo.color, w, h);
+            input::neutral_srgb_at(photo.pixels, photo.width, photo.height, photo.color, w, h);
         let guide = input::guide(&img, w, h);
         let save = |key: &str, r: Vec<u8>| -> CmdResult<bool> {
             let found = r.iter().filter(|&&v| v > 128).count() > (w * h / 500) as usize;

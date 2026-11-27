@@ -318,6 +318,10 @@ export class PreviewRenderer {
       if (this.lastCompare) this.setCompare(this.lastCompare);
       return;
     }
+    // Maps for a photo that isn't shown any more (a comparison closed while its maps were on
+    // their way) are nobody's: loaded as this photo's, they'd be used for its Clarity and
+    // Dehaze until its next edit.
+    if (imageId !== this.imageId) return;
     gl.activeTexture(gl.TEXTURE3);
     gl.bindTexture(gl.TEXTURE_2D, this.presence);
     gl.pixelStorei(gl.UNPACK_ALIGNMENT, 2);
@@ -735,6 +739,8 @@ export class PreviewRenderer {
   ) {
     const gl = this.gl;
     this.imageId = imageId;
+    // A stroke being painted belonged to the photo that was showing.
+    this.live = null;
     if (this.texture) gl.deleteTexture(this.texture);
     this.dropDetail();
     // Wait for this photo's params: drawing it with the previous photo's look (and histogram)
@@ -842,6 +848,12 @@ export class PreviewRenderer {
   /** CSS x of the pane showing this photo: the right one while another photo is beside it. */
   get mainPaneX() {
     return this.comparing && this.other !== null ? this.canvas.clientWidth - this.paneW : 0;
+  }
+
+  /** Whether canvas x `cssX` is over the pane showing this photo (always, when not comparing). */
+  inMainPane(cssX: number) {
+    const x0 = this.mainPaneX;
+    return cssX >= x0 && cssX <= x0 + this.paneW;
   }
 
   /** Map a canvas x coordinate into its pane. */

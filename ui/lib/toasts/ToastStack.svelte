@@ -62,9 +62,32 @@
       focused = false;
     }
   }
+
+  // What the live region says: each notice once, and again, in full, when a repeat bumps its
+  // count (the "×2" alone would be read as "2 times" with no message).
+  let live = $state("");
+  const said = new Map<number, number>();
+  let saying: ReturnType<typeof setTimeout> | undefined;
+  $effect(() => {
+    for (const t of toasts.list) {
+      if (t.kind !== "notice" || said.get(t.id) === t.count) continue;
+      said.set(t.id, t.count);
+      const text = t.count > 1 ? `${t.text} (${t.count} times)` : t.text;
+      // Emptied first: the same words twice running would otherwise be no change at all.
+      live = "";
+      clearTimeout(saying);
+      saying = setTimeout(() => (live = text), 50);
+    }
+    for (const id of said.keys()) if (!toasts.list.some((t) => t.id === id)) said.delete(id);
+  });
 </script>
 
 <svelte:window onkeydowncapture={onKey} />
+
+<!-- Notices are read out from here. A polite live region is only reliably announced when it
+     is already on the page and its text then changes, which a toast that arrives complete with
+     its own role="status" is not. (Errors are role="alert", which is announced on arrival.) -->
+<div class="sr-only" aria-live="polite" aria-atomic="true">{live}</div>
 
 <section
   class="toasts"
@@ -79,7 +102,7 @@
     <div
       class="toast {t.kind}"
       data-id={t.id}
-      role={t.kind === "error" ? "alert" : "status"}
+      role={t.kind === "error" ? "alert" : undefined}
       animate:flip={{ duration: 160 }}
       transition:fly={{ x: 24, duration: 160 }}
     >

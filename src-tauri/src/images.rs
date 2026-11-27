@@ -101,28 +101,17 @@ impl Images {
         // Before decoding: a slower decode of the photo opened before must not claim "latest"
         // after this one has.
         self.latest.store(id, Ordering::Relaxed);
-        let preview = match self.recent(id) {
-            Some(p) => p,
-            None => {
-                // The reference, opened to edit: it joins the recent previews (and stays there
-                // once it's no longer the reference).
-                let p = match self.held_reference(id) {
-                    Some(p) => p,
-                    None => Arc::new(
-                        Rawler
-                            .decode_preview(path, max_edge)
-                            .map_err(|e| e.to_string())?,
-                    ),
-                };
-                let mut cache = self.previews.lock().unwrap();
-                cache.retain(|(i, _)| *i != id);
-                cache.push((id, p.clone()));
-                if cache.len() > KEEP {
-                    cache.remove(0);
-                }
-                p
+        let preview = cached(&self.previews, id, KEEP, || {
+            // The reference, opened to edit: it joins the recent previews (and stays there
+            // once it's no longer the reference).
+            match self.held_reference(id) {
+                Some(p) => Ok(p),
+                None => Rawler
+                    .decode_preview(path, max_edge)
+                    .map(Arc::new)
+                    .map_err(|e| e.to_string()),
             }
-        };
+        })?;
         self.prefetch_full(id, path);
         Ok(info(id, name, &preview))
     }
@@ -175,6 +164,45 @@ impl Images {
             .iter()
             .find(|(i, _)| *i == id)
             .map(|(_, p)| p.clone())
+    }
+}
+
+/// `id`'s entry in a cache kept in order of use (oldest first), moved to the back as the one
+/// used last.
+fn used<T: Clone>(cache: &mut Vec<(ImageId, T)>, id: ImageId) -> Option<T> {
+    let at = cache.iter().position(|(i, _)| *i == id)?;
+    let entry = cache.remove(at);
+    let value = entry.1.clone();
+    cache.push(entry);
+    Some(value)
+}
+
+/// `id`'s entry in `cache`, made with `make` if it isn't there, and either way now the one used
+/// last: opening a photo that is still decoded counts as using it, so the photo on screen is
+/// never the next to be dropped. `make` runs without the lock held (a decode takes a while).
+fn cached<T: Clone>(
+    cache: &Mutex<Vec<(ImageId, T)>>,
+    id: ImageId,
+    keep: usize,
+    make: impl FnOnce() -> Result<T, String>,
+) -> Result<T, String> {
+    // Its own statement: a lock taken inside an `if let` or `match` is held through its arms.
+    let hit = used(&mut cache.lock().unwrap(), id);
+    if let Some(value) = hit {
+        return Ok(value);
+    }
+    let value = make()?;
+    remember(&mut cache.lock().unwrap(), id, value.clone(), keep);
+    Ok(value)
+}
+
+/// Put `value` in such a cache as the one used last, dropping the least recently used entries
+/// beyond `keep`.
+fn remember<T>(cache: &mut Vec<(ImageId, T)>, id: ImageId, value: T, keep: usize) {
+    cache.retain(|(i, _)| *i != id);
+    cache.push((id, value));
+    while cache.len() > keep {
+        cache.remove(0);
     }
 }
 
@@ -318,5 +346,70 @@ impl Images {
             Some((i, slot)) if *i == id => slot.get().and_then(|r| r.as_ref().ok().cloned()),
             _ => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_cache_miss_and_a_hit_both_come_back() {
+        // On another thread, with a time limit: the first version of this held the lock from
+        // the lookup through the insert, and the first photo opened never finished opening.
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let cache: Mutex<Vec<(ImageId, char)>> = Mutex::default();
+            let mut made = 0;
+            let mut get = |id| {
+                cached(&cache, id, 2, || {
+                    made += 1;
+                    // Decoding may look in the cache itself (the reference photo does).
+                    let _ = cache.lock().unwrap().len();
+                    Ok('p')
+                })
+            };
+            let out = [get(1), get(1), get(2), get(3), get(1)];
+            let _ = tx.send((out, made));
+        });
+        let (out, made) = rx
+            .recv_timeout(Duration::from_secs(10))
+            .expect("opening a photo deadlocked on the preview cache");
+        assert!(out.iter().all(|r| r == &Ok('p')));
+        // 1 was made, found, then pushed out by 2 and 3 (only two are kept) and made again.
+        assert_eq!(made, 4);
+        // A decode that fails is an error, and leaves nothing behind.
+        let cache: Mutex<Vec<(ImageId, char)>> = Mutex::default();
+        assert_eq!(
+            cached(&cache, 1, 2, || Err("bad file".into())),
+            Err("bad file".to_string())
+        );
+        assert!(cache.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn the_photo_on_screen_is_not_the_next_preview_dropped() {
+        let ids = |c: &Vec<(ImageId, char)>| c.iter().map(|(i, _)| *i).collect::<Vec<_>>();
+        let mut cache: Vec<(ImageId, char)> = Vec::new();
+        // Open 10, then step right three times.
+        for id in [10, 11, 12, 13] {
+            assert!(used(&mut cache, id).is_none());
+            remember(&mut cache, id, 'p', 4);
+        }
+        assert_eq!(ids(&cache), [10, 11, 12, 13]);
+        // Step back to 10: every one of these is still here, and using it moves it up.
+        for id in [12, 11, 10] {
+            assert_eq!(used(&mut cache, id), Some('p'));
+        }
+        assert_eq!(ids(&cache), [13, 12, 11, 10]);
+        // A fifth photo is decoded (one step further left, then abandoned). The cache was in
+        // decode order before, so this dropped 10, the photo on screen.
+        assert!(used(&mut cache, 9).is_none());
+        remember(&mut cache, 9, 'p', 4);
+        assert_eq!(ids(&cache), [12, 11, 10, 9]);
+        assert_eq!(used(&mut cache, 10), Some('p'), "still open");
+        // Decoding one that's already there doesn't make two of it.
+        remember(&mut cache, 11, 'q', 4);
+        assert_eq!(ids(&cache), [12, 9, 10, 11]);
     }
 }

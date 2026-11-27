@@ -9,7 +9,10 @@
   --line-strong: #363636;
   --text-0: #ececec;
   --text-1: #a8a8a8;
-  --text-2: #6e6e6e;
+  /* Secondary text: labels, values at their default, hints. Light enough to read at 11 px on
+     the panels (5.2:1 on --bg-1, 4.7:1 on --bg-2). On --bg-3 and --bg-4 (hover, selected)
+     use --text-1. */
+  --text-2: #8c8c8c;
   --accent: #d9d9d9; /* deliberately colorless; colour lives in the photo */
   --focus: #7aa2ff;
   --danger: #ff6b6b;
@@ -217,4 +220,28 @@ button {
 }
 ::-webkit-scrollbar-track {
   background: transparent;
+}
+
+/* There for a screen reader, not on screen. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* People who have asked their system for less motion get none of ours: panels and the
+   filmstrip open at once, the selection outline doesn't crawl. (Scrolling done from script
+   asks for itself: see Filmstrip.) */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }
