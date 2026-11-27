@@ -147,6 +147,37 @@ pub async fn album_remove(
 // Import
 // ---------------------------------------------------------------------------------------------
 
+/// Whether a folder walk leaves `entry` out: dot-files (which is how macOS and Linux hide
+/// things, their Trash folders included), and what Windows hides. Windows marks its own with
+/// file attributes, not names, so those are read there; its Recycle Bin and volume folder are
+/// also known by name, which is all that's left of them when the drive is read on another
+/// system. A Recycle Bin keeps each deleted photo under its raw extension, with a record file
+/// beside it that has the same extension and isn't a photo at all.
+fn hidden(entry: &std::fs::DirEntry) -> bool {
+    let name = entry.file_name();
+    let name = name.to_string_lossy();
+    name.starts_with('.')
+        || name.eq_ignore_ascii_case("$RECYCLE.BIN")
+        || name.eq_ignore_ascii_case("System Volume Information")
+        || hidden_by_attributes(entry)
+}
+
+/// Whether Windows marks `entry` hidden or system (elsewhere there are no such attributes).
+#[cfg(windows)]
+fn hidden_by_attributes(entry: &std::fs::DirEntry) -> bool {
+    use std::os::windows::fs::MetadataExt;
+    const FILE_ATTRIBUTE_HIDDEN: u32 = 0x2;
+    const FILE_ATTRIBUTE_SYSTEM: u32 = 0x4;
+    entry
+        .metadata()
+        .is_ok_and(|m| m.file_attributes() & (FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_SYSTEM) != 0)
+}
+
+#[cfg(not(windows))]
+fn hidden_by_attributes(_: &std::fs::DirEntry) -> bool {
+    false
+}
+
 /// RAW files under each path (files are taken as-is if they look like RAWs; folders are walked
 /// recursively, skipping hidden entries and symlinks).
 fn collect(paths: &[PathBuf]) -> Vec<PathBuf> {
@@ -157,7 +188,7 @@ fn collect(paths: &[PathBuf]) -> Vec<PathBuf> {
         let mut entries: Vec<_> = entries.flatten().collect();
         entries.sort_by_key(|e| e.file_name());
         for e in entries {
-            if e.file_name().to_string_lossy().starts_with('.') {
+            if hidden(&e) {
                 continue;
             }
             let Ok(ft) = e.file_type() else { continue };
@@ -181,11 +212,20 @@ fn collect(paths: &[PathBuf]) -> Vec<PathBuf> {
     out
 }
 
+/// What an import is called, and where it came from: the folder chosen, or the folder the
+/// first file is in.
 fn import_name(paths: &[PathBuf]) -> (String, String) {
+    // The top of a drive or filesystem has no file name: it's called by its own text without
+    // the separators (`E:\` is "E:"), and `/` is simply "Import".
     let name_of = |p: &Path| {
         p.file_name()
             .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_default()
+            .or_else(|| {
+                let text = p.to_string_lossy();
+                Some(text.trim_end_matches(['/', '\\']).to_string())
+            })
+            .filter(|n| !n.is_empty())
+            .unwrap_or_else(|| "Import".into())
     };
     match paths {
         [p] if p.is_dir() => (name_of(p), p.to_string_lossy().into_owned()),
@@ -201,6 +241,35 @@ fn hash_file(path: &Path) -> io::Result<String> {
     let mut h = blake3::Hasher::new();
     h.update_reader(std::fs::File::open(path)?)?;
     Ok(h.finalize().to_hex().to_string())
+}
+
+/// Copy `src` to a new file at `dest`, flushed to disk. Returns how many bytes were written and
+/// their hash: of what landed in `dest`, which is what the library will hold, not of an earlier
+/// read of `src`.
+fn copy_hashed(src: &Path, dest: &Path) -> io::Result<(u64, String)> {
+    /// Hashes what passes through on its way to the file.
+    struct Tee {
+        file: std::fs::File,
+        hash: blake3::Hasher,
+    }
+    impl io::Write for Tee {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            let n = self.file.write(buf)?;
+            self.hash.update(&buf[..n]);
+            Ok(n)
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            self.file.flush()
+        }
+    }
+    let mut from = std::fs::File::open(src)?;
+    let mut to = Tee {
+        file: std::fs::File::create(dest)?,
+        hash: blake3::Hasher::new(),
+    };
+    let n = io::copy(&mut from, &mut to)?;
+    to.file.sync_all()?;
+    Ok((n, to.hash.finalize().to_hex().to_string()))
 }
 
 enum Outcome {
@@ -272,20 +341,21 @@ impl Importer<'_> {
 
         let copy = || -> io::Result<u64> {
             std::fs::create_dir_all(part.parent().unwrap())?;
-            let n = std::fs::copy(src, &part)?;
+            // A new file of the library's own, so a read-only source (a locked card, a photo
+            // coming back from the Trash) doesn't make a copy that can't be flushed.
+            let (n, copied) = copy_hashed(src, &part)?;
             if n != std::fs::metadata(src)?.len() {
                 return Err(io::Error::other("short copy"));
             }
-            // `copy` gives the copy the source's permissions, and a read-only source (a locked
-            // card, a photo coming back from the Trash) would leave one that can't be opened to
-            // be flushed.
-            make_writable(&part)?;
-            // FlushFileBuffers on Windows needs write access; a read-only handle fails with
-            // ERROR_ACCESS_DENIED.
-            std::fs::OpenOptions::new()
-                .write(true)
-                .open(&part)?
-                .sync_all()?;
+            // `hash` was taken from an earlier read, to settle duplicates before anything is
+            // copied. The catalog, the sidecar and the caches all record it for this copy, so
+            // the copy has to be the bytes that were hashed: a file still being written or
+            // synced, or a failing card, can read differently the second time.
+            if copied != hash {
+                return Err(io::Error::other(
+                    "the file changed while it was being imported",
+                ));
+            }
             Ok(n)
         };
         let size = match copy() {
@@ -357,23 +427,6 @@ impl Importer<'_> {
             }
         }
     }
-}
-
-/// Let the owner write to `path`, if nobody can.
-fn make_writable(path: &Path) -> io::Result<()> {
-    let mut perm = std::fs::metadata(path)?.permissions();
-    if !perm.readonly() {
-        return Ok(());
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        perm.set_mode(perm.mode() | 0o200);
-    }
-    #[cfg(not(unix))]
-    #[allow(clippy::permissions_set_readonly_false)]
-    perm.set_readonly(false);
-    std::fs::set_permissions(path, perm)
 }
 
 fn remove_readonly(path: &Path) {
@@ -658,12 +711,22 @@ pub async fn library_remove(ids: Vec<ImageId>, app: AppHandle) -> CmdResult<Remo
 /// Catalogue originals that are in the library folder but not in the catalog (a lost or
 /// replaced catalog, or files put there by hand), restoring their edits from sidecars.
 /// Nothing is copied or moved. Emits `import-progress` while hashing.
+///
+/// Run once at each launch, so it also clears out what an import that was cut short left
+/// behind (see [`crate::store::sweep_temp_files`]).
 #[tauri::command]
 pub async fn library_recover(app: AppHandle) -> CmdResult<ImportSummary> {
     tauri::async_runtime::spawn_blocking(move || {
         let _guard = LIBRARY_WRITE.lock().unwrap_or_else(|e| e.into_inner());
         let store = app.state::<Store>();
         let catalog = app.state::<CatalogState>();
+        // The library's lock, held since launch, means no other tonality is writing here, so
+        // a temporary file from any other run is a dead one.
+        let swept = crate::store::sweep_temp_files(&store.abs("originals"))
+            + crate::store::sweep_temp_files(&store.abs("cache"));
+        if swept > 0 {
+            log::info!("removed {swept} temporary files left by an earlier run");
+        }
         let root = store.root().to_path_buf();
         let rel = |p: &Path| -> Option<String> {
             let r = p.strip_prefix(&root).ok()?;
@@ -885,7 +948,7 @@ mod tests {
             reserved: Mutex::default(),
         };
 
-        let outcome = importer.one(&src, "feedbeef".into());
+        let outcome = importer.one(&src, hash_file(&src).unwrap());
 
         match outcome {
             Outcome::Added(id) => {
@@ -899,6 +962,85 @@ mod tests {
             _ => panic!("not imported"),
         }
         remove_readonly(&src);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn a_file_that_changed_since_it_was_hashed_is_not_imported() {
+        let (root, store, catalog, import, sources) = import_of("changed", 1);
+        let importer = Importer {
+            store: &store,
+            catalog: &catalog,
+            import,
+            reserved: Mutex::default(),
+        };
+        let src = &sources[0];
+        let hashed = hash_file(src).unwrap();
+        // Same length, different bytes: a sync client finishing a preallocated file, or a card
+        // that reads differently the second time.
+        let len = std::fs::metadata(src).unwrap().len() as usize;
+        std::fs::write(src, vec![b'?'; len]).unwrap();
+
+        match importer.one(src, hashed) {
+            Outcome::Failed(e) => assert!(e.contains("changed while it was being imported"), "{e}"),
+            _ => panic!("a copy that doesn't match its recorded hash was accepted"),
+        }
+        assert_eq!(catalog.with(|c| c.image_count()).unwrap(), 0);
+        assert!(originals(&store).is_empty(), "nothing left behind");
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn a_folder_walk_skips_what_the_system_hides() {
+        let root =
+            std::env::temp_dir().join(format!("tonality-import-walk-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let write = |rel: &str| {
+            let p = root.join(rel);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, b"x").unwrap();
+        };
+        write("DCIM/100MSDCF/DSC00001.ARW");
+        write("DCIM/100MSDCF/notes.txt");
+        // A Recycle Bin on an external drive: the deleted photo and the record of where it was.
+        write("$RECYCLE.BIN/S-1-5-21-1/$RABC123.ARW");
+        write("$RECYCLE.BIN/S-1-5-21-1/$IABC123.ARW");
+        write("$Recycle.Bin/S-1-5-21-2/$RDEF456.ARW");
+        write("System Volume Information/odd.ARW");
+        write(".Trash-1000/files/DSC00002.ARW");
+        write(".Trashes/501/DSC00003.ARW");
+        write("DCIM/.hidden.ARW");
+
+        let found = collect(std::slice::from_ref(&root));
+
+        assert_eq!(found, vec![root.join("DCIM/100MSDCF/DSC00001.ARW")]);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn an_import_from_the_top_of_a_drive_has_a_name() {
+        let root =
+            std::env::temp_dir().join(format!("tonality-import-name-{}", std::process::id()));
+        std::fs::create_dir_all(root.join("Wedding")).unwrap();
+        // A folder is named after itself; files after the folder they're in.
+        let (name, source) = import_name(&[root.join("Wedding")]);
+        assert_eq!(name, "Wedding");
+        assert_eq!(source, root.join("Wedding").to_string_lossy());
+        let (name, _) = import_name(&[root.join("Wedding/a.ARW"), root.join("Wedding/b.ARW")]);
+        assert_eq!(name, "Wedding");
+        // The top of the filesystem has no file name.
+        let (name, source) = import_name(&[PathBuf::from("/")]);
+        assert_eq!((name.as_str(), source.as_str()), ("Import", "/"));
+        // A file sitting in a drive's root: the import is named after the drive. (A Windows
+        // path is one opaque name elsewhere, so this half is checked where it means something.)
+        if cfg!(windows) {
+            let (name, source) = import_name(&[PathBuf::from("E:\\DSC00001.ARW")]);
+            assert_eq!((name.as_str(), source.as_str()), ("E:", "E:\\"));
+        } else {
+            let (name, source) = import_name(&[PathBuf::from("/DSC00001.ARW")]);
+            assert_eq!((name.as_str(), source.as_str()), ("Import", "/"));
+        }
+        assert_eq!(import_name(&[]).0, "Import");
         std::fs::remove_dir_all(&root).unwrap();
     }
 
