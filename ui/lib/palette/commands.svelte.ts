@@ -284,6 +284,12 @@ export const COMMANDS: Command[] = [
     when: () => !!session.compare,
     run: () => session.stopCompare(),
   },
+  {
+    id: "edit.curvePoint",
+    title: "Tone curve: move / add / remove the focused point",
+    group: "Edit",
+    keys: ["Arrows", "Enter", "Delete"],
+  },
 
   // ---- Crop (while cropping) ----
   provided({
@@ -301,8 +307,12 @@ export const COMMANDS: Command[] = [
     when: () => session.cropping,
   }),
   { id: "crop.rotate", title: "Rotate 90° left / right", group: "Crop", keys: ["[", "]"] },
+  { id: "crop.move", title: "Move the crop", group: "Crop", keys: ["Arrows"] },
+  { id: "crop.resize", title: "Resize the crop", group: "Crop", keys: ["Shift+Arrows"] },
 
   // ---- Masks (while masking) ----
+  { id: "masks.handle", title: "Move the focused handle", group: "Masks", keys: ["Arrows"] },
+  { id: "masks.rename", title: "Rename the focused mask", group: "Masks", keys: ["F2"] },
   {
     id: "masks.overlay",
     get title() {
@@ -398,6 +408,7 @@ export const COMMANDS: Command[] = [
     keywords: "zoom",
     when: editing,
   }),
+  { id: "view.pan", title: "Move around a zoomed photo", group: "View", keys: ["Shift+Arrows"] },
   { id: "view.before", title: "Show the original (hold)", group: "View", keys: ["\\"] },
   provided({
     id: "view.filmstrip",

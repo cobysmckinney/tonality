@@ -12,8 +12,13 @@ export type Toast = {
   count: number;
 };
 
-/** How long a notice stays, from when it (or its latest repeat) arrived. */
+/** How long a notice stays, from when it (or its latest repeat) arrived: this, or longer if
+ *  it takes longer to read ([`readingTime`]). */
 export const NOTICE_MS = 4000;
+/** Time to read `text`: `NOTICE_MS` covers 40 characters, and a longer notice gets a tenth of
+ *  a second more for each one over. The summary of an import ("Import stopped · 40 left out ·
+ *  212 imported · 3 already in library") is shown nowhere else. */
+export const readingTime = (text: string) => Math.max(NOTICE_MS, text.length * 100);
 /** At most this many show at once. */
 export const MAX_TOASTS = 4;
 
@@ -100,10 +105,17 @@ export class Toasts {
     if (!this.#held) return;
     this.#held = false;
     // (A copy: arming replaces the map's entries.)
-    for (const [id, t] of [...this.#timers]) this.#arm(id, t.left);
+    for (const [id, t] of [...this.#timers]) this.#run(id, t.left);
   }
 
+  /** Start a notice's time afresh: `ms`, or longer if it takes longer to read. */
   #arm(id: number, ms: number) {
+    const text = this.list.find((t) => t.id === id)?.text ?? "";
+    this.#run(id, Math.max(ms, readingTime(text)));
+  }
+
+  /** Dismiss `id` in `ms`. */
+  #run(id: number, ms: number) {
     this.#disarm(id);
     const t: Timer = { handle: null, left: ms, since: Date.now() };
     if (!this.#held) t.handle = setTimeout(() => this.dismiss(id), ms);

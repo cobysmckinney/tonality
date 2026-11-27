@@ -1,5 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { describe as describeError, MAX_TOASTS, NOTICE_MS, Toasts } from "./toasts.svelte";
+import {
+  describe as describeError,
+  MAX_TOASTS,
+  NOTICE_MS,
+  readingTime,
+  Toasts,
+} from "./toasts.svelte";
 
 beforeEach(() => vi.useFakeTimers());
 afterEach(() => vi.useRealTimers());
@@ -62,6 +68,19 @@ describe("toasts", () => {
     expect(t.list).toHaveLength(1);
     expect(t.list[0].count).toBe(2);
     vi.advanceTimersByTime(NOTICE_MS - 3000);
+    expect(t.list).toHaveLength(0);
+  });
+
+  it("gives a long notice longer to be read", () => {
+    const t = new Toasts();
+    const summary =
+      "Import stopped · 40 left out · 212 imported · 3 already in library · edits restored for 5";
+    expect(readingTime("12 imported")).toBe(NOTICE_MS);
+    expect(readingTime(summary)).toBeGreaterThan(2 * NOTICE_MS);
+    t.notice(summary);
+    vi.advanceTimersByTime(NOTICE_MS + 1000);
+    expect(t.list).toHaveLength(1);
+    vi.advanceTimersByTime(readingTime(summary));
     expect(t.list).toHaveLength(0);
   });
 

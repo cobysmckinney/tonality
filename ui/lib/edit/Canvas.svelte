@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount, untrack } from "svelte";
   import { api } from "$lib/api";
+  import { targetOwnsKey } from "$lib/keys";
   import { toasts } from "$lib/toasts/toasts.svelte";
   import type { EditState } from "$lib/bindings/EditState";
   import type { ImageInfo } from "$lib/bindings/ImageInfo";
@@ -251,6 +252,25 @@
     }
     const lines = e.deltaMode === 1 ? e.deltaY * 16 : e.deltaY;
     zoomBy(Math.exp(-lines * 0.0025), local(e));
+  }
+
+  // Shift+arrows move around a zoomed photo (the arrows alone switch photos). A focused
+  // control that uses arrows itself keeps them.
+  const PAN_STEP = 80;
+  const PAN: Record<string, [number, number]> = {
+    ArrowLeft: [1, 0],
+    ArrowRight: [-1, 0],
+    ArrowUp: [0, 1],
+    ArrowDown: [0, -1],
+  };
+  function panKey(e: KeyboardEvent) {
+    const dir = PAN[e.key];
+    if (!dir || !e.shiftKey || e.ctrlKey || e.metaKey || e.altKey) return;
+    if (!renderer || fit || cropping || e.defaultPrevented || targetOwnsKey(e.target, e.key))
+      return;
+    e.preventDefault();
+    // (`pan` takes a drag: the photo follows it, so the view goes the other way.)
+    renderer.pan(dir[0] * PAN_STEP, dir[1] * PAN_STEP);
   }
 
   const zoomLabel = $derived(fit ? "Fit" : `${Math.round(scale * 100)}%`);
@@ -561,7 +581,7 @@
 </script>
 
 <svelte:window
-  onkeydown={onKey}
+  onkeydown={(e) => (onKey(e), panKey(e))}
   onkeyup={onKey}
   onblur={() => (spaceHeld = false)}
   onpointerdown={onWindowDown}
@@ -618,6 +638,7 @@
       brush={session.brush}
       passthrough={spaceHeld}
       onchange={(m) => setMask(i, m)}
+      onnudge={() => session.commit(`mask-shape-${i}`)}
       oncommit={() => session.commit(null)}
       onpaint={(stroke, a, b) => paintLive(i, stroke, a, b)}
       onstroke={(stroke) => endStroke(i, stroke)}

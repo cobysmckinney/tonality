@@ -36,7 +36,12 @@
     if (index < 0 || !el) return;
     const left = PAD + index * STEP;
     if (left < el.scrollLeft || left + CELL > el.scrollLeft + el.clientWidth) {
-      el.scrollTo({ left: left - (el.clientWidth - CELL) / 2, behavior: "smooth" });
+      // (CSS can't quieten a scroll asked for from script: it has to ask for itself.)
+      const calm = matchMedia("(prefers-reduced-motion: reduce)").matches;
+      el.scrollTo({
+        left: left - (el.clientWidth - CELL) / 2,
+        behavior: calm ? "auto" : "smooth",
+      });
     }
   });
 
@@ -119,6 +124,7 @@
         <button
           class="cell"
           class:current={img.id === currentId}
+          aria-current={img.id === currentId ? "true" : undefined}
           class:reference={img.id === referenceId}
           class:rejected={img.flag < 0}
           style:transform="translateX({PAD + i * STEP}px)"
