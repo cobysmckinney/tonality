@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { holdFocus } from "$lib/design/focus";
   // "Merge from <version>": pick which panels to take, applied as one commit. While it's open the
   // canvas shows the result for the panels ticked; Cancel puts the current edit back.
   import { api } from "$lib/api";
@@ -92,6 +93,7 @@
       aria-modal="true"
       aria-label="Merge from {session.applying}"
       tabindex="-1"
+      use:holdFocus
       onclick={(e) => e.stopPropagation()}
     >
       <h2>Merge from “{session.applying}”</h2>
@@ -127,6 +129,10 @@
     display: grid;
     place-items: end center;
     padding-bottom: 120px;
+  }
+  /* Focus is put on the dialog itself when it opens; it needs no ring round all of it. */
+  .dialog:focus {
+    outline: none;
   }
   .dialog {
     width: min(360px, calc(100vw - 32px));

@@ -18,10 +18,15 @@ const SAVE_DELAY_MS = 700;
 let renderer: PreviewRenderer | null = null;
 let rendererImage: number | null = null;
 
-/** `${imageId}:${commit}` → data URL. */
+/** A version thumbnail's key: `${imageId}:${commit}:${time}` → data URL ("" while it's being
+ *  made, or couldn't be). `time` is the commit's: repeated nudges of one control are merged
+ *  into the same commit, which keeps its id while its look changes. */
 export const branchThumbs = new SvelteMap<string, string>();
-/** Asked for before a renderer showed their photo. */
-let retry: { imageId: number; commit: number }[] = [];
+export const branchThumbKey = (imageId: number, commit: number, time: number) =>
+  `${imageId}:${commit}:${time}`;
+/** Couldn't be rendered when asked for (no renderer showing their photo yet, or a backend call
+ *  failed), by key. Tried again when a renderer shows their photo, and only then. */
+const waiting = new Map<string, { imageId: number; commit: number; time: number }>();
 
 let chain: Promise<unknown> = Promise.resolve();
 function serial<T>(f: () => Promise<T>): Promise<T> {
@@ -62,9 +67,12 @@ export function attachRenderer(r: PreviewRenderer | null, imageId: number | null
   renderer = r;
   rendererImage = imageId;
   if (r) {
-    const again = retry.filter((t) => t.imageId === imageId);
-    retry = [];
-    for (const t of again) requestBranchThumb(t.imageId, t.commit);
+    const again = [...waiting.entries()].filter(([, t]) => t.imageId === imageId);
+    waiting.clear();
+    for (const [key, t] of again) {
+      branchThumbs.delete(key);
+      requestBranchThumb(t.imageId, t.commit, t.time);
+    }
   }
   // Back on a photo whose save couldn't run when it was left: try it now.
   const old = imageId === null ? undefined : parked.get(imageId);
@@ -92,9 +100,9 @@ export function snapshotNextFrame(): Promise<string> {
   });
 }
 
-/** Thumbnail of the version at `commit` (rendered once, then cached). */
-export function requestBranchThumb(imageId: number, commit: number) {
-  const key = `${imageId}:${commit}`;
+/** Thumbnail of the version at `commit`, as it was at `time` (rendered once, then cached). */
+export function requestBranchThumb(imageId: number, commit: number, time: number) {
+  const key = branchThumbKey(imageId, commit, time);
   if (branchThumbs.has(key)) return;
   // Keep one photo's thumbnails, and not too many of those (one per commit asked for).
   for (const k of branchThumbs.keys()) if (!k.startsWith(`${imageId}:`)) branchThumbs.delete(k);
@@ -104,12 +112,15 @@ export function requestBranchThumb(imageId: number, commit: number) {
     const state = await api.history.state(commit);
     const c = await still(imageId, state, BRANCH_EDGE);
     if (c) branchThumbs.set(key, c.toDataURL("image/jpeg", 0.85));
-    else {
-      branchThumbs.delete(key);
-      // No renderer for this photo yet (Edit still starting): try again once there is one.
-      retry.push({ imageId, commit });
-    }
-  }).catch(() => branchThumbs.delete(key));
+    // No renderer for this photo yet (Edit still starting, or the GPU context is lost): try
+    // again once there is one.
+    else waiting.set(key, { imageId, commit, time });
+  }).catch(() => {
+    waiting.set(key, { imageId, commit, time });
+  });
+  // Either way the placeholder stays. The panels that ask for thumbnails read this map, so
+  // removing the key would run them again at once, and they'd ask again, without pause, for as
+  // long as whatever is wrong lasts.
 }
 
 // ---- library thumbnail of the current version ----

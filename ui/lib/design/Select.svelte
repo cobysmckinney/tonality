@@ -131,14 +131,17 @@
     class:open
     {disabled}
     {title}
-    aria-label={label}
+    aria-labelledby="{uid}-label {uid}-value"
     aria-haspopup="listbox"
     aria-expanded={open}
     aria-controls={open ? `${uid}-list` : undefined}
     onclick={() => (open ? close(null) : show())}
     onkeydown={onTriggerKey}
   >
-    <span class="value">{current?.label ?? ""}</span>
+    <!-- Named by both: what it is, then what it's set to. (An aria-label would replace the
+         button's contents as its name, and the value would never be read.) -->
+    <span class="sr-only" id="{uid}-label">{label}</span>
+    <span class="value" id="{uid}-value">{current?.label ?? ""}</span>
     <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
       <path d="m4 6 4 4 4-4" />
     </svg>
@@ -276,6 +279,7 @@
   .detail {
     font-family: var(--font-num);
     font-size: 10px;
-    color: var(--text-2);
+    /* (--text-2 isn't enough on the highlighted option's background.) */
+    color: var(--text-1);
   }
 </style>

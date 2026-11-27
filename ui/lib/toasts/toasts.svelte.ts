@@ -12,8 +12,13 @@ export type Toast = {
   count: number;
 };
 
-/** How long a notice stays, from when it (or its latest repeat) arrived. */
+/** How long a notice stays, from when it (or its latest repeat) arrived: this, or longer if
+ *  it takes longer to read ([`readingTime`]). */
 export const NOTICE_MS = 4000;
+/** Time to read `text`: `NOTICE_MS` covers 40 characters, and a longer notice gets a tenth of
+ *  a second more for each one over. The summary of an import ("Import stopped · 40 left out ·
+ *  212 imported · 3 already in library") is shown nowhere else. */
+export const readingTime = (text: string) => Math.max(NOTICE_MS, text.length * 100);
 /** At most this many show at once. */
 export const MAX_TOASTS = 4;
 
@@ -55,9 +60,12 @@ export class Toasts {
     const id = this.#next++;
     this.list.push({ id, kind, text, count: 1 });
     if (kind === "notice") this.#arm(id, NOTICE_MS);
-    // Over the limit: the oldest notice makes room, else the oldest error.
+    // Over the limit: the oldest notice makes room, else the oldest error. Never the one just
+    // added: among four errors a new notice is the only notice, and would be dismissed in the
+    // call that added it, so "12 imported" was never shown.
     while (this.list.length > MAX_TOASTS) {
-      const out = this.list.find((t) => t.kind === "notice") ?? this.list[0];
+      const earlier = this.list.slice(0, -1);
+      const out = earlier.find((t) => t.kind === "notice") ?? earlier[0];
       this.dismiss(out.id);
     }
     return id;
@@ -97,10 +105,17 @@ export class Toasts {
     if (!this.#held) return;
     this.#held = false;
     // (A copy: arming replaces the map's entries.)
-    for (const [id, t] of [...this.#timers]) this.#arm(id, t.left);
+    for (const [id, t] of [...this.#timers]) this.#run(id, t.left);
   }
 
+  /** Start a notice's time afresh: `ms`, or longer if it takes longer to read. */
   #arm(id: number, ms: number) {
+    const text = this.list.find((t) => t.id === id)?.text ?? "";
+    this.#run(id, Math.max(ms, readingTime(text)));
+  }
+
+  /** Dismiss `id` in `ms`. */
+  #run(id: number, ms: number) {
     this.#disarm(id);
     const t: Timer = { handle: null, left: ms, since: Date.now() };
     if (!this.#held) t.handle = setTimeout(() => this.dismiss(id), ms);

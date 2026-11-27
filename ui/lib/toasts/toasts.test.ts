@@ -1,5 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { describe as describeError, MAX_TOASTS, NOTICE_MS, Toasts } from "./toasts.svelte";
+import {
+  describe as describeError,
+  MAX_TOASTS,
+  NOTICE_MS,
+  readingTime,
+  Toasts,
+} from "./toasts.svelte";
 
 beforeEach(() => vi.useFakeTimers());
 afterEach(() => vi.useRealTimers());
@@ -65,6 +71,19 @@ describe("toasts", () => {
     expect(t.list).toHaveLength(0);
   });
 
+  it("gives a long notice longer to be read", () => {
+    const t = new Toasts();
+    const summary =
+      "Import stopped · 40 left out · 212 imported · 3 already in library · edits restored for 5";
+    expect(readingTime("12 imported")).toBe(NOTICE_MS);
+    expect(readingTime(summary)).toBeGreaterThan(2 * NOTICE_MS);
+    t.notice(summary);
+    vi.advanceTimersByTime(NOTICE_MS + 1000);
+    expect(t.list).toHaveLength(1);
+    vi.advanceTimersByTime(readingTime(summary));
+    expect(t.list).toHaveLength(0);
+  });
+
   it("holds notices while hovered, then gives them the time they had left", () => {
     const t = new Toasts();
     t.notice("Added 2 photos to “Picks”");
@@ -98,6 +117,20 @@ describe("toasts", () => {
     // The notice that made room has no timer left behind.
     vi.advanceTimersByTime(NOTICE_MS);
     expect(t.list).toHaveLength(MAX_TOASTS);
+  });
+
+  it("shows a notice that arrives among as many errors as fit", () => {
+    const t = new Toasts();
+    for (const e of ["e1", "e2", "e3", "e4"]) t.error(e);
+    expect(t.list).toHaveLength(MAX_TOASTS);
+    t.notice("12 imported");
+    // The oldest error made room; the notice is there to be read.
+    expect(texts(t)).toEqual(["e2", "e3", "e4", "12 imported"]);
+    // The next notice replaces that one, not another error.
+    t.notice("Moved 3 photos to the Trash");
+    expect(texts(t)).toEqual(["e2", "e3", "e4", "Moved 3 photos to the Trash"]);
+    vi.advanceTimersByTime(NOTICE_MS);
+    expect(texts(t)).toEqual(["e2", "e3", "e4"]);
   });
 
   it("dismisses one, or the newest", () => {

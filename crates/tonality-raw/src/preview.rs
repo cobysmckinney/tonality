@@ -116,6 +116,21 @@ impl FullImage {
     /// The pixels of `(x, y, w, h)` (clamped to the image), box-downsampled by `2^level`.
     /// Returns the region actually covered (full-res pixels), the output size, and RGB halves.
     pub fn region(&self, x: u32, y: u32, w: u32, h: u32, level: u32) -> Region {
+        self.region_clipped(x, y, w, h, level, None)
+    }
+
+    /// [`region`](Self::region), with each sample held to `clip` (a level per channel) before
+    /// it is averaged. See [`scaled_clipped`](Self::scaled_clipped).
+    fn region_clipped(
+        &self,
+        x: u32,
+        y: u32,
+        w: u32,
+        h: u32,
+        level: u32,
+        clip: Option<[f32; 3]>,
+    ) -> Region {
+        let clip = clip.unwrap_or([f32::INFINITY; 3]);
         let f = 1u32 << level.min(6);
         // Align to the downsampling factor so neighbouring requests line up.
         let x0 = (x.min(self.width.saturating_sub(1)) / f) * f;
@@ -148,7 +163,7 @@ impl FullImage {
                         for xx in xs.clone() {
                             let i = yy * stride + xx * 3;
                             for (c, a) in acc.iter_mut().enumerate() {
-                                *a += f16::from_bits(self.pixels[i + c]).to_f32();
+                                *a += f16::from_bits(self.pixels[i + c]).to_f32().min(clip[c]);
                             }
                         }
                     }
@@ -172,6 +187,20 @@ impl FullImage {
 impl FullImage {
     /// A copy scaled down so its long edge is `long_edge` (never up). Returns `(w, h, pixels)`.
     pub fn scaled(&self, long_edge: u32) -> (u32, u32, Vec<u16>) {
+        self.scaled_clipped(long_edge, None)
+    }
+
+    /// [`scaled`](Self::scaled) for developing with a known white balance: `clip` is the level,
+    /// per channel of these camera-space pixels, at which white balance takes that channel to
+    /// the develop shader's highlight clip (`clip level ÷ multiplier`).
+    ///
+    /// The shader keeps blown highlights neutral by clipping each channel *after* white
+    /// balance. Averaging happens here, before it, so a pixel on the edge of a blown area is
+    /// part sensor-clipped and part dark: it no longer reaches the clip, and white balance
+    /// then tints it magenta, an outline as wide as an output pixel around every blown
+    /// highlight. Holding each sample to the clip level first makes the average the one the
+    /// shader would have got from clipped pixels: neutral.
+    pub fn scaled_clipped(&self, long_edge: u32, clip: Option<[f32; 3]>) -> (u32, u32, Vec<u16>) {
         let long = self.width.max(self.height);
         if long_edge >= long {
             return (self.width, self.height, self.pixels.clone());
@@ -193,15 +222,17 @@ impl FullImage {
                 self.height as usize,
                 w as usize,
                 h as usize,
+                clip,
             )
         } else {
-            let r = self.region(0, 0, self.width, self.height, level);
+            let r = self.region_clipped(0, 0, self.width, self.height, level, clip);
             resample(
                 &r.pixels,
                 r.width as usize,
                 r.height as usize,
                 w as usize,
                 h as usize,
+                clip,
             )
         };
         (w, h, pixels)
@@ -241,8 +272,18 @@ fn weights(src: usize, dst: usize) -> Vec<(usize, Vec<f32>)> {
         .collect()
 }
 
-/// Resize RGB halves `sw × sh` → `dw × dh` (separable Catmull-Rom, rows in parallel).
-fn resample(src: &[u16], sw: usize, sh: usize, dw: usize, dh: usize) -> Vec<u16> {
+/// Resize RGB halves `sw × sh` → `dw × dh` (separable Catmull-Rom, rows in parallel). With
+/// `clip`, each source sample is first held to that level for its channel, and so is the
+/// result (the filter's negative lobes can overshoot what went in).
+fn resample(
+    src: &[u16],
+    sw: usize,
+    sh: usize,
+    dw: usize,
+    dh: usize,
+    clip: Option<[f32; 3]>,
+) -> Vec<u16> {
+    let clip = clip.unwrap_or([f32::INFINITY; 3]);
     let (wx, wy) = (weights(sw, dw), weights(sh, dh));
     // Horizontal: every source row to `dw` samples.
     let mut tmp = vec![0f32; dw * sh * 3];
@@ -253,7 +294,7 @@ fn resample(src: &[u16], sw: usize, sh: usize, dw: usize, dh: usize) -> Vec<u16>
             for (k, &wt) in w.iter().enumerate() {
                 let i = (lo + k) * 3;
                 for c in 0..3 {
-                    acc[c] += wt * f16::from_bits(line[i + c]).to_f32();
+                    acc[c] += wt * f16::from_bits(line[i + c]).to_f32().min(clip[c]);
                 }
             }
             *o = acc;
@@ -270,8 +311,8 @@ fn resample(src: &[u16], sw: usize, sh: usize, dw: usize, dh: usize) -> Vec<u16>
                 *a += wt * v;
             }
         }
-        for (o, a) in row.iter_mut().zip(acc) {
-            *o = f16::from_f32(a.clamp(-65504.0, 65504.0)).to_bits();
+        for (i, (o, a)) in row.iter_mut().zip(acc).enumerate() {
+            *o = f16::from_f32(a.clamp(-65504.0, 65504.0).min(clip[i % 3])).to_bits();
         }
     });
     out
@@ -350,6 +391,22 @@ pub fn decode_full(path: &Path) -> Result<FullImage> {
     })
 }
 
+/// Fujifilm's Super CCD cameras (S2/S3/S5 Pro, F700, S100FS and a dozen more) have a sensor
+/// turned 45°. The decoder hands their data over still laid out as a diamond, to be turned back
+/// after demosaicing, and marks it with `fuji_rotation_width`. Nothing here does that turn yet,
+/// so such a file would open as the scene rotated 45° on a black square, cropped in the wrong
+/// place: an error says so instead.
+fn fuji_diagonal_unsupported(raw: &RawImage) -> Result<()> {
+    if raw.fuji_rotation_width.is_some() {
+        return Err(RawError::Unsupported(format!(
+            "the {} {} has a Fujifilm Super CCD sensor (laid out diagonally), which tonality \
+             can't develop yet",
+            raw.clean_make, raw.clean_model
+        )));
+    }
+    Ok(())
+}
+
 /// A decoded (scaled, not demosaiced) RAW plus what's needed to develop it.
 struct Decoded {
     raw: RawImage,
@@ -365,6 +422,7 @@ impl Decoded {
         let decoder = rawler::get_decoder(&src).map_err(err)?;
         let params = RawDecodeParams::default();
         let mut raw = decoder.raw_image(&src, &params, false).map_err(err)?;
+        fuji_diagonal_unsupported(&raw)?;
         scale(&mut raw);
         apply_gain_maps(&mut raw, &crate::gainmap::read(path));
         // Not every decoder fills `RawImage::orientation` (e.g. Sony ARW), so prefer EXIF.
@@ -624,7 +682,7 @@ mod tests {
             .map(|i| ((i * 7919) % 1000) as f32 / 1000.0)
             .collect();
         let halves: Vec<u16> = f.iter().map(|&v| f16::from_f32(v).to_bits()).collect();
-        let ours = resample(&halves, sw, sh, dw, dh);
+        let ours = resample(&halves, sw, sh, dw, dh, None);
         let img = RgbF32::from_raw(
             sw as u32,
             sh as u32,
@@ -640,7 +698,7 @@ mod tests {
         assert!(max < 0.02, "max difference {max}");
         // Flat stays flat.
         let flat = vec![f16::from_f32(0.5).to_bits(); sw * sh * 3];
-        assert!(resample(&flat, sw, sh, dw, dh)
+        assert!(resample(&flat, sw, sh, dw, dh, None)
             .iter()
             .all(|&v| (f16::from_bits(v).to_f32() - 0.5).abs() < 1e-3));
     }
@@ -719,6 +777,25 @@ mod tests {
         assert!(crop_rect(&raw).is_err());
     }
 
+    #[test]
+    fn a_diagonal_fuji_sensor_is_refused_with_a_reason() {
+        let mut raw = bayer(8, 8, (0, 0, 8, 8));
+        assert!(fuji_diagonal_unsupported(&raw).is_ok());
+        // As rawler's RAF decoder marks an S5 Pro file.
+        raw.fuji_rotation_width = Some(6);
+        raw.clean_make = "Fujifilm".into();
+        raw.clean_model = "FinePix S5 Pro".into();
+        match fuji_diagonal_unsupported(&raw) {
+            Err(RawError::Unsupported(why)) => {
+                assert!(
+                    why.contains("FinePix S5 Pro") && why.contains("Super CCD"),
+                    "{why}"
+                )
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
     fn image(w: u32, h: u32) -> FullImage {
         // Each pixel's red channel encodes x, green encodes y.
         let mut pixels = Vec::new();
@@ -762,6 +839,56 @@ mod tests {
         // Aligned down to even coordinates; each sample averages a 2×2 box.
         assert_eq!((r.x, r.y, r.width, r.height), (4, 4, 10, 10));
         assert_eq!(f16::from_bits(r.pixels[0]).to_f32(), 4.5);
+    }
+
+    #[test]
+    fn the_edge_of_a_blown_highlight_stays_neutral_when_scaled_down() {
+        // Daylight multipliers: red and blue are raised, so a sensor-clipped (1, 1, 1) becomes
+        // (2, 1, 1.5), which the shader clips back to white.
+        let wb = [2.0f32, 1.0, 1.5];
+        let developed = |p: &[u16]| -> [f32; 3] {
+            std::array::from_fn(|c| (f16::from_bits(p[c]).to_f32() * wb[c]).min(1.0))
+        };
+        // A blown sky on the left; on the right a dark branch, neutral once balanced.
+        let (w, h) = (240u32, 60u32);
+        let sky = [1.0f32, 1.0, 1.0];
+        let branch = [0.02f32, 0.04, 0.04 / 1.5];
+        let mut img = image(w, h);
+        img.pixels = (0..w * h)
+            .flat_map(|i| if i % w < 121 { sky } else { branch })
+            .map(|v| f16::from_f32(v).to_bits())
+            .collect();
+        let clip = wb.map(|m| 1.0 / m);
+
+        // Both a plain reduction (a third) and one that box-averages first (a sixth).
+        for edge in [80, 40] {
+            let tint = |px: &[u16]| -> f32 {
+                px.as_chunks::<3>()
+                    .0
+                    .iter()
+                    .map(|p| {
+                        let [r, g, b] = developed(p);
+                        (r - g).abs().max((b - g).abs())
+                    })
+                    .fold(0.0, f32::max)
+            };
+            let (_, _, plain) = img.scaled(edge);
+            let (_, _, clipped) = img.scaled_clipped(edge, Some(clip));
+            assert!(
+                tint(&plain) > 0.2,
+                "at {edge}: averaged as it is, the edge pixel is tinted ({})",
+                tint(&plain)
+            );
+            assert!(
+                tint(&clipped) < 0.02,
+                "at {edge}: clipped first, it is neutral ({})",
+                tint(&clipped)
+            );
+        }
+        // Away from any highlight nothing changes: the clip only touches what's above it.
+        let mut dark = image(w, h);
+        dark.pixels = vec![f16::from_f32(0.1).to_bits(); (w * h * 3) as usize];
+        assert_eq!(dark.scaled(80), dark.scaled_clipped(80, Some(clip)));
     }
 
     #[test]

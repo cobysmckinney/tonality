@@ -65,7 +65,7 @@
     } else if (del) {
       library.removeFromAlbum();
     } else if (e.key === "Escape") {
-      if (menuOpen) menuOpen = false;
+      if (menuOpen) closeMenu();
       else library.clearSelection();
     }
   }
@@ -165,6 +165,14 @@
 
   // ---- "Add to album" menu ----
   let menuOpen = $state(false);
+  let menuTrigger = $state<HTMLButtonElement>();
+  /** Close "Add to Album" from the keyboard: focus goes back to its button, not to nowhere
+   *  (the item that had it is removed with the list). */
+  function closeMenu() {
+    const inside = menuRoot?.contains(document.activeElement);
+    menuOpen = false;
+    if (inside) menuTrigger?.focus();
+  }
   let menuRoot = $state<HTMLDivElement>();
   function onWindowDown(e: PointerEvent) {
     if (menuOpen && menuRoot && !menuRoot.contains(e.target as Node)) menuOpen = false;
@@ -420,7 +428,14 @@
         {#if selCount}
           <span class="sel">{selCount} selected</span>
           <div class="menu" bind:this={menuRoot}>
-            <button class="btn" class:on={menuOpen} onclick={() => (menuOpen = !menuOpen)}>
+            <button
+              class="btn"
+              class:on={menuOpen}
+              bind:this={menuTrigger}
+              aria-expanded={menuOpen}
+              aria-controls={menuOpen ? "add-to-album" : undefined}
+              onclick={() => (menuOpen = !menuOpen)}
+            >
               <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
                 <rect x="2" y="4" width="12" height="9" rx="1.5" /><path
                   d="M5 2h6M8 6.5v4M6 8.5h4"
@@ -429,10 +444,12 @@
               Add to Album
             </button>
             {#if menuOpen}
-              <div class="pop" role="menu">
+              <!-- A group of buttons under a button that says it is open: Tab moves through
+                   them and Esc goes back to the button. (Not role="menu", which promises arrow
+                   keys and focus handling that aren't here.) -->
+              <div class="pop" id="add-to-album" role="group" aria-label="Add to album">
                 {#each library.albums.filter((a) => !is({ kind: "album", id: a.id })) as a (a.id)}
                   <button
-                    role="menuitem"
                     onclick={() => {
                       menuOpen = false;
                       library.addToAlbum(a.id);
@@ -449,7 +466,7 @@
                     <span class="count">{a.count}</span>
                   </button>
                 {/each}
-                <button role="menuitem" class="new" onclick={() => newAlbum(library.targets())}>
+                <button class="new" onclick={() => newAlbum(library.targets())}>
                   <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
                     <path d="M8 3v10M3 8h10" />
                   </svg>
@@ -1003,8 +1020,14 @@
   }
   .stars button {
     padding: 0 1px;
-    color: var(--bg-4);
+    /* Unlit, but there to be seen: a control nobody can make out isn't one. */
+    color: var(--text-2);
+    opacity: 0.6;
     font-size: 14px;
+  }
+  .stars button.on,
+  .stars button:hover {
+    opacity: 1;
   }
   .stars button.on {
     color: var(--text-1);

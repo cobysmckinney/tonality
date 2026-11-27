@@ -49,22 +49,27 @@ jobs:
       - run: npm ci
       - run: npm run build
 
+      # --locked, here and below: a Cargo.lock that's out of step with a Cargo.toml fails the
+      # build instead of being quietly resolved again on the runner (and at every release).
       - name: Clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
       # The runner has no GPU. Its software renderers are hidden so the GPU tests skip themselves:
       # Mesa's OpenGL can't render to the float target they need, and its Vulkan rounds
       # differently enough from real hardware to fail the AgX comparison near black. The GPU
       # job below is where they run.
       - name: Test
-        run: cargo test --workspace
+        run: cargo test --workspace --locked
         env:
           VK_DRIVER_FILES: /dev/null
           VK_ICD_FILENAMES: /dev/null
           __EGL_VENDOR_LIBRARY_FILENAMES: /dev/null
 
+      # `git status`, not `git diff`: a binding for a new type that was never committed counts.
       - name: Bindings are up to date
-        run: git diff --exit-code -- ui/lib/bindings
+        run: |
+          git status --porcelain -- ui/lib/bindings
+          test -z "$(git status --porcelain -- ui/lib/bindings)"
 
       - name: Licence notices are up to date
         run: |
@@ -91,7 +96,7 @@ jobs:
 
       # --nocapture: the log then names the adapter and how far each comparison was off.
       - name: Test
-        run: cargo test -p tonality-render -- --nocapture
+        run: cargo test -p tonality-render --locked -- --nocapture
         env:
           TONALITY_REQUIRE_GPU: 1
 
@@ -110,6 +115,11 @@ jobs:
           cache: npm
 
       - run: npm ci
+
+      # `tauri build` refuses to run when an @tauri-apps package and its crate are on different
+      # minor versions, and only the release and nightly builds run it.
+      - name: Tauri npm packages match their crates
+        run: node scripts/check-tauri.mjs
 
       - name: Format
         run: npm run format:check

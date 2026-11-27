@@ -34,6 +34,14 @@ function inOrder<T>(f: () => Promise<T>): Promise<T> {
   return next;
 }
 
+/** Resolves once every catalog write queued so far has been made (or has failed). */
+export function catalogWrites(): Promise<void> {
+  return writes.then(
+    () => {},
+    () => {},
+  );
+}
+
 export const api = {
   defaultEditState: () => invoke<EditState>("default_edit_state"),
   wbPresets: () => invoke<WbPresetInfo[]>("wb_presets"),

@@ -485,6 +485,36 @@ fn describe_mask(a: &Mask, b: &Mask) -> String {
 mod tests {
     use super::*;
 
+    /// `[full width, full height, raster width, raster height]`. The interface computes the
+    /// same sizes itself (`maskSize` in `ui/lib/edit/masks.ts`), to paint strokes live into
+    /// rasters of the size it will be sent. Its test has this table too: change both together.
+    #[test]
+    fn mask_size_matches_the_interface() {
+        const SIZES: [[u32; 4]; 18] = [
+            [6000, 4000, 1024, 683],
+            [4000, 6000, 683, 1024],
+            [7952, 5304, 1024, 683],
+            [5304, 7952, 683, 1024],
+            [8256, 5504, 1024, 683],
+            [9504, 6336, 1024, 683],
+            [6240, 4160, 1024, 683],
+            [4672, 7008, 683, 1024],
+            [1000, 656, 1024, 672],
+            [1, 1, 1024, 1024],
+            [3, 2, 1024, 683],
+            [2000, 1312, 1024, 672],
+            [6016, 4016, 1024, 684],
+            [11648, 8736, 1024, 768],
+            [3000, 2001, 1024, 683],
+            [5472, 3648, 1024, 683],
+            [1023, 683, 1024, 684],
+            [1025, 7, 1024, 7],
+        ];
+        for [w, h, mw, mh] in SIZES {
+            assert_eq!(mask_size(w, h), (mw, mh), "{w} × {h}");
+        }
+    }
+
     fn stroke(points: Vec<[f32; 2]>) -> Stroke {
         Stroke {
             points,

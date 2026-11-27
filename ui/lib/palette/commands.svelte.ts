@@ -5,6 +5,7 @@
 import { untrack } from "svelte";
 import { app } from "$lib/app.svelte";
 import { session } from "$lib/edit/session.svelte";
+import { wbPick } from "$lib/edit/wbpick.svelte";
 import { exportCount, exportCurrent } from "$lib/export/targets";
 import { BIN, library } from "$lib/library/state.svelte";
 import { updates } from "$lib/settings/updates.svelte";
@@ -255,6 +256,17 @@ export const COMMANDS: Command[] = [
     run: () => library.step(1),
   },
   {
+    id: "edit.wbPicker",
+    get title() {
+      return wbPick.active ? "Put the white balance picker away" : "White balance picker";
+    },
+    group: "Edit",
+    keys: ["W"],
+    keywords: "eyedropper neutral grey gray temperature tint",
+    when: () => editing() && !session.masking && !session.cropping,
+    run: () => wbPick.toggle(),
+  },
+  {
     id: "edit.crop",
     title: "Crop and straighten",
     group: "Edit",
@@ -284,6 +296,12 @@ export const COMMANDS: Command[] = [
     when: () => !!session.compare,
     run: () => session.stopCompare(),
   },
+  {
+    id: "edit.curvePoint",
+    title: "Tone curve: move / add / remove the focused point",
+    group: "Edit",
+    keys: ["Arrows", "Enter", "Delete"],
+  },
 
   // ---- Crop (while cropping) ----
   provided({
@@ -301,8 +319,12 @@ export const COMMANDS: Command[] = [
     when: () => session.cropping,
   }),
   { id: "crop.rotate", title: "Rotate 90° left / right", group: "Crop", keys: ["[", "]"] },
+  { id: "crop.move", title: "Move the crop", group: "Crop", keys: ["Arrows"] },
+  { id: "crop.resize", title: "Resize the crop", group: "Crop", keys: ["Shift+Arrows"] },
 
   // ---- Masks (while masking) ----
+  { id: "masks.handle", title: "Move the focused handle", group: "Masks", keys: ["Arrows"] },
+  { id: "masks.rename", title: "Rename the focused mask", group: "Masks", keys: ["F2"] },
   {
     id: "masks.overlay",
     get title() {
@@ -322,6 +344,7 @@ export const COMMANDS: Command[] = [
     run: () => session.selected !== null && session.deleteMask(session.selected),
   },
   { id: "masks.brush", title: "Smaller / larger brush", group: "Masks", keys: ["[", "]"] },
+  { id: "masks.pan", title: "Pan the photo (hold)", group: "Masks", keys: ["Space"] },
 
   // ---- History ----
   {
@@ -398,6 +421,7 @@ export const COMMANDS: Command[] = [
     keywords: "zoom",
     when: editing,
   }),
+  { id: "view.pan", title: "Move around a zoomed photo", group: "View", keys: ["Shift+Arrows"] },
   { id: "view.before", title: "Show the original (hold)", group: "View", keys: ["\\"] },
   provided({
     id: "view.filmstrip",

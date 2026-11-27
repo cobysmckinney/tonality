@@ -1,6 +1,8 @@
 <script lang="ts">
   // Point tone curve: master RGB plus per-channel curves.
   // Click the curve to add a point · drag points · double-click (or drag off the graph) to remove.
+  // Each point is also a tab stop: arrows move it, Enter adds one after it, Delete removes it.
+  import { tick } from "svelte";
   import type { ToneCurve } from "$lib/bindings/ToneCurve";
   import { curve as evaluator, dragPoint, IDENTITY, isIdentity, type Point } from "./curve";
   import type { Histogram } from "./renderer";
@@ -122,13 +124,62 @@
   }
 
   const edited = (c: Channel) => value[c].length > 0 && !isIdentity(value[c] as Point[]);
+
+  // ---- keyboard ----
+  let dots = $state<SVGCircleElement[]>([]);
+  const uid = $props.id();
+  const pct = (v: number) => `${Math.round(v * 100)}%`;
+  const STEPS: Record<string, Point> = {
+    ArrowLeft: [-1, 0],
+    ArrowRight: [1, 0],
+    ArrowUp: [0, 1],
+    ArrowDown: [0, -1],
+  };
+
+  async function onPointKey(e: KeyboardEvent, i: number) {
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    const by = STEPS[e.key];
+    const remove = e.key === "Delete" || e.key === "Backspace";
+    if (!by && !remove && e.key !== "Enter") return;
+    // Ours, whatever comes of it: Delete on an end point mustn't go on to delete a mask.
+    e.preventDefault();
+    e.stopPropagation();
+    const last = points.length - 1;
+    let focus = i;
+    if (by) {
+      const step = e.shiftKey ? 0.05 : 0.01;
+      emit(dragPoint(points, i, [points[i][0] + by[0] * step, points[i][1] + by[1] * step]));
+    } else if (remove) {
+      if (i === 0 || i === last) return; // the ends stay
+      emit(points.filter((_, j) => j !== i));
+    } else {
+      // A new point halfway to the next one (from the last, halfway back to the one before).
+      const [a, b] = i < last ? [i, i + 1] : [i - 1, i];
+      if (points[b][0] - points[a][0] < 0.04) return; // no room between them
+      const x = (points[a][0] + points[b][0]) / 2;
+      const pts = points.map((q) => [...q] as Point);
+      pts.splice(b, 0, [x, f(x)]);
+      emit(pts);
+      focus = b;
+    }
+    oncommit();
+    await tick();
+    dots[focus]?.focus();
+  }
 </script>
 
 <div class="curve">
   <div class="tabs">
     {#each channels as c (c.id)}
-      <button class:active={channel === c.id} onclick={() => (channel = c.id)} style:--c={c.colour}>
-        {c.label}{#if edited(c.id)}<span class="dot"></span>{/if}
+      <button
+        class:active={channel === c.id}
+        aria-pressed={channel === c.id}
+        onclick={() => (channel = c.id)}
+        style:--c={c.colour}
+      >
+        {c.label}{#if edited(c.id)}<span class="dot"></span><span class="sr-only">
+            , edited
+          </span>{/if}
       </button>
     {/each}
     <button
@@ -163,9 +214,27 @@
       <line x1="0" y1={size} x2={size} y2="0" class="diag" />
       <path d={path} class="line" style:stroke={colour} />
       {#each points as [x, y], i (i)}
-        <circle cx={x * size} cy={(1 - y) * size} r="4" style:stroke={colour} />
+        <circle
+          bind:this={dots[i]}
+          cx={x * size}
+          cy={(1 - y) * size}
+          r="4"
+          style:stroke={colour}
+          tabindex="0"
+          role="slider"
+          aria-label="Point {i + 1} of {points.length}"
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={Math.round(y * 100)}
+          aria-valuetext="input {pct(x)}, output {pct(y)}"
+          aria-describedby="{uid}-keys"
+          onkeydown={(e) => onPointKey(e, i)}
+        />
       {/each}
     </svg>
+    <p class="sr-only" id="{uid}-keys">
+      Arrow keys move the point, further with Shift. Enter adds a point after it. Delete removes it.
+    </p>
   </div>
 </div>
 
@@ -243,5 +312,12 @@
   circle {
     fill: var(--bg-0);
     stroke-width: 1.5;
+  }
+  /* Filled in while it has the keyboard (an outline isn't drawn around an SVG shape
+     everywhere). */
+  circle:focus-visible {
+    outline: none;
+    fill: var(--text-0);
+    stroke-width: 3;
   }
 </style>

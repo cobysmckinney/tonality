@@ -27,7 +27,8 @@ const PICKERS = [
   "[role=menuitemradio]",
   "[role=option]",
 ];
-const ARROWS = ["[role=slider]", ...PICKERS].join(", ");
+/** A separator that can be focused is a splitter: its arrows move it. */
+const ARROWS = ["[role=slider]", "[role=separator][tabindex]", ...PICKERS].join(", ");
 /** Take Enter and Space (activate). */
 const ACTIVATE = [
   "button",
@@ -83,6 +84,27 @@ export function targetOwnsKey(target: EventTarget | null, key: string): boolean 
   if (hit(TYPING)) return true;
   if (NAV.test(key) && hit(ARROWS)) return true;
   return (key === "Enter" || key === " ") && hit(ACTIVATE);
+}
+
+/**
+ * [`targetOwnsKey`], for the editor's own Enter and Space (apply the crop, pan while masking).
+ *
+ * A button keeps those two only while the keyboard put the focus on it, which is when it shows
+ * a focus ring: Tab to Cancel, press Enter, and Cancel is pressed. A button that was clicked
+ * with the mouse also still has focus on Linux and Windows, and there Enter has to go on
+ * meaning "apply the crop" after clicking an aspect ratio, and Space "pan" after clicking a
+ * brush mode. Fields, and every other key, are as [`targetOwnsKey`] says.
+ */
+export function focusedControlOwnsKey(target: EventTarget | null, key: string): boolean {
+  if (!targetOwnsKey(target, key)) return false;
+  if (key !== "Enter" && key !== " ") return true;
+  const el = element(target);
+  if (!el || el.tagName === "INPUT" || el.closest(TYPING)) return true;
+  try {
+    return el.matches(":focus-visible");
+  } catch {
+    return true; // no such selector here: assume the keyboard
+  }
 }
 
 /** Should a dialog's Enter-to-confirm run for this key event? */

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { holdFocus } from "$lib/design/focus";
   import { tick } from "svelte";
   import { targetOwnsKey } from "$lib/keys";
   import { COMMANDS, MAC, palette, shortcut } from "./commands.svelte";
@@ -128,17 +129,6 @@
     const next = e.shiftKey ? (i <= 0 ? items.length - 1 : i - 1) : (i + 1) % items.length;
     items[next].focus();
   }
-
-  /** On open: focus the field. On close: give focus back to what had it. */
-  function holdFocus(node: HTMLElement) {
-    const back = document.activeElement as HTMLElement | null;
-    node.querySelector("input")?.focus();
-    return {
-      destroy() {
-        if (back?.isConnected) back.focus();
-      },
-    };
-  }
 </script>
 
 <svelte:window onkeydowncapture={onKey} />
@@ -166,7 +156,7 @@
       data-palette
       tabindex="-1"
       bind:this={dialog}
-      use:holdFocus
+      use:holdFocus={"input"}
       onclick={(e) => e.stopPropagation()}
     >
       <div class="head">
@@ -374,6 +364,10 @@
   .group {
     font-size: var(--fs-xs);
     color: var(--text-2);
+  }
+  /* (--text-2 isn't enough on the highlighted row's background.) */
+  .row.active .group {
+    color: var(--text-1);
   }
   .keys {
     display: flex;

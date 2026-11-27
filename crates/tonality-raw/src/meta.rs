@@ -39,6 +39,18 @@ fn exif_date(s: &str) -> Option<String> {
     ok.then(|| format!("{date}T{time}"))
 }
 
+/// The ISO a photo was taken at, from EXIF's three places for it. PhotographicSensitivity
+/// (`ratings`) is 16 bits; above 65535 a camera writes 65535 there and the real value in
+/// ISOSpeed or RecommendedExposureIndex, which then win.
+fn iso(ratings: Option<u16>, speed: Option<u32>, recommended: Option<u32>) -> Option<u32> {
+    let wide = || speed.or(recommended).filter(|v| *v > 0);
+    match ratings {
+        Some(u16::MAX) => wide().or(Some(65535)),
+        Some(v) if v > 0 => Some(v.into()),
+        _ => wide(),
+    }
+}
+
 fn non_empty(s: &str) -> Option<String> {
     let s = s.trim_matches(|c: char| c == '\0' || c.is_whitespace());
     (!s.is_empty()).then(|| s.to_string())
@@ -59,12 +71,11 @@ pub fn read_meta(path: &Path) -> Result<ImageMeta> {
             .as_deref()
             .and_then(non_empty)
             .or_else(|| m.lens.as_ref().and_then(|l| non_empty(&l.lens_model))),
-        iso: e
-            .iso_speed_ratings
-            .map(u32::from)
-            .or(e.iso_speed)
-            .or(e.recommended_exposure_index)
-            .filter(|v| *v > 0),
+        iso: iso(
+            e.iso_speed_ratings,
+            e.iso_speed,
+            e.recommended_exposure_index,
+        ),
         exposure_time: e.exposure_time.and_then(ratio),
         f_number: e.fnumber.and_then(ratio),
         focal_length: e.focal_length.and_then(ratio),
@@ -86,6 +97,17 @@ pub fn read_capture(path: &Path) -> Result<Capture> {
         .raw_metadata(&src, &RawDecodeParams::default())
         .map_err(|e| RawError::Decode(e.to_string()))?;
     let e = &m.exif;
+    // Make and Model as the camera wrote them ("NIKON CORPORATION", "NIKON Z 6"), which is what
+    // other software knows a camera by. The metadata's own are rawler's display names ("Nikon",
+    // "Z 6"): right for the Library, not for a file's EXIF. Only the raw image carries the
+    // file's spelling; `dummy` reads it without decoding any pixels.
+    let (make, model) = match decoder.raw_image(&src, &RawDecodeParams::default(), true) {
+        Ok(raw) => (
+            non_empty(&raw.make).or_else(|| non_empty(&m.make)),
+            non_empty(&raw.model).or_else(|| non_empty(&m.model)),
+        ),
+        Err(_) => (non_empty(&m.make), non_empty(&m.model)),
+    };
     let r = |r: Rational| [r.n, r.d];
     let text = |s: &Option<String>| s.as_deref().and_then(non_empty);
     // EXIF form again (`2026:11:02 14:03:11`), after `exif_date` has checked its shape.
@@ -95,19 +117,18 @@ pub fn read_capture(path: &Path) -> Result<Capture> {
             .map(|iso| iso.replacen('-', ":", 2).replacen('T', " ", 1))
     };
     Ok(Capture {
-        make: non_empty(&m.make),
-        model: non_empty(&m.model),
+        make,
+        model,
         lens_make: text(&e.lens_make),
         lens_model: text(&e.lens_model)
             .or_else(|| m.lens.as_ref().and_then(|l| non_empty(&l.lens_model))),
         exposure_time: e.exposure_time.map(r),
         f_number: e.fnumber.map(r),
-        iso: e
-            .iso_speed_ratings
-            .map(u32::from)
-            .or(e.iso_speed)
-            .or(e.recommended_exposure_index)
-            .filter(|v| *v > 0),
+        iso: iso(
+            e.iso_speed_ratings,
+            e.iso_speed,
+            e.recommended_exposure_index,
+        ),
         focal_length: e.focal_length.map(r),
         exposure_bias: e.exposure_bias.map(|v| [v.n, v.d]),
         exposure_program: e.exposure_program,
@@ -134,6 +155,42 @@ pub fn read_capture(path: &Path) -> Result<Capture> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn iso_above_what_sixteen_bits_hold_is_read_from_the_wide_tags() {
+        assert_eq!(iso(Some(800), None, None), Some(800));
+        assert_eq!(iso(Some(800), Some(1600), None), Some(800));
+        // ISO 102400, as the spec says to write it.
+        assert_eq!(iso(Some(65535), Some(102_400), None), Some(102_400));
+        assert_eq!(iso(Some(65535), None, Some(204_800)), Some(204_800));
+        // 65535 with nothing beside it is all there is to go on.
+        assert_eq!(iso(Some(65535), None, None), Some(65535));
+        assert_eq!(iso(None, Some(102_400), None), Some(102_400));
+        assert_eq!(iso(None, None, Some(400)), Some(400));
+        assert_eq!(iso(Some(0), Some(0), None), None);
+        assert_eq!(iso(None, None, None), None);
+    }
+
+    /// `TONALITY_TEST_RAW=<file> TONALITY_TEST_MAKE=<Make as in its EXIF> cargo test -p
+    /// tonality-raw -- --ignored camera_names`: no raw file is kept in the repository.
+    #[test]
+    #[ignore]
+    fn camera_names_are_the_files_own() {
+        let (Ok(raw), Ok(make)) = (
+            std::env::var("TONALITY_TEST_RAW"),
+            std::env::var("TONALITY_TEST_MAKE"),
+        ) else {
+            panic!("set TONALITY_TEST_RAW and TONALITY_TEST_MAKE");
+        };
+        let path = Path::new(&raw);
+        let capture = read_capture(path).unwrap();
+        let shown = read_meta(path).unwrap();
+        println!(
+            "EXIF: {:?} / {:?}; shown as: {} / {}",
+            capture.make, capture.model, shown.make, shown.model
+        );
+        assert_eq!(capture.make.as_deref(), Some(make.as_str()));
+    }
 
     #[test]
     fn parses_exif_dates() {

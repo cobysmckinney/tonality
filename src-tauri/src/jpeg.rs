@@ -23,6 +23,9 @@ impl Segment {
     }
 
     fn bytes(&self) -> Vec<u8> {
+        // The length is 16 bits and counts itself. A longer payload would wrap it, and the file
+        // couldn't be read past this segment: nothing may build one (see `exif_segment`).
+        debug_assert!(self.payload.len() <= MAX_PAYLOAD);
         let mut out = vec![0xFF, self.marker];
         out.extend_from_slice(&((self.payload.len() + 2) as u16).to_be_bytes());
         out.extend_from_slice(&self.payload);
@@ -65,11 +68,25 @@ fn assemble(segs: &[Segment], rest: &[u8]) -> Vec<u8> {
     out
 }
 
-pub fn exif_segment(tiff_exif: &[u8]) -> Segment {
-    Segment {
-        marker: APP1,
-        payload: [EXIF_ID, tiff_exif].concat(),
+/// The most a segment's payload can be: its 16-bit length counts its own two bytes.
+const MAX_PAYLOAD: usize = 0xFFFF - 2;
+
+/// The EXIF block as a segment, or `None` if it's too big to be one: the file is then written
+/// without EXIF, which is a loss, where a segment with a wrapped length is a file that can't
+/// be opened.
+pub fn exif_segment(tiff_exif: &[u8]) -> Option<Segment> {
+    let payload = [EXIF_ID, tiff_exif].concat();
+    if payload.len() > MAX_PAYLOAD {
+        log::warn!(
+            "leaving EXIF out of a JPEG: {} bytes is more than a segment holds",
+            payload.len()
+        );
+        return None;
     }
+    Some(Segment {
+        marker: APP1,
+        payload,
+    })
 }
 
 pub fn xmp_segment(packet: &str) -> Segment {
@@ -263,7 +280,11 @@ mod tests {
     #[test]
     fn puts_exif_and_xmp_first_and_drops_jfif() {
         let j = tiny_jpeg();
-        let out = with_front(&j, &[exif_segment(b"II*\0abc"), xmp_segment("<x/>")]).unwrap();
+        let exif = exif_segment(b"II*\0abc").unwrap();
+        let out = with_front(&j, &[exif, xmp_segment("<x/>")]).unwrap();
+        // A block that wouldn't fit a segment is left out, not written with a wrapped length.
+        assert!(exif_segment(&vec![0; MAX_PAYLOAD - EXIF_ID.len()]).is_some());
+        assert!(exif_segment(&vec![0; MAX_PAYLOAD - EXIF_ID.len() + 1]).is_none());
         let (segs, _) = split_head(&out).unwrap();
         assert!(segs[0].is(APP1, EXIF_ID) && segs[1].is(APP1, XMP_ID));
         assert!(segs.iter().all(|s| !s.is(APP0, b"JFIF\0")));
