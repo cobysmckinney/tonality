@@ -212,8 +212,11 @@ pub fn lens_table(profile: Option<&LensProfile>, s: &LensCorrection, w: f32, h: 
         }
     }
     out.active = has_dist || vig.is_some();
+    // The furthest a corrected pixel reads from its own position, over the frame (radius up to
+    // 1). A radius between two knots interpolates between them, so the knot just past 1 counts
+    // too: with barrel correction it is the strongest one the corner pixels reach towards.
     out.margin = (0..LENS_KNOTS)
-        .filter(|&i| knot_radius(i) <= 1.0)
+        .filter(|&i| i == 0 || knot_radius(i - 1) < 1.0)
         .flat_map(|i| out.knots[i][..3].iter().map(|v| (v - 1.0).abs() * 0.5))
         .fold(0.0, f32::max)
         + 0.002;
@@ -435,6 +438,37 @@ mod tests {
         let tight = edge_fit(&t, w, h);
         assert!(tight > 0.995, "zoomed in more than needed: {tight}");
         assert!(t.knots[0][1] > 1.0 / 0.6, "zoom stuck at 0.6");
+    }
+
+    #[test]
+    fn the_margin_covers_every_pixel_of_the_frame() {
+        // The export gives each tile a source texture enlarged by `margin`. A pixel that reads
+        // further than that falls off its tile's texture and comes out black.
+        for strength in [0.1, 0.2, -0.1] {
+            let p = LensProfile {
+                distortion: Some([radial(|r| 1.0 - strength * r * r); 3]),
+                chromatic: false,
+                vignetting: None,
+                ..barrel()
+            };
+            let s = LensCorrection {
+                distortion: 200.0,
+                ..on()
+            };
+            let t = lens_table(Some(&p), &s, 6000.0, 4000.0);
+            let green: Radial = std::array::from_fn(|i| t.knots[i][1]);
+            // Corner pixels sit between the last knot inside the frame and the first one past
+            // it, which is where the old margin (knots inside only) fell short.
+            for i in 0..=2000 {
+                let r = i as f32 / 2000.0;
+                let reach = (sample(&green, r) - 1.0).abs() * 0.5;
+                assert!(
+                    reach <= t.margin,
+                    "strength {strength}: at radius {r} a pixel reads {reach} away, margin {}",
+                    t.margin
+                );
+            }
+        }
     }
 
     #[test]

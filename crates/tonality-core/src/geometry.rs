@@ -24,7 +24,7 @@ impl Geometry {
         let o = map(0.0, 0.0);
         let x = map(1.0, 0.0);
         let y = map(0.0, 1.0);
-        let r = rect(crop);
+        let r = rect(crop, tw, th);
         Self {
             width: (r[2] * tw).max(1.0),
             height: (r[3] * th).max(1.0),
@@ -63,18 +63,40 @@ pub fn turned_size(crop: &Crop, src_w: f32, src_h: f32) -> (f32, f32) {
     }
 }
 
-/// The crop rect, sanitised to lie within the frame.
-fn rect(crop: &Crop) -> [f32; 4] {
+/// The crop rect, sanitised to lie within the turned frame (`tw × th` pixels).
+///
+/// A crop is stored as fractions of the frame, so its corner seldom falls on a pixel. When
+/// nothing is straightened it is moved onto whole pixels here: each output pixel then reads one
+/// source pixel at its centre, and a plain crop needs no resampling. Left where it was, every
+/// output pixel would be a blend of two source pixels (at worst, the average of them: a
+/// half-pixel blur over the whole picture). With an angle, resampling can't be avoided and the
+/// rect is used as it is.
+fn rect(crop: &Crop, tw: f32, th: f32) -> [f32; 4] {
     let [x, y, w, h] = crop.rect;
     let w = w.clamp(1e-4, 1.0);
     let h = h.clamp(1e-4, 1.0);
-    [x.clamp(0.0, 1.0 - w), y.clamp(0.0, 1.0 - h), w, h]
+    let (x, y) = (x.clamp(0.0, 1.0 - w), y.clamp(0.0, 1.0 - h));
+    if crop.angle != 0.0 {
+        return [x, y, w, h];
+    }
+    // Along one axis of `size` pixels: where it starts and how long it is, in whole pixels.
+    let snap = |at: f32, len: f32, size: f32| -> (f32, f32) {
+        if size < 1.0 || size.fract() != 0.0 {
+            return (at, len);
+        }
+        let len_px = (len * size).round().clamp(1.0, size);
+        let at_px = (at * size).round().clamp(0.0, size - len_px);
+        (at_px / size, len_px / size)
+    };
+    let (x, w) = snap(x, w, tw);
+    let (y, h) = snap(y, h, th);
+    [x, y, w, h]
 }
 
 /// Source uv for output-frame position `f`.
 fn source_uv(crop: &Crop, src_w: f32, src_h: f32, fx: f32, fy: f32) -> [f32; 2] {
     let (tw, th) = turned_size(crop, src_w, src_h);
-    let r = rect(crop);
+    let r = rect(crop, tw, th);
     // Output → position in the straightened, turned frame (pixels).
     let qx = (r[0] + fx * r[2]) * tw;
     let qy = (r[1] + fy * r[3]) * th;
@@ -135,6 +157,45 @@ mod tests {
         };
         let g = Geometry::new(&crop, 100.0, 50.0);
         assert!(close(g.apply([0.0, 0.3]), [1.0, 0.3]));
+    }
+
+    #[test]
+    fn a_plain_crop_lands_on_whole_pixels() {
+        // 0.1234 × 6000 = 740.4: left there, every output pixel would read 0.6 of one source
+        // pixel and 0.4 of the next.
+        let crop = Crop {
+            rect: [0.1234, 0.2501, 0.53623, 0.5],
+            ..Crop::default()
+        };
+        let (w, h) = (6000.0, 4000.0);
+        let g = Geometry::new(&crop, w, h);
+        assert_eq!((g.width, g.height), (3217.0, 2000.0));
+        // The centre of every output pixel is the centre of a source pixel.
+        for (i, j) in [(0u32, 0u32), (1, 1), (1600, 999), (3216, 1999)] {
+            let f = [(i as f32 + 0.5) / g.width, (j as f32 + 0.5) / g.height];
+            let [u, v] = g.apply(f);
+            let (px, py) = (u * w - 0.5, v * h - 0.5);
+            assert!(
+                (px - px.round()).abs() < 0.01 && (py - py.round()).abs() < 0.01,
+                "output pixel ({i}, {j}) reads source ({px}, {py})"
+            );
+        }
+        // The same crop on a turned photo snaps to the turned frame's pixels.
+        let turned = Geometry::new(&Crop { turns: 1, ..crop }, w, h);
+        assert_eq!(turned.width.fract() + turned.height.fract(), 0.0);
+
+        // Straightened, it has to be resampled anyway: the rect is used as drawn.
+        let straightened = Geometry::new(&Crop { angle: 1.5, ..crop }, w, h);
+        assert!((straightened.width - 0.53623 * w).abs() < 0.01);
+        // And a crop already on whole pixels isn't moved.
+        let exact = Crop {
+            rect: [0.5, 0.25, 0.5, 0.5],
+            ..Crop::default()
+        };
+        assert!(close(
+            Geometry::new(&exact, w, h).apply([0.0, 0.0]),
+            [0.5, 0.25]
+        ));
     }
 
     #[test]

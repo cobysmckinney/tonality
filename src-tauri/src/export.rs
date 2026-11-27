@@ -218,6 +218,10 @@ pub async fn export_images(
     tauri::async_runtime::spawn_blocking(move || {
         std::fs::create_dir_all(&folder)
             .map_err(|e| format!("cannot create {}: {e}", folder.display()))?;
+        // Before anything is decoded or rendered: a folder that can't take a file, or no way
+        // to render, would otherwise only show once every photo had been worked through.
+        check_writable(&folder)?;
+        drop(gpu().map_err(|e| format!("Export can’t render: {e}"))?);
         let jobs = gather(&app, &ids, &settings)?;
         run(jobs, settings, folder, images, app, &CANCEL)
     })
@@ -236,6 +240,97 @@ fn export_folder(folder: &str) -> CmdResult<PathBuf> {
         return Err(format!("Export folder must be a full path: {folder}"));
     }
     Ok(path)
+}
+
+/// Check that a file can be made in `folder` (an existing read-only folder passes
+/// `create_dir_all`), by making one and removing it.
+fn check_writable(folder: &Path) -> CmdResult<()> {
+    let probe = crate::store::temp_path(&folder.join("tonality"));
+    std::fs::File::create_new(&probe)
+        .map_err(|e| format!("Can’t export to {}: {e}", folder.display()))?;
+    let _ = std::fs::remove_file(&probe);
+    Ok(())
+}
+
+/// Why a file wasn't exported.
+#[derive(Debug)]
+struct ExportError {
+    message: String,
+    /// The export folder is at fault (read-only, full, gone): every other file would be
+    /// decoded and rendered in full and then fail the same way.
+    folder: bool,
+}
+
+impl From<String> for ExportError {
+    fn from(message: String) -> Self {
+        ExportError {
+            message,
+            folder: false,
+        }
+    }
+}
+
+impl ExportError {
+    /// A failure to write into the export folder.
+    fn writing(e: std::io::Error) -> Self {
+        use std::io::ErrorKind as K;
+        ExportError {
+            folder: matches!(
+                e.kind(),
+                K::PermissionDenied
+                    | K::ReadOnlyFilesystem
+                    | K::StorageFull
+                    | K::QuotaExceeded
+                    | K::NotFound
+            ),
+            message: e.to_string(),
+        }
+    }
+}
+
+/// Where the develop shader's highlight clip falls in camera space, per channel: `wb` is its
+/// white balance multipliers and, last, the level it clips each balanced channel to.
+fn highlight_clip(wb: &[f32; 4]) -> [f32; 3] {
+    std::array::from_fn(|c| {
+        if wb[c] > 0.0 {
+            wb[3] / wb[c]
+        } else {
+            f32::INFINITY
+        }
+    })
+}
+
+/// The AI masks among `missing` (indices into `edit.masks` whose raster isn't cached) that
+/// detection has to run for before `edit` can be rendered, in order.
+///
+/// Not a hidden mask: the renderer ignores it, so detecting it (which may first download a
+/// model, and fails the export if it can't) changes nothing in the file. And each raster once:
+/// a Subject mask and a Background mask are the same raster, and one pass of a scene model
+/// makes both Sky and People.
+fn masks_to_detect(edit: &EditState, missing: &[usize]) -> Vec<usize> {
+    use tonality_core::mask::{AiTarget, MaskShape};
+    let mut scenes: Vec<&str> = Vec::new();
+    let mut rasters: Vec<(&str, String)> = Vec::new();
+    let mut out = Vec::new();
+    for &i in missing {
+        let Some(mask) = edit.masks.get(i).filter(|m| m.enabled) else {
+            continue;
+        };
+        let MaskShape::Ai { target, model, .. } = &mask.shape else {
+            continue;
+        };
+        let raster = (model.as_str(), target.cache_key());
+        let scene = matches!(target, AiTarget::Sky | AiTarget::People);
+        if rasters.contains(&raster) || (scene && scenes.contains(&model.as_str())) {
+            continue;
+        }
+        if scene {
+            scenes.push(model);
+        }
+        rasters.push(raster);
+        out.push(i);
+    }
+    out
 }
 
 /// What to render, read from the catalog one photo at a time (so the UI's own catalog calls
@@ -342,8 +437,9 @@ fn run(
             capture: tonality_raw::read_capture(&job.path).unwrap_or_default(),
             rating: job.rating,
         };
-        // Downscaled sources, by source long edge (versions with the same crop share one).
-        let mut scaled: Vec<(u32, Scaled)> = Vec::new();
+        // Downscaled sources, by source long edge and highlight clip (versions with the same
+        // crop and white balance share one).
+        let mut scaled: Vec<((u32, [u32; 3]), Scaled)> = Vec::new();
         // Clarity / Dehaze maps: made once per photo, if some version uses them.
         let presence = job
             .versions
@@ -368,7 +464,7 @@ fn run(
                 None => job.stem.clone(),
             };
             emit(done as f32, &label);
-            let result = (|| -> Result<PathBuf, String> {
+            let result = (|| -> Result<PathBuf, ExportError> {
                 let mut params = DevelopParams::new(
                     edit,
                     &full.color,
@@ -397,10 +493,15 @@ fn run(
                         frame: [full.width, full.height],
                     }
                 } else {
-                    if !scaled.iter().any(|(l, _)| *l == src_long) {
-                        scaled.push((src_long, full.scaled(src_long)));
+                    // Highlights are clipped after white balance, in the shader; a source
+                    // that is averaged down has to be clipped at the same levels first, or
+                    // the edges of blown areas come out magenta.
+                    let clip = highlight_clip(&params.wb);
+                    let key = (src_long, clip.map(f32::to_bits));
+                    if !scaled.iter().any(|(k, _)| *k == key) {
+                        scaled.push((key, full.scaled_clipped(src_long, Some(clip))));
                     }
-                    let (_, (w, h, px)) = scaled.iter().find(|(l, _)| *l == src_long).unwrap();
+                    let (_, (w, h, px)) = scaled.iter().find(|(k, _)| *k == key).unwrap();
                     Source {
                         width: *w,
                         height: *h,
@@ -417,7 +518,8 @@ fn run(
                     full.height,
                     full.lens.as_ref(),
                 );
-                if !layers.missing.is_empty() {
+                let detect = masks_to_detect(edit, &layers.missing);
+                if !detect.is_empty() {
                     // AI masks whose raster isn't cached (another library, a cleared cache):
                     // detect them now from this decode.
                     let (sw, sh, px) = full.scaled(2048);
@@ -432,21 +534,10 @@ fn run(
                         full_width: full.width,
                         full_height: full.height,
                     };
-                    let mut ran: Vec<&str> = Vec::new();
-                    for &i in &layers.missing {
+                    for i in detect {
                         if let tonality_core::mask::MaskShape::Ai { target, model, .. } =
                             &edit.masks[i].shape
                         {
-                            // One scene pass caches both sky and people.
-                            let scene = matches!(
-                                target,
-                                tonality_core::mask::AiTarget::Sky
-                                    | tonality_core::mask::AiTarget::People
-                            );
-                            if scene && ran.contains(&model.as_str()) {
-                                continue;
-                            }
-                            ran.push(model);
                             crate::ai::detect(
                                 &app,
                                 &app.state::<crate::ai::Detector>(),
@@ -494,7 +585,19 @@ fn run(
             })();
             match result {
                 Ok(p) => summary.written.push(p.display().to_string()),
-                Err(e) => summary.failed.push(format!("{label}: {e}")),
+                Err(e) => {
+                    summary.failed.push(format!("{label}: {}", e.message));
+                    if e.folder {
+                        // The rest would each be rendered in full to fail the same way.
+                        let rest = total - done - 1;
+                        if rest > 0 {
+                            summary
+                                .failed
+                                .push(format!("{rest} more not exported, for the same reason"));
+                        }
+                        break 'jobs;
+                    }
+                }
             }
             done += 1;
             emit(done as f32, &label);
@@ -519,7 +622,7 @@ fn write(
     target: &Path,
     s: &ExportSettings,
     meta: &Meta,
-) -> Result<PathBuf, String> {
+) -> Result<PathBuf, ExportError> {
     use image::codecs::{jpeg::JpegEncoder, png::PngEncoder};
     use image::{ExtendedColorType, ImageEncoder};
     use std::io::Write;
@@ -532,11 +635,7 @@ fn write(
     let bytes: Result<Vec<u8>, String> = match (s.format, gain) {
         (ExportFormat::Jpeg, Some(gain)) => {
             ultra_hdr(r, gain, quality, s.color_space).and_then(|f| {
-                crate::jpeg::ultra_hdr_with(
-                    &f,
-                    Some(crate::jpeg::exif_segment(&exif)),
-                    export.rating,
-                )
+                crate::jpeg::ultra_hdr_with(&f, crate::jpeg::exif_segment(&exif), export.rating)
             })
         }
         (ExportFormat::Jpeg, None) => {
@@ -550,7 +649,7 @@ fn write(
                 ExtendedColorType::Rgb8,
             )
             .map_err(|e| e.to_string())?;
-            let mut front = vec![crate::jpeg::exif_segment(&exif)];
+            let mut front: Vec<_> = crate::jpeg::exif_segment(&exif).into_iter().collect();
             front.extend(xmp.as_deref().map(crate::jpeg::xmp_segment));
             crate::jpeg::with_front(&buf, &front)
         }
@@ -575,10 +674,10 @@ fn write(
         }
     };
     let part = crate::store::temp_path(target);
-    let res = bytes.and_then(|b| {
+    let res = bytes.map_err(ExportError::from).and_then(|b| {
         std::fs::File::create_new(&part)
             .and_then(|mut f| f.write_all(&b))
-            .map_err(|e| e.to_string())
+            .map_err(ExportError::writing)
     });
     let res = res.and_then(|()| {
         for n in 1..10_000 {
@@ -586,10 +685,10 @@ fn write(
             match crate::store::rename_noreplace(&part, &p) {
                 Ok(()) => return Ok(p),
                 Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
-                Err(e) => return Err(e.to_string()),
+                Err(e) => return Err(ExportError::writing(e)),
             }
         }
-        Err("no free file name".into())
+        Err(ExportError::from("no free file name".to_string()))
     });
     if res.is_err() {
         let _ = std::fs::remove_file(&part);
@@ -932,6 +1031,79 @@ mod tests {
             .to_string_lossy()
             .ends_with(".part")));
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_folder_that_cannot_be_written_is_found_out_first_and_stops_the_batch() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("tonality-export-ro-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        check_writable(&dir).unwrap();
+        assert_eq!(
+            std::fs::read_dir(&dir).unwrap().count(),
+            0,
+            "the probe is removed"
+        );
+
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+        // root writes anywhere, whatever the mode says.
+        if std::fs::File::create_new(dir.join("probe")).is_err() {
+            let e = check_writable(&dir).unwrap_err();
+            assert!(e.contains("Can’t export to"), "{e}");
+            // And if the folder goes read-only mid-batch, that failure is the folder's.
+            let r = Rendered {
+                width: 2,
+                height: 2,
+                pixels: vec![0; 12],
+            };
+            let s = settings(&dir, ExportFormat::Jpeg, ExportColorSpace::Srgb, false);
+            let e = write(&r, None, &dir.join("a.jpg"), &s, &meta(0)).unwrap_err();
+            assert!(e.folder, "{e:?}");
+        }
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+        // A failure that isn't the folder's doesn't stop the others.
+        assert!(!ExportError::from("decode failed".to_string()).folder);
+        let full = std::io::Error::from(std::io::ErrorKind::StorageFull);
+        assert!(ExportError::writing(full).folder);
+    }
+
+    #[test]
+    fn the_highlight_clip_is_the_shaders_seen_from_camera_space() {
+        // Red is doubled, so it reaches the clip (1.0) at half of the sensor's range.
+        assert_eq!(highlight_clip(&[2.0, 1.0, 1.6, 1.0]), [0.5, 1.0, 0.625]);
+        assert_eq!(highlight_clip(&[0.0, 1.0, 1.0, 1.0])[0], f32::INFINITY);
+    }
+
+    #[test]
+    fn hidden_and_repeated_ai_masks_are_not_detected_for_export() {
+        use tonality_core::mask::{AiTarget, Mask, MaskShape};
+        let ai = |target: AiTarget, model: &str, enabled: bool, invert: bool| Mask {
+            enabled,
+            invert,
+            shape: MaskShape::Ai {
+                target,
+                model: model.into(),
+                refine: vec![],
+            },
+            ..Mask::default()
+        };
+        let edit = EditState {
+            masks: vec![
+                ai(AiTarget::Sky, "scene@1", false, false), // 0: hidden
+                ai(AiTarget::Subject, "subject@1", true, false), // 1
+                ai(AiTarget::Subject, "subject@1", true, true), // 2: Background, same raster
+                ai(AiTarget::People, "scene@1", true, false), // 3
+                ai(AiTarget::Sky, "scene@1", true, false),  // 4: the same scene pass as 3
+                Mask::default(),                            // 5: not an AI mask
+            ],
+            ..EditState::default()
+        };
+        assert_eq!(masks_to_detect(&edit, &[0, 1, 2, 3, 4, 5]), [1, 3]);
+        // Only a hidden one missing: nothing to run, download or fail on.
+        assert!(masks_to_detect(&edit, &[0]).is_empty());
+        assert!(masks_to_detect(&edit, &[99]).is_empty());
     }
 
     #[test]
